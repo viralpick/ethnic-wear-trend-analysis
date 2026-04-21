@@ -163,6 +163,12 @@ class ExtractColorsConfig(BaseModel):
 class VisionConfig(BaseModel):
     skin_lab_box: SkinLabBox
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
+    # YOLO person detect 실패 시 전체 이미지를 bbox 로 간주. mirror selfie (거울 셀카) 처럼
+    # YOLOv8n 이 OOD 로 놓치는 케이스 방어. segformer 가 skin/background/의류 자체적으로 분리하므로
+    # 전체 이미지 → segformer 도 의류 pixel 을 제대로 뽑아낸다. IG 에 거울 셀카가 흔해 기본 True.
+    # 부작용 주의: product-only shot (사람 없는 상품 단독 이미지) 에서 배경이 의류로 오분류될
+    # 수 있음 — 이 경우 false 로 내려서 YOLO 필터 유지.
+    fallback_full_image_on_no_person: bool = True
 
 
 class Settings(BaseSettings):

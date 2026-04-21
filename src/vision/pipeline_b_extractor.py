@@ -143,11 +143,19 @@ def run_segformer(bundle: SegBundle, crop_rgb: np.ndarray) -> np.ndarray:
 def extract_garment_pixels(
     frame: Frame, bundle: SegBundle, cfg: VisionConfig,
 ) -> list[np.ndarray]:
-    """frame 1개 → 의류 class 별 skin-cleaned pixel (N,3) 리스트. 빈 리스트면 skip."""
+    """frame 1개 → 의류 class 별 skin-cleaned pixel (N,3) 리스트. 빈 리스트면 skip.
+
+    YOLO 가 person 0 bbox 이고 cfg.fallback_full_image_on_no_person=True 이면 전체 이미지를
+    하나의 bbox 로 사용 (mirror selfie 방어).
+    """
     lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
     lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
+    boxes = detect_people(bundle.yolo, frame.rgb)
+    if not boxes and cfg.fallback_full_image_on_no_person:
+        h, w = frame.rgb.shape[:2]
+        boxes = [(0, 0, w, h)]
     out: list[np.ndarray] = []
-    for (x1, y1, x2, y2) in detect_people(bundle.yolo, frame.rgb):
+    for (x1, y1, x2, y2) in boxes:
         x1c, y1c = max(0, x1), max(0, y1)
         x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
         if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:

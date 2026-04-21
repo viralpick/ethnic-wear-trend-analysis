@@ -201,6 +201,22 @@ class BackendScoreboardPayload(BaseModel):
 
 현재 `palette.bucket_size: 32` (거친 격자, 8 chip/channel). Pipeline B 이식 후엔 **bucket 방식 자체를 LAB KMeans 로 교체 가능**. 교체 여부 + 교체 후 테스트 방법.
 
+### 5.5 Mirror selfie (거울 셀카) 감지 실패 — 실측 (2026-04-21)
+
+sample_data/image 20 JPG 중 1건 (`01KPNKR0JA5ZCS8FRW0RVCYHA1`, 거울 앞 셀카 + 핸드폰
+occlusion) 에서 **YOLOv8n 이 conf 0.10 까지 낮춰도 person 0 bbox**. Pipeline B 가 초기엔
+empty palette 반환. 대응:
+
+- `vision.fallback_full_image_on_no_person: true` (기본값) — YOLO 0 bbox 면 전체 이미지를
+  bbox 로 간주해 segformer 에 태움. segformer 가 skin/background/의류를 자체 분리하므로
+  문제없이 palette 복구 (3 garment class 모두 pass).
+- IG 에 거울 셀카가 흔하므로 기본값 on. product-only shot 에서 배경 오분류 위험이 있으면 off.
+
+M4 에서 고려 (person detection 자체 개선):
+- YOLOv8s/m (recall 향상, 추론 비용 1.5~3배)
+- Ultralytics 의 pose / Detectron2 / DETR 등 mirror-robust 모델 탐색
+- 다만 현재 fallback 으로 대부분 커버되므로 priority 낮음
+
 ### 5.5 VLM Case 1/2 cap
 
 Pipeline B 로 전환되면 VLM cap 설정 (`vlm.case1_daily_cap=150`, `case2_per_cluster_cap=10`) 은 **의미 없어짐**. 대신 Pipeline B 의 `min_pixels=150`, `k=5` 등이 tuning target.

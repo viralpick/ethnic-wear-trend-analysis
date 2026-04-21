@@ -36,6 +36,11 @@ configs/local.override.yaml
 .DS_Store
 __MACOSX/
 
+# Ultralytics / HF Hub 가 런타임에 CWD / ~/.cache 로 다운받는 모델 가중치.
+# vision extras 설치 + Pipeline B 실행 후 생기는 파일. 레포에 커밋 금지 (큰 바이너리).
+*.pt
+yolov*.pt
+
 # Sample images — 실 IG 이미지 drop (public 레포 저작권/PII 리스크 회피).
 # 큐레이션된 샘플을 올리려면 별도 경로에 명시적으로 추가.
 sample_data/image/

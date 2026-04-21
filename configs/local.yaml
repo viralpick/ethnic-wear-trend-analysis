@@ -126,3 +126,6 @@ vision:
   extract_colors:
     k: 5
     min_pixels: 150
+  # 거울 셀카 등 YOLOv8n 이 못 잡는 mirror/occlusion 케이스 방어. true 면 YOLO 0 bbox 일 때
+  # 전체 이미지를 segformer 에 태워 의류/피부/배경 분리로 진행.
+  fallback_full_image_on_no_person: true
