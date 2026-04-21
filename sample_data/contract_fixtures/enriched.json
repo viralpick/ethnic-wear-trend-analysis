@@ -1,0 +1,53 @@
+{
+  "normalized": {
+    "source": "instagram",
+    "source_post_id": "ig_fixture_chikankari_1",
+    "text_blob": "White chikankari cotton kurta set for the office. Pastel vibes all week. #chikankari #kurtaset #cottonkurta #officewear #whiteonwhite",
+    "hashtags": [
+      "#chikankari",
+      "#kurtaset",
+      "#cottonkurta",
+      "#officewear",
+      "#whiteonwhite"
+    ],
+    "image_urls": [
+      "https://example.com/ig/fixture/1_a.jpg",
+      "https://example.com/ig/fixture/1_b.jpg"
+    ],
+    "post_date": "2026-04-20T09:15:00Z",
+    "engagement_raw": 59580
+  },
+  "garment_type": "kurta_set",
+  "fabric": "cotton",
+  "technique": "chikankari",
+  "embellishment_intensity": "everyday",
+  "color": {
+    "r": 248,
+    "g": 244,
+    "b": 235,
+    "r_pct": 0.97,
+    "g_pct": 0.96,
+    "b_pct": 0.92,
+    "name": "ivory chikan",
+    "family": "white_on_white"
+  },
+  "silhouette": "straight",
+  "occasion": "office",
+  "styling_combo": "with_palazzo",
+  "brand": {
+    "name": "Lucknowi Studio",
+    "tier": "mid"
+  },
+  "trend_cluster_key": "kurta_set__chikankari__cotton",
+  "classification_method_per_attribute": {
+    "garment_type": "rule",
+    "fabric": "rule",
+    "technique": "rule",
+    "embellishment_intensity": "llm",
+    "color": "vlm",
+    "silhouette": "vlm",
+    "occasion": "rule",
+    "styling_combo": "rule",
+    "brand": "llm"
+  }
+}

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ethnic-wear-trend-analysis"
+version = "0.0.1"
+description = "Indian ethnic wear short-term trend analysis harness (Instagram + YouTube)."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings[yaml]>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+# 사용자 요청 이름: "attributes". hatchling sources 매핑(src="")으로 src/ prefix 가 설치 후 제거되므로
+# 모듈 경로는 src.pipelines.* 가 아닌 pipelines.* 가 옳다 (설치 후 실제 import 경로).
+attributes = "pipelines.run_attribute_pipeline:main"
+scoring = "pipelines.run_scoring_pipeline:main"
+daily = "pipelines.run_daily_pipeline:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/contracts",
+    "src/loaders",
+    "src/pipelines",
+    "src/utils",
+    "src/attributes",
+    "src/clustering",
+    "src/normalization",
+    "src/vision",
+    "src/aggregation",
+    "src/scoring",
+    "src/exporters",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/settings.py" = "settings.py"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]

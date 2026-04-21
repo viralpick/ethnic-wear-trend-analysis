@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+.python-version
+
+# Pipeline outputs
+outputs/
+
+# Secrets / local config overrides
+.env
+.env.local
+configs/local.override.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code per-project 로컬 권한 (per-user). 팀 공유 hook 은 .claude/settings.json 으로.
+.claude/settings.local.json
+
+# OS
+.DS_Store
+__MACOSX/
+
+# Sample images — 코드가 참조하지 않는 미큐레이션 이미지 drop 잔재. public 레포 저작권 리스크
+# 회피. 큐레이션된 샘플을 올리려면 별도 경로에 명시적으로 추가.
+sample_data/image/

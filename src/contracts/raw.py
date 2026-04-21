@@ -1,0 +1,67 @@
+"""크롤러 출력 contract.
+
+크롤러(별도 레포)가 우리에게 건네주는 shape. 우리는 크롤러에 맞추지 않고, 크롤러가 여기에
+맞춘다. `extra="forbid"` 로 스키마 드리프트를 조기에 잡는다.
+
+IG 와 YT 의 필드명 비대칭은 현재 domain spec 입력 그대로다 (likes vs like_count,
+collected_at 유무 등). 4/24 싱크 전까지 크롤러 팀과 통일 여부를 협상할 필드는 README 의
+recommendation 섹션에 명시.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
+from contracts.common import InstagramSourceType
+
+
+class RawInstagramPost(BaseModel):
+    """
+    purpose: Instagram 포스트 1건의 크롤러 수집 결과
+    stage: raw
+    ownership: crawler-owned
+    stability: negotiable (4/24 이전 필드 정합 조율 — README 참조)
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    post_id: str
+    source_type: InstagramSourceType
+    account_handle: str
+    account_followers: int
+
+    image_urls: list[str]
+    caption_text: str
+    hashtags: list[str]
+
+    likes: int
+    comments_count: int
+    saves: int | None  # 수집 실패 시 null 허용 (spec §8.1)
+
+    post_date: datetime
+    collected_at: datetime
+
+
+class RawYouTubeVideo(BaseModel):
+    """
+    purpose: YouTube 영상 1건의 크롤러 수집 결과 (spec §3.2 D)
+    stage: raw
+    ownership: crawler-owned
+    stability: negotiable (IG 와의 필드명 비대칭 — README 참조)
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    video_id: str
+    channel: str
+
+    title: str
+    description: str
+    tags: list[str]
+    thumbnail_url: str
+
+    view_count: int
+    like_count: int
+    comment_count: int
+    top_comments: list[str]  # spec §3.2 — 상위 50개, 텍스트만
+
+    published_at: datetime

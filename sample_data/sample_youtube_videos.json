@@ -1,0 +1,49 @@
+[
+  {
+    "video_id": "yt_office_haul_1",
+    "channel": "@jhanvibhatia",
+    "title": "10 Office Kurtas for 9-to-5 | Myntra Haul 2026",
+    "description": "Affordable linen and cotton kurtas perfect for Indian office wear. Picks under 1500 INR.",
+    "tags": ["office kurta", "workwear", "myntra haul", "cotton kurta"],
+    "thumbnail_url": "https://example.com/yt/1.jpg",
+    "view_count": 182400,
+    "like_count": 8420,
+    "comment_count": 410,
+    "top_comments": [
+      "Loved the linen ones!",
+      "Links please"
+    ],
+    "published_at": "2026-04-17T11:00:00Z"
+  },
+  {
+    "video_id": "yt_linen_tryon_1",
+    "channel": "@madhureddyofficial",
+    "title": "Summer Linen Kurta Try-On Haul",
+    "description": "Breathable linen sets for everyday ethnic wear.",
+    "tags": ["linen kurta", "summer ethnic", "try on haul"],
+    "thumbnail_url": "https://example.com/yt/2.jpg",
+    "view_count": 121000,
+    "like_count": 5130,
+    "comment_count": 280,
+    "top_comments": [
+      "Need the blue set!",
+      "Your styling is always on point"
+    ],
+    "published_at": "2026-04-15T16:30:00Z"
+  },
+  {
+    "video_id": "yt_anarkali_festive_1",
+    "channel": "@khushimalhotra",
+    "title": "Akshaya Tritiya Anarkali Styling — Pastel Chikankari Picks",
+    "description": "Light anarkali looks for Akshaya Tritiya 2026.",
+    "tags": ["anarkali", "chikankari", "akshaya tritiya", "festive lite"],
+    "thumbnail_url": "https://example.com/yt/3.jpg",
+    "view_count": 98700,
+    "like_count": 4320,
+    "comment_count": 190,
+    "top_comments": [
+      "The sage anarkali is gorgeous!"
+    ],
+    "published_at": "2026-04-18T09:00:00Z"
+  }
+]

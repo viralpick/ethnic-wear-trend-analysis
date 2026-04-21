@@ -1,0 +1,111 @@
+# 로컬 실행용 설정. 절대경로를 쓰고 싶으면 /로 시작하는 값으로 바꾼다.
+paths:
+  sample_data: sample_data
+  outputs: outputs
+
+unknown_signals:
+  # spec §4.2 — 3일 rolling window에서 count ≥ 10 이면 리뷰 큐로 올림.
+  window_days: 3
+  threshold: 10
+
+logging:
+  level: INFO
+
+# --------------------------------------------------------------------------- #
+# Step 3-B (scoring / vlm / palette / export / pipeline) 설정
+# 아래 값은 1차 구현용 초안. 4/24 싱크에서 실제 3일치 데이터로 캘리브레이션한다.
+# 코드에는 magic number 를 두지 않고 전부 여기서 읽는다.
+# --------------------------------------------------------------------------- #
+
+pipeline:
+  # spec §12 타임라인 — 수집 시작일. data_maturity / weekly_direction / momentum 의
+  # bootstrap 윈도우 계산에 사용.
+  collection_start_date: 2026-04-21
+  # 실행 시각 기준 날짜. None 이면 run_daily_pipeline 이 today 를 쓴다.
+  target_date: null
+
+scoring:
+  # spec §9.1 — 4개 팩터 가중치 합 = 100. 4/24 싱크 주요 튜닝 대상.
+  weights:
+    social: 40.0
+    youtube: 25.0
+    cultural: 15.0
+    momentum: 20.0
+
+  # 정규화는 active 클러스터 set 에 대한 same-run min-max 로 동결.
+  # configs override 가 아니면 다른 방식 (z-score / log / percentile / softmax) 금지.
+  normalization_method: minmax_same_run
+
+  # spec §9.3 — ▲▼→ 경계.
+  direction_threshold_pct: 5.0
+
+  # spec §9.4 — 라이프사이클 점수 대역.
+  lifecycle:
+    early_below: 30.0
+    growth_until: 65.0
+    # growth 자동 트리거용 post_count (이 미만이면 점수와 관계없이 early).
+    early_post_count_threshold: 10
+
+  # spec §9.2 Social — 인플루언서 티어 가중치.
+  influencer_weights:
+    mega: 3.0      # 팔로워 ≥ 1_000_000
+    macro: 2.0     # 100_000 ≤ 팔로워 < 1_000_000
+    mid: 1.5       # 10_000 ≤ 팔로워 < 100_000
+    micro: 1.0     # 팔로워 < 10_000
+  influencer_tier_thresholds:
+    mega: 1000000
+    macro: 100000
+    mid: 10000
+
+  # spec §9.2 YouTube — V × a + views × b + view_growth × c (minmax 는 orchestrator 가 수행).
+  youtube_factor_weights:
+    video_count: 0.3
+    views: 0.4
+    view_growth: 0.3
+
+  # spec §9.2 Cultural — festival × 0.6 + bollywood × 0.4.
+  cultural_factor_weights:
+    festival: 0.6
+    bollywood: 0.4
+  cultural_festival_boost: 1.5
+  cultural_bollywood_bonus: 0.3
+
+  # spec §9.5 — Akshaya Tritiya. 데모 기간 ±2주 윈도우.
+  cultural_festivals:
+    - name: akshaya_tritiya
+      window_start: 2026-04-13
+      window_end: 2026-05-11
+      tags:
+        - "#akshayatritiya"
+        - "#goldethnic"
+
+  # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 + new_account_ratio × 0.3.
+  momentum_factor_weights:
+    post_growth: 0.4
+    hashtag_velocity: 0.3
+    new_account_ratio: 0.3
+  momentum_window_days: 7
+
+  # spec — data_maturity 판정 일수.
+  data_maturity:
+    bootstrap_below_days: 3     # <3 → bootstrap
+    full_from_days: 7           # ≥7 → full (그 사이는 partial)
+
+vlm:
+  # spec §7 — 안전 기본값. 3-A 의 LLM 과 동일한 discipline.
+  seed: 42
+  temperature: 0
+  # Case 2: 클러스터당 top-engagement IG 포스트 처리 cap.
+  case2_per_cluster_cap: 10
+  # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드).
+  case1_daily_cap: 150
+
+palette:
+  # spec §4.1 ④ + §5.4 — RGB → HEX 팔레트 칩. v1 은 k-means 아닌 고정 버킷.
+  # 0~255 를 bucket_size 로 quantize → 버킷 midpoint 를 대표값으로.
+  bucket_size: 32
+  top_k: 5
+
+export:
+  summaries_filename: summaries.json
+  enriched_filename: enriched.json

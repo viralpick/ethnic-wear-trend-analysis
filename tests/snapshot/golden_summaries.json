@@ -1,0 +1,484 @@
+[
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "kurta_set__chikankari__cotton",
+    "display_name": "kurta set / chikankari / cotton",
+    "date": "2026-04-21",
+    "score": 40.0,
+    "score_breakdown": {
+      "social": 40.0,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 144,
+          "g": 16,
+          "b": 240,
+          "hex_display": "#9010F0",
+          "name": "bucket_9010f0",
+          "family": "neutral",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "high_low": 1.0
+      },
+      "occasion_distribution": {
+        "office": 1.0
+      },
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_solvable_1"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 55194.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "kurta_dress__floral_print__rayon",
+    "display_name": "kurta dress / floral print / rayon",
+    "date": "2026-04-21",
+    "score": 28.140739935500235,
+    "score_breakdown": {
+      "social": 28.140739935500235,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 48,
+          "g": 240,
+          "b": 16,
+          "hex_display": "#30F010",
+          "name": "bucket_30f010",
+          "family": "jewel",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "straight": 1.0
+      },
+      "occasion_distribution": {
+        "weekend": 1.0
+      },
+      "styling_distribution": {
+        "standalone": 1.0
+      },
+      "top_posts": [
+        "ig_rule_solvable_3"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 38830.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "kurta_dress__gota_patti__cotton",
+    "display_name": "kurta dress / gota patti / cotton",
+    "date": "2026-04-21",
+    "score": 25.0,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 25.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "office": 1.0
+      },
+      "styling_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_office_haul_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 191640.0,
+    "total_video_views": 191640
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "co_ord__lace_cutwork__linen",
+    "display_name": "co ord / lace cutwork / linen",
+    "date": "2026-04-21",
+    "score": 16.52711518818414,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 16.52711518818414,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "casual": 1.0
+      },
+      "styling_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_linen_tryon_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 126690.0,
+    "total_video_views": 126690
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "ethnic_shirt__mirror_work__polyester_blend",
+    "display_name": "ethnic shirt / mirror work / polyester blend",
+    "date": "2026-04-21",
+    "score": 15.335000181179112,
+    "score_breakdown": {
+      "social": 15.335000181179112,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 176,
+          "g": 144,
+          "b": 240,
+          "hex_display": "#B090F0",
+          "name": "bucket_b090f0",
+          "family": "neutral",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "empire": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_impossible_1"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 21160.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "anarkali__chikankari__unknown",
+    "display_name": "anarkali / chikankari / unknown",
+    "date": "2026-04-21",
+    "score": 13.488878278758563,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 13.488878278758563,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "festive_lite": 1.0
+      },
+      "styling_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_anarkali_festive_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 103400.0,
+    "total_video_views": 103400
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "anarkali__geometric_print__rayon",
+    "display_name": "anarkali / geometric print / rayon",
+    "date": "2026-04-21",
+    "score": 10.098923796064788,
+    "score_breakdown": {
+      "social": 10.098923796064788,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 16,
+          "g": 48,
+          "b": 176,
+          "hex_display": "#1030B0",
+          "name": "bucket_1030b0",
+          "family": "jewel",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "angrakha": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_partial_1"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 13935.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "co_ord__block_print__linen",
+    "display_name": "co ord / block print / linen",
+    "date": "2026-04-21",
+    "score": 7.63416313367395,
+    "score_breakdown": {
+      "social": 7.63416313367395,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 80,
+          "g": 176,
+          "b": 144,
+          "hex_display": "#50B090",
+          "name": "bucket_50b090",
+          "family": "pastel",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "high_low": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_solvable_2"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 10534.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "tunic__chikankari__georgette",
+    "display_name": "tunic / chikankari / georgette",
+    "date": "2026-04-21",
+    "score": 1.8335326303583723,
+    "score_breakdown": {
+      "social": 1.8335326303583723,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 48,
+          "g": 80,
+          "b": 144,
+          "hex_display": "#305090",
+          "name": "bucket_305090",
+          "family": "bright",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "kaftan": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_partial_3"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 2530.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "kurta_set__digital_print__chanderi",
+    "display_name": "kurta set / digital print / chanderi",
+    "date": "2026-04-21",
+    "score": 0.4565713664528753,
+    "score_breakdown": {
+      "social": 0.4565713664528753,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 112,
+          "g": 208,
+          "b": 176,
+          "hex_display": "#70D0B0",
+          "name": "bucket_70d0b0",
+          "family": "white_on_white",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "empire": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_partial_2"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 630.0,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "co_ord__lace_cutwork__chanderi",
+    "display_name": "co ord / lace cutwork / chanderi",
+    "date": "2026-04-21",
+    "score": 0.1565387542124144,
+    "score_breakdown": {
+      "social": 0.1565387542124144,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 0.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [
+        {
+          "r": 80,
+          "g": 144,
+          "b": 176,
+          "hex_display": "#5090B0",
+          "name": "bucket_5090b0",
+          "family": "earth",
+          "pct": 1.0
+        }
+      ],
+      "silhouette_distribution": {
+        "boxy": 1.0
+      },
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_unclassifiable_1"
+      ],
+      "top_videos": [],
+      "top_influencers": []
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 216.0,
+    "total_video_views": 0
+  }
+]

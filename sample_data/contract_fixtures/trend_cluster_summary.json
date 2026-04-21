@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1.0",
+  "cluster_key": "kurta_set__chikankari__cotton",
+  "display_name": "Chikankari Cotton Kurta Set",
+  "date": "2026-04-21",
+  "score": 0.0,
+  "score_breakdown": {
+    "social": 0.0,
+    "youtube": 0.0,
+    "cultural": 0.0,
+    "momentum": 0.0
+  },
+  "daily_direction": "flat",
+  "weekly_direction": "flat",
+  "daily_change_pct": 0.0,
+  "weekly_change_pct": 0.0,
+  "lifecycle_stage": "early",
+  "data_maturity": "bootstrap",
+  "drilldown": {
+    "color_palette": [],
+    "silhouette_distribution": {},
+    "occasion_distribution": {},
+    "styling_distribution": {},
+    "top_posts": ["ig_fixture_chikankari_1"],
+    "top_videos": [],
+    "top_influencers": ["@masoomminawala"]
+  },
+  "post_count_total": 1,
+  "post_count_today": 1,
+  "avg_engagement_rate": 0.0,
+  "total_video_views": 0
+}
