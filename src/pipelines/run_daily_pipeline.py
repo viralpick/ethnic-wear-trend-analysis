@@ -32,7 +32,8 @@ from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster
 from contracts.common import ContentSource
 from contracts.enriched import ColorInfo, EnrichedContentItem
 from exporters.write_json_output import write_enriched
-from loaders.raw_loader import LocalSampleLoader, RawDailyBatch
+from loaders.raw_loader import LocalSampleLoader, RawDailyBatch, RawLoader
+from loaders.tsv_raw_loader import TsvRawLoader
 from normalization.normalize_content import normalize_batch
 from pipelines.run_scoring_pipeline import score_and_export
 from settings import Settings, load_settings
@@ -47,8 +48,8 @@ from vision.color_extractor import (
 logger = get_logger(__name__)
 
 
-def _load_raw(input_dir: Path, target_date: date) -> RawDailyBatch:
-    return LocalSampleLoader(input_dir).load_batch(target_date)
+def _load_raw(loader: RawLoader, target_date: date) -> RawDailyBatch:
+    return loader.load_batch(target_date)
 
 
 def _assign_clusters(
@@ -147,8 +148,10 @@ def run_pipeline(
     target_date: date,
     llm_client: LLMClient,
     color_extractor: ColorExtractor,
+    raw_loader: RawLoader | None = None,
 ) -> None:
-    batch = _load_raw(settings.paths.sample_data, target_date)
+    loader = raw_loader or LocalSampleLoader(settings.paths.sample_data)
+    batch = _load_raw(loader, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
 
     normalized = normalize_batch(batch.instagram, batch.youtube)
@@ -179,6 +182,14 @@ def _parse_args() -> argparse.Namespace:
         "--image-root", type=Path, default=None,
         help="pipeline_b 모드에서 URL basename 매핑용 이미지 디렉토리 (예: sample_data/image).",
     )
+    parser.add_argument(
+        "--source", choices=["local", "tsv"], default="local",
+        help="raw source loader 선택. local=sample JSON, tsv=png_india_ai_fashion_*.tsv.",
+    )
+    parser.add_argument(
+        "--tsv-dir", type=Path, default=None,
+        help="--source tsv 일 때 TSV 디렉토리 (기본: settings.paths.sample_data).",
+    )
     return parser.parse_args()
 
 
@@ -201,13 +212,23 @@ def _select_color_extractor(
     return FakeColorExtractor(cfg=settings.vlm)
 
 
+def _select_raw_loader(
+    choice: str, settings: Settings, tsv_dir: Path | None
+) -> RawLoader:
+    """CLI flag 기반 RawLoader DI."""
+    if choice == "tsv":
+        return TsvRawLoader(tsv_dir or settings.paths.sample_data)
+    return LocalSampleLoader(settings.paths.sample_data)
+
+
 def main() -> None:
     args = _parse_args()
     settings = load_settings()
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
     llm_client = FakeLLMClient(seed=DEFAULT_LLM_SEED)
     color_extractor = _select_color_extractor(args.color_extractor, settings, args.image_root)
-    run_pipeline(settings, target, llm_client, color_extractor)
+    raw_loader = _select_raw_loader(args.source, settings, args.tsv_dir)
+    run_pipeline(settings, target, llm_client, color_extractor, raw_loader=raw_loader)
 
 
 if __name__ == "__main__":

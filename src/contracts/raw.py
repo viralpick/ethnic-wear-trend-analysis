@@ -27,7 +27,9 @@ class RawInstagramPost(BaseModel):
 
     post_id: str
     source_type: InstagramSourceType
-    account_handle: str
+    # hashtag_search 소스의 포스트는 계정 정보 없이 수집될 수 있음 → None 허용 (2026-04-22).
+    # 크롤러 팀과 4/24 에 "항상 account 해석" 가능 여부 협의 후 재고.
+    account_handle: str | None = None
     account_followers: int
 
     image_urls: list[str]
