@@ -132,7 +132,6 @@ class VLMConfig(BaseModel):
 
 
 class PaletteConfig(BaseModel):
-    bucket_size: int = 32
     top_k: int = 5
 
 

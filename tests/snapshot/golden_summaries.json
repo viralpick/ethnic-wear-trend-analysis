@@ -20,11 +20,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 144,
-          "g": 16,
-          "b": 240,
-          "hex_display": "#9010F0",
-          "name": "bucket_9010f0",
+          "r": 131,
+          "g": 13,
+          "b": 226,
+          "hex_display": "#830DE2",
+          "name": "cluster_0_830de2",
           "family": "neutral",
           "pct": 1.0
         }
@@ -68,11 +68,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 48,
-          "g": 240,
-          "b": 16,
-          "hex_display": "#30F010",
-          "name": "bucket_30f010",
+          "r": 46,
+          "g": 224,
+          "b": 1,
+          "hex_display": "#2EE001",
+          "name": "cluster_0_2ee001",
           "family": "jewel",
           "pct": 1.0
         }
@@ -190,11 +190,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 176,
-          "g": 144,
-          "b": 240,
-          "hex_display": "#B090F0",
-          "name": "bucket_b090f0",
+          "r": 173,
+          "g": 155,
+          "b": 251,
+          "hex_display": "#AD9BFB",
+          "name": "cluster_0_ad9bfb",
           "family": "neutral",
           "pct": 1.0
         }
@@ -272,11 +272,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 16,
-          "g": 48,
-          "b": 176,
-          "hex_display": "#1030B0",
-          "name": "bucket_1030b0",
+          "r": 12,
+          "g": 55,
+          "b": 187,
+          "hex_display": "#0C37BB",
+          "name": "cluster_0_0c37bb",
           "family": "jewel",
           "pct": 1.0
         }
@@ -318,11 +318,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 80,
-          "g": 176,
-          "b": 144,
-          "hex_display": "#50B090",
-          "name": "bucket_50b090",
+          "r": 89,
+          "g": 185,
+          "b": 149,
+          "hex_display": "#59B995",
+          "name": "cluster_0_59b995",
           "family": "pastel",
           "pct": 1.0
         }
@@ -364,11 +364,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 48,
-          "g": 80,
-          "b": 144,
-          "hex_display": "#305090",
-          "name": "bucket_305090",
+          "r": 46,
+          "g": 83,
+          "b": 138,
+          "hex_display": "#2E538A",
+          "name": "cluster_0_2e538a",
           "family": "bright",
           "pct": 1.0
         }
@@ -410,11 +410,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 112,
-          "g": 208,
-          "b": 176,
-          "hex_display": "#70D0B0",
-          "name": "bucket_70d0b0",
+          "r": 101,
+          "g": 214,
+          "b": 166,
+          "hex_display": "#65D6A6",
+          "name": "cluster_0_65d6a6",
           "family": "white_on_white",
           "pct": 1.0
         }
@@ -456,11 +456,11 @@
     "drilldown": {
       "color_palette": [
         {
-          "r": 80,
-          "g": 144,
-          "b": 176,
-          "hex_display": "#5090B0",
-          "name": "bucket_5090b0",
+          "r": 74,
+          "g": 132,
+          "b": 173,
+          "hex_display": "#4A84AD",
+          "name": "cluster_0_4a84ad",
           "family": "earth",
           "pct": 1.0
         }

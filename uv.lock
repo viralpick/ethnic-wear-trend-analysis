@@ -25,35 +25,30 @@ name = "ethnic-wear-trend-analysis"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "numpy" },
     { name = "pydantic" },
     { name = "pydantic-settings", extra = ["yaml"] },
+    { name = "scikit-learn" },
 ]
 
 [package.optional-dependencies]
-color = [
-    { name = "numpy" },
-    { name = "scikit-learn" },
-]
 dev = [
-    { name = "numpy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
-    { name = "scikit-learn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "ethnic-wear-trend-analysis", extras = ["color"], marker = "extra == 'dev'" },
-    { name = "numpy", marker = "extra == 'color'", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", extras = ["yaml"], specifier = ">=2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "scikit-learn", marker = "extra == 'color'", specifier = ">=1.4" },
+    { name = "scikit-learn", specifier = ">=1.4" },
 ]
-provides-extras = ["color", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "iniconfig"

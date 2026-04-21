@@ -1,13 +1,12 @@
-"""Color palette: RGB → HEX + 결정론적 bucketing (spec §4.1 ④, §5.4)."""
+"""Post-level ColorInfo → palette chip (spec §4.1 ④, §5.4).
+
+Step B 이후: LAB KMeans 기반. 결정론 (random_state=0), weight desc, family 최빈값.
+"""
 from __future__ import annotations
 
 import pytest
 
-from aggregation.color_palette import (
-    bucket_rgb,
-    build_palette,
-    rgb_to_hex,
-)
+from aggregation.color_palette import build_palette
 from contracts.common import ColorFamily
 from contracts.enriched import ColorInfo
 from settings import PaletteConfig
@@ -15,60 +14,90 @@ from settings import PaletteConfig
 
 @pytest.fixture
 def palette_cfg() -> PaletteConfig:
-    return PaletteConfig(bucket_size=32, top_k=5)
-
-
-def test_rgb_to_hex_happy_path() -> None:
-    # spec §4.1 ④ 문서 예시.
-    assert rgb_to_hex(184, 212, 195) == "#B8D4C3"
-
-
-def test_rgb_to_hex_zero_pads_low_values() -> None:
-    # 0x00 은 2자리로 패딩되어야 한다.
-    assert rgb_to_hex(0, 5, 15) == "#00050F"
-
-
-def test_bucket_rgb_determinism() -> None:
-    # 같은 bucket_size 라면 같은 근접색은 같은 버킷.
-    a = bucket_rgb(100, 100, 100, 32)
-    b = bucket_rgb(120, 115, 110, 32)
-    assert a == b == (96, 96, 96)
+    return PaletteConfig(top_k=5)
 
 
 def test_build_palette_empty_returns_empty(palette_cfg: PaletteConfig) -> None:
     assert build_palette([], palette_cfg) == []
 
 
-def test_build_palette_uses_most_common_family(palette_cfg: PaletteConfig) -> None:
-    # 같은 버킷 안에서 가장 흔한 family 를 대표값으로 쓴다.
-    colors = [
-        ColorInfo(r=10, g=10, b=10, family=ColorFamily.PASTEL),
-        ColorInfo(r=12, g=12, b=12, family=ColorFamily.PASTEL),
-        ColorInfo(r=14, g=14, b=14, family=ColorFamily.NEUTRAL),
-    ]
+def test_build_palette_single_color(palette_cfg: PaletteConfig) -> None:
+    colors = [ColorInfo(r=184, g=212, b=195, family=ColorFamily.PASTEL)]
     palette = build_palette(colors, palette_cfg)
     assert len(palette) == 1
+    assert palette[0].pct == pytest.approx(1.0)
     assert palette[0].family == ColorFamily.PASTEL
 
 
-def test_build_palette_top_k_and_pct_sum(palette_cfg: PaletteConfig) -> None:
-    # 세 개 버킷을 기대하도록 명확히 떨어진 색상 생성.
+def test_build_palette_weight_sums_to_one(palette_cfg: PaletteConfig) -> None:
     colors = [
         ColorInfo(r=10, g=10, b=10, family=ColorFamily.NEUTRAL),
-        ColorInfo(r=15, g=15, b=15, family=ColorFamily.NEUTRAL),  # 같은 버킷
+        ColorInfo(r=12, g=12, b=12, family=ColorFamily.NEUTRAL),
         ColorInfo(r=200, g=10, b=10, family=ColorFamily.BRIGHT),
         ColorInfo(r=10, g=200, b=10, family=ColorFamily.PASTEL),
     ]
     palette = build_palette(colors, palette_cfg)
-    # 3 버킷이 정렬되어 첫 버킷이 가장 큰 비율이어야 한다.
-    assert len(palette) == 3
-    assert palette[0].pct == pytest.approx(2 / 4)
     assert sum(item.pct for item in palette) == pytest.approx(1.0)
 
 
-def test_build_palette_hex_display_is_midpoint(palette_cfg: PaletteConfig) -> None:
-    # 버킷 0~31 (bucket_size=32) → midpoint 16. 실제 입력이 30 이어도 표시값은 #101010.
-    colors = [ColorInfo(r=30, g=30, b=30, family=ColorFamily.NEUTRAL)]
+def test_build_palette_sorted_by_pct_desc() -> None:
+    # top_k=3 으로 제한. 4 point (gray 2 + red 1 + green 1) → KMeans 가 gray 두 개를 묶어
+    # [gray(2), red(1), green(1)] 3 cluster 생성. 첫 pct 0.5 가 top.
+    cfg = PaletteConfig(top_k=3)
+    colors = [
+        ColorInfo(r=10, g=10, b=10, family=ColorFamily.NEUTRAL),
+        ColorInfo(r=15, g=15, b=15, family=ColorFamily.NEUTRAL),
+        ColorInfo(r=200, g=10, b=10, family=ColorFamily.BRIGHT),
+        ColorInfo(r=10, g=200, b=10, family=ColorFamily.PASTEL),
+    ]
+    palette = build_palette(colors, cfg)
+    pcts = [item.pct for item in palette]
+    assert pcts == sorted(pcts, reverse=True)
+    assert palette[0].pct == pytest.approx(0.5)
+
+
+def test_build_palette_family_majority_wins() -> None:
+    # top_k=2 로 강제. PASTEL 2개는 어두운 gray (근접), NEUTRAL 1개는 밝은 white (멀리)
+    # → cluster 0 = {dark PASTEL × 2}, cluster 1 = {light NEUTRAL × 1}. 첫 cluster family=PASTEL.
+    cfg = PaletteConfig(top_k=2)
+    colors = [
+        ColorInfo(r=10, g=10, b=10, family=ColorFamily.PASTEL),
+        ColorInfo(r=15, g=15, b=15, family=ColorFamily.PASTEL),
+        ColorInfo(r=250, g=250, b=250, family=ColorFamily.NEUTRAL),
+    ]
+    palette = build_palette(colors, cfg)
+    assert len(palette) == 2
+    assert palette[0].family == ColorFamily.PASTEL
+    assert palette[0].pct == pytest.approx(2 / 3)
+
+
+def test_build_palette_top_k_clamp_by_color_count(palette_cfg: PaletteConfig) -> None:
+    # top_k=5 인데 color 가 3개 → 최대 3 cluster.
+    colors = [
+        ColorInfo(r=10, g=10, b=10, family=ColorFamily.NEUTRAL),
+        ColorInfo(r=200, g=10, b=10, family=ColorFamily.BRIGHT),
+        ColorInfo(r=10, g=200, b=10, family=ColorFamily.PASTEL),
+    ]
     palette = build_palette(colors, palette_cfg)
-    assert palette[0].hex_display == "#101010"
-    assert palette[0].r == 16
+    assert len(palette) == 3
+
+
+def test_build_palette_determinism(palette_cfg: PaletteConfig) -> None:
+    # random_state=0 고정 → 같은 입력 같은 출력.
+    colors = [
+        ColorInfo(r=10, g=10, b=10, family=ColorFamily.NEUTRAL),
+        ColorInfo(r=12, g=12, b=12, family=ColorFamily.NEUTRAL),
+        ColorInfo(r=200, g=10, b=10, family=ColorFamily.BRIGHT),
+        ColorInfo(r=10, g=200, b=10, family=ColorFamily.PASTEL),
+    ]
+    a = build_palette(colors, palette_cfg)
+    b = build_palette(colors, palette_cfg)
+    assert [(i.r, i.g, i.b, i.pct) for i in a] == [(i.r, i.g, i.b, i.pct) for i in b]
+
+
+def test_build_palette_hex_display_uppercase(palette_cfg: PaletteConfig) -> None:
+    colors = [ColorInfo(r=184, g=212, b=195, family=ColorFamily.PASTEL)]
+    palette = build_palette(colors, palette_cfg)
+    # hex_display 는 대문자 + # 포함.
+    assert palette[0].hex_display.startswith("#")
+    assert palette[0].hex_display == palette[0].hex_display.upper()

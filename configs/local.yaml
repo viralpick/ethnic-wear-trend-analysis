@@ -101,9 +101,10 @@ vlm:
   case1_daily_cap: 150
 
 palette:
-  # spec §4.1 ④ + §5.4 — RGB → HEX 팔레트 칩. v1 은 k-means 아닌 고정 버킷.
-  # 0~255 를 bucket_size 로 quantize → 버킷 midpoint 를 대표값으로.
-  bucket_size: 32
+  # spec §4.1 ④ + §5.4 — drill-down palette chip. post-level ColorInfo 리스트를 LAB KMeans
+  # 로 top_k cluster 로 aggregate (vision/color_space.extract_colors 와 같은 알고리즘이지만
+  # frame-level 이 아닌 post-level aggregation — Step B).
+  # frame-level (pixel sample) aggregation 은 Step C 의 pipeline_b_extractor 에서 별도.
   top_k: 5
 
 export:

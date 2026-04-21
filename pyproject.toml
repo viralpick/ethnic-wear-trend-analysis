@@ -11,21 +11,18 @@ requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.9",
     "pydantic-settings[yaml]>=2.2",
-]
-
-[project.optional-dependencies]
-# 방법론 비교 / Pipeline B (YOLOv8 + segformer + LAB KMeans) 용 vision 의존성.
-# Step A: color_space 모듈 (numpy + scikit-learn 만). Step C 에서 torch / transformers /
-# ultralytics / pillow / opencv 추가. color 담당 아닌 사람은 `uv sync` 만으로 설치되지 않음.
-color = [
+    # color_palette 의 LAB KMeans aggregation 이 daily pipeline 경로에 있어서 core 로 승격.
+    # heavy vision (torch / transformers / ultralytics / opencv) 은 Step C 에서 별도
+    # `vision` extras 로 격리 — color 담당 아닌 사람이 건너뛰어야 할 건 그쪽.
     "numpy>=1.26",
     "scikit-learn>=1.4",
 ]
+
+[project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
-    "ethnic-wear-trend-analysis[color]",
 ]
 
 [project.scripts]
