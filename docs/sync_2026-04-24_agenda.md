@@ -224,6 +224,59 @@ Pipeline B 로 전환되면 VLM cap 설정 (`vlm.case1_daily_cap=150`, `case2_pe
 
 각각 Protocol 뒤에 구현체 숨기는 방식 유지.
 
+### 6.1 이미지/영상 이중 소스 대응 — frame source 추상화
+
+동료 PoC (`~/dev/clothing-color-extraction-poc`) 는 **영상 전용** 가정 (`FRAMES_DIR/{video_id}/NNNN.jpg`).
+우리 소스는 IG 정적 이미지가 주, IG Reel (영상) 이 보조. YT 영상은 color 추출 대상 아님 (spec §7.2).
+
+frame 단위 추상화 (Step C 에서 신설):
+
+```python
+class FrameSource(Protocol):
+    def iter_frames(self) -> Iterator[Frame]: ...
+
+@dataclass(frozen=True)
+class Frame:
+    id: str          # 예: "{post_ulid}_{image_ulid}" or "{video_id}_frame_000012"
+    rgb: np.ndarray  # (H, W, 3) uint8
+    source_type: str # "image" | "video"
+
+class ImageFrameSource:
+    """IG 캐러셀 N장 등. JPG 경로 리스트 → frame 당 이미지 1장."""
+
+class VideoFrameSource:
+    """IG Reel 등. ffmpeg 서브프로세스로 fps 고정 추출. YT 는 호출 대상 아님 (type guard)."""
+```
+
+`pipeline_b_extractor.analyze(source: FrameSource)` 는 FrameSource 를 받아 frame 단위 반복.
+IG 포스트 → `ImageFrameSource(image_paths)`, IG Reel → `VideoFrameSource(reel_path, fps=1)`.
+
+**스코프 경계**:
+- YT 영상: FrameSource 호출 안 함. `source == ContentSource.YOUTUBE` 입력 시 raise (spec §7.2).
+- sample_data 기준: 20 JPG 는 Step E smoke 로 ImageFrameSource 커버. IG Reel 4건 + YT 5건은
+  blob SAS URL 이 placeholder 라 M3 에서 실 download 연결 후 VideoFrameSource 테스트.
+
+### 6.2 frame 단위 집계 flow (Step B / C 에서 구현)
+
+```
+[cluster A]
+  ├── post 1 (IG 이미지, 4장)   → ImageFrameSource → 4 frame → 각 frame top-5 color
+  ├── post 2 (IG Reel, 30초)    → VideoFrameSource(fps=1) → 30 frame → 각 frame top-5 color
+  ├── post 3 (IG 이미지, 1장)   → ImageFrameSource → 1 frame → top-5 color
+  └── ...
+        │
+        ▼ concat frame pixel samples (또는 frame top-k centroid 들을 post-level weight 로 재KMeans)
+        │
+        ▼ cluster-level LAB KMeans (top_k=5)
+        │
+        ▼ ColorPaletteItem[5] ← DrilldownPayload.color_palette
+```
+
+**미결 질문** (4/24 싱크 또는 4/28 싱크):
+- frame-level top-5 vs cluster-level top-5 의 aggregate 방식 (pixel concat vs centroid reclustering)
+- IG 캐러셀에서 각 이미지를 동등 가중 vs 대표 이미지 1장만 사용
+- Reel frame 수가 이미지 수 대비 훨씬 크므로 가중치 정규화 필요한가
+
 ---
 
 ## 7. 참고 / 현재 상태 스냅샷
