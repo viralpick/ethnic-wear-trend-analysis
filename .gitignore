@@ -44,6 +44,8 @@ yolov*.pt
 # Sample images — 실 IG 이미지 drop (public 레포 저작권/PII 리스크 회피).
 # 큐레이션된 샘플을 올리려면 별도 경로에 명시적으로 추가.
 sample_data/image/
+# Blob 다운로드 캐시 (scripts/download_blobs.py 산출). 실 IG 이미지 다수라 public 금지.
+sample_data/image_cache/
 
 # 크롤러 DB 에서 export 한 실 데이터 샘플 (TSV) + Azure Blob SAS URL 리스트 (TXT).
 # 실 계정/캡션/이미지 경로/SAS 경로 포함 — public 레포 금지. JSON 고정 fixture 는 허용.

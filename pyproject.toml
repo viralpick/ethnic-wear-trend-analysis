@@ -35,6 +35,13 @@ vision = [
     "pillow>=10.0",
     "opencv-python>=4.8",
 ]
+# Azure Blob Storage loader — posting.tsv 의 image_paths 다운로드용.
+# `[color]` 담당자만 설치. `.env` 에서 AZURE_STORAGE_CONNECTION_STRING 읽기.
+blob = [
+    "azure-storage-blob>=12.19",
+    "azure-identity>=1.15",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 # 사용자 요청 이름: "attributes". hatchling sources 매핑(src="")으로 src/ prefix 가 설치 후 제거되므로

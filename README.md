@@ -142,6 +142,54 @@ uv run daily --date 2026-04-21 --color-extractor pipeline_b --image-root sample_
 
 기본값은 `--color-extractor fake` (vision extras 없이 동작).
 
+## Blob 다운로드 + Pipeline B 전수 처리 (vision + blob extras)
+
+`posting.tsv` 가 참조하는 62장 이미지를 Azure Blob 에서 로컬 캐시로 받아 Pipeline B 를 전 post
+에 적용. 전체 퀄리티를 `comparison.html` 로 확인.
+
+준비:
+
+```bash
+uv sync --extra vision --extra blob    # 또는 --all-extras
+```
+
+그리고 프로젝트 루트에 `.env` 파일 생성 (gitignored). 아래 예시 내용 중 connection
+string 의 `REPLACE_ME` 자리에 Azure Portal → Storage account → "Access keys" 의
+Connection string 값 붙여넣기:
+
+```dotenv
+# 옵션 A (권장): connection string 한 줄
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=enhansprodpriceagentsa;AccountKey=REPLACE_ME;EndpointSuffix=core.windows.net
+
+# 옵션 B (연결 문자열 비워둘 때 fallback):
+# AZURE_STORAGE_ACCOUNT_NAME=enhansprodpriceagentsa
+# AZURE_STORAGE_ACCOUNT_KEY=REPLACE_ME
+
+AZURE_STORAGE_CONTAINER=collectify
+```
+
+다운로드:
+
+```bash
+uv run python scripts/download_blobs.py --dry-run   # 경로 미리보기
+uv run python scripts/download_blobs.py             # 실 다운로드 → sample_data/image_cache/
+```
+
+전수 실행:
+
+```bash
+# TSV 소스 + Pipeline B 로 전 50 post 처리
+uv run daily --date 2026-04-21 --source tsv --tsv-dir sample_data \
+    --color-extractor pipeline_b --image-root sample_data/image_cache
+
+# 또는 smoke 스크립트로 comparison.html 갱신
+uv run python scripts/pipeline_b_smoke.py --image-root sample_data/image_cache
+open outputs/pipeline_b_smoke/comparison.html
+```
+
+Instagram CDN 이미지 (hashtag_search.tsv) 는 현재 blob downloader 대상이 아니고, IG CDN 의
+referer/토큰 expiry 제약 때문에 별도 검토 필요 (roadmap M4).
+
 ## `src/settings.py` 수정 시 주의
 
 `pyproject.toml`의 `[tool.hatch.build.targets.wheel.force-include]` 는 `src/settings.py` 를
