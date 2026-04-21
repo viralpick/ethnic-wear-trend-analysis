@@ -102,6 +102,46 @@ uv run python -m pipelines.run_local_smoke_test
 uv run pytest
 ```
 
+## Pipeline B color smoke (vision extras 필요)
+
+동료 PoC 에서 인수인계받은 YOLO + segformer + LAB KMeans 파이프라인을 로컬 JPG 에 돌려
+결과를 시각 확인하는 스크립트. `sample_data/image/` 의 20장 실 IG 이미지 → post ULID 로
+그룹화 → palette 추출 → HTML 비교 페이지 생성.
+
+첫 실행 전제:
+
+```bash
+uv sync --extra vision        # torch + transformers + ultralytics + pillow + opencv
+```
+
+실행:
+
+```bash
+uv run python scripts/pipeline_b_smoke.py
+# 선택 옵션:
+#   --image-root PATH    (기본: sample_data/image)
+#   --output-dir PATH    (기본: outputs/pipeline_b_smoke)
+```
+
+첫 실행 시 yolov8n.pt (~6MB) + segformer_b2_clothes (~200MB) 다운로드 후 캐시. Apple
+Silicon 은 MPS 자동 사용. CPU only 환경에서도 동작하지만 프레임당 ~1s 소요.
+
+산출:
+
+- `outputs/pipeline_b_smoke/palette.json` — post 별 팔레트 원본 데이터
+- `outputs/pipeline_b_smoke/comparison.html` — 썸네일 + palette chip 시각 비교 (브라우저로 열기)
+
+스코프: 동료 PoC 결과를 우리 레포 데이터/구조로 재현하는 smoke. 대시보드 연결은 M3,
+Blob SAS URL download 도 M3 (현재는 로컬 JPG 만 처리).
+
+daily CLI 에서 Pipeline B 를 사용하려면:
+
+```bash
+uv run daily --date 2026-04-21 --color-extractor pipeline_b --image-root sample_data/image
+```
+
+기본값은 `--color-extractor fake` (vision extras 없이 동작).
+
 ## `src/settings.py` 수정 시 주의
 
 `pyproject.toml`의 `[tool.hatch.build.targets.wheel.force-include]` 는 `src/settings.py` 를
