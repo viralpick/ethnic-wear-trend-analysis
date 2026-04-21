@@ -109,3 +109,19 @@ palette:
 export:
   summaries_filename: summaries.json
   enriched_filename: enriched.json
+
+# --------------------------------------------------------------------------- #
+# Vision — Pipeline B (YOLOv8 + segformer + LAB KMeans) 색 추출 파라미터 (spec §4.1 ④)
+# 출처: ~/dev/clothing-color-extraction-poc verdict.md (2026-04-17 동료 PoC).
+# 동료 PoC 는 완결 아님 — 우리 레포에서 방법론 비교 계속하며 tune 할 지점:
+#   - skin_lab_box.min[0] (L_min): 40 → 30 까지 내리면 deep skin tone leak 감소 여부 측정
+#   - extract_colors.k: 5 → 3 / 7 비교 (대시보드 chip 수 vs 정확도 tradeoff)
+#   - extract_colors.min_pixels: class 별 최소 pixel. 낮추면 noise, 높이면 small garment drop
+# --------------------------------------------------------------------------- #
+vision:
+  skin_lab_box:
+    min: [40.0, 10.0, 15.0]
+    max: [80.0, 25.0, 35.0]
+  extract_colors:
+    k: 5
+    min_pixels: 150

@@ -141,6 +141,31 @@ class ExportConfig(BaseModel):
     enriched_filename: str = "enriched.json"
 
 
+# --------------------------------------------------------------------------- #
+# Vision (color_space Pipeline B — spec §4.1 ④)
+# --------------------------------------------------------------------------- #
+
+class SkinLabBox(BaseModel):
+    """Skin LAB box 경계 (drop_skin / hex_skin_leak 공용).
+
+    방법론 실험용: segformer 없이 bbox crop 만 쓰면 drop_skin 이 주 방어선이 되어 box 넓이가
+    결과에 큰 영향. 인도 skin tone 스펙트럼 전체를 잡으려면 L_min 을 30 까지 내릴지 검토 (TODO).
+    """
+    min: list[float] = Field(min_length=3, max_length=3)
+    max: list[float] = Field(min_length=3, max_length=3)
+
+
+class ExtractColorsConfig(BaseModel):
+    """KMeans 팔레트 추출 파라미터 (extract_colors 호출용)."""
+    k: int = 5
+    min_pixels: int = 150
+
+
+class VisionConfig(BaseModel):
+    skin_lab_box: SkinLabBox
+    extract_colors: ExtractColorsConfig = ExtractColorsConfig()
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="forbid")
 
@@ -153,6 +178,7 @@ class Settings(BaseSettings):
     vlm: VLMConfig = VLMConfig()
     palette: PaletteConfig = PaletteConfig()
     export: ExportConfig = ExportConfig()
+    vision: VisionConfig
 
     @classmethod
     def settings_customise_sources(

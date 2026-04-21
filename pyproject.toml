@@ -14,10 +14,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 방법론 비교 / Pipeline B (YOLOv8 + segformer + LAB KMeans) 용 vision 의존성.
+# Step A: color_space 모듈 (numpy + scikit-learn 만). Step C 에서 torch / transformers /
+# ultralytics / pillow / opencv 추가. color 담당 아닌 사람은 `uv sync` 만으로 설치되지 않음.
+color = [
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
+    "ethnic-wear-trend-analysis[color]",
 ]
 
 [project.scripts]
