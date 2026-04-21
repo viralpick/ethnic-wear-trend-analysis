@@ -1,8 +1,13 @@
 """Daily pipeline (spec §10.1 Step 1~5 통합).
 
 흐름: load raw → normalize → rule extract → LLM fill → cluster assign →
-      VLM Case1 (unclassified IG) → VLM Case2 (top-engagement IG per cluster) →
+      color extraction Case1 (unclassified IG) → Case2 (top-engagement IG per cluster) →
       enriched persist → scoring + aggregation + summaries persist.
+
+ColorExtractor 선택 (Step D):
+- 기본 `fake`: FakeColorExtractor (해시 결정론, vision extras 불필요)
+- `--color-extractor pipeline_b`: PipelineBColorExtractor (YOLO+segformer+LAB KMeans,
+  vision extras + 모델 다운 필요). `--image-root` 로 로컬 이미지 디렉토리 지정 가능.
 
 이 스켈레톤은 DB/백엔드 POST/스케줄러 없음. 로컬 sample_data 만으로 끝까지 흐르는 baseline.
 """
@@ -32,11 +37,11 @@ from normalization.normalize_content import normalize_batch
 from pipelines.run_scoring_pipeline import score_and_export
 from settings import Settings, load_settings
 from utils.logging import get_logger
-from vision.extract_color_features import (
-    FakeVLMClient,
-    VLMClient,
-    VLMVisualResult,
-    extract_color_batch,
+from vision.color_extractor import (
+    ColorExtractionResult,
+    ColorExtractor,
+    FakeColorExtractor,
+    run_color_extraction,
 )
 
 logger = get_logger(__name__)
@@ -61,7 +66,7 @@ def _assign_clusters(
     return enriched
 
 
-def _vlm_case1_targets(
+def _case1_targets(
     enriched: list[EnrichedContentItem], cap: int
 ) -> list[EnrichedContentItem]:
     """Case1: IG, garment_type 가 여전히 None 인 아이템 (spec §7.2)."""
@@ -72,7 +77,7 @@ def _vlm_case1_targets(
     return candidates[:cap]
 
 
-def _vlm_case2_targets(
+def _case2_targets(
     enriched: list[EnrichedContentItem], cap_per_cluster: int
 ) -> list[EnrichedContentItem]:
     """Case2: cluster 당 IG top-engagement 중 color 가 아직 없는 포스트 (spec §7.2)."""
@@ -93,11 +98,11 @@ def _vlm_case2_targets(
     return picks
 
 
-def _apply_vlm_result(
+def _apply_extraction_result(
     enriched: list[EnrichedContentItem],
-    results: list[VLMVisualResult],
+    results: list[ColorExtractionResult],
 ) -> list[EnrichedContentItem]:
-    """enriched 를 VLM 결과로 동결 상태 그대로 re-build (frozen Pydantic)."""
+    """extraction 결과로 enriched 를 동결 상태 그대로 re-build (frozen Pydantic)."""
     by_id = {r.source_post_id: r for r in results}
     updated: list[EnrichedContentItem] = []
     for item in enriched:
@@ -119,21 +124,21 @@ def _apply_vlm_result(
     return updated
 
 
-def _run_vlm(
+def _run_color_extraction(
     enriched: list[EnrichedContentItem],
-    client: VLMClient,
+    extractor: ColorExtractor,
     settings: Settings,
 ) -> list[EnrichedContentItem]:
-    case1 = _vlm_case1_targets(enriched, settings.vlm.case1_daily_cap)
-    results1 = extract_color_batch(
-        [e.normalized for e in case1], client, cap=settings.vlm.case1_daily_cap
+    case1 = _case1_targets(enriched, settings.vlm.case1_daily_cap)
+    results1 = run_color_extraction(
+        [e.normalized for e in case1], extractor, cap=settings.vlm.case1_daily_cap
     )
-    enriched = _apply_vlm_result(enriched, results1)
+    enriched = _apply_extraction_result(enriched, results1)
 
-    case2 = _vlm_case2_targets(enriched, settings.vlm.case2_per_cluster_cap)
-    results2 = extract_color_batch([e.normalized for e in case2], client)
-    enriched = _apply_vlm_result(enriched, results2)
-    logger.info("vlm case1=%d case2=%d", len(case1), len(case2))
+    case2 = _case2_targets(enriched, settings.vlm.case2_per_cluster_cap)
+    results2 = run_color_extraction([e.normalized for e in case2], extractor)
+    enriched = _apply_extraction_result(enriched, results2)
+    logger.info("color_extraction case1=%d case2=%d", len(case1), len(case2))
     return enriched
 
 
@@ -141,7 +146,7 @@ def run_pipeline(
     settings: Settings,
     target_date: date,
     llm_client: LLMClient,
-    vlm_client: VLMClient,
+    color_extractor: ColorExtractor,
 ) -> None:
     batch = _load_raw(settings.paths.sample_data, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
@@ -151,7 +156,7 @@ def run_pipeline(
     apply_llm_extraction(states, llm_client)
     enriched = _assign_clusters(states)
 
-    enriched = _run_vlm(enriched, vlm_client, settings)
+    enriched = _run_color_extraction(enriched, color_extractor, settings)
 
     write_enriched(
         settings.paths.outputs, target_date, enriched,
@@ -166,6 +171,14 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Daily pipeline (Step 1~5 로컬)")
     parser.add_argument("--date", type=str, required=False,
                         help="ISO 날짜. 미지정 시 settings.pipeline.target_date or today.")
+    parser.add_argument(
+        "--color-extractor", choices=["fake", "pipeline_b"], default="fake",
+        help="color/silhouette 추출기 선택. pipeline_b 는 `uv sync --extra vision` 필요.",
+    )
+    parser.add_argument(
+        "--image-root", type=Path, default=None,
+        help="pipeline_b 모드에서 URL basename 매핑용 이미지 디렉토리 (예: sample_data/image).",
+    )
     return parser.parse_args()
 
 
@@ -175,13 +188,26 @@ def _resolve_target_date(cli: str | None, settings_target: date | None) -> date:
     return settings_target or date.today()
 
 
+def _select_color_extractor(
+    choice: str, settings: Settings, image_root: Path | None
+) -> ColorExtractor:
+    """CLI flag 기반 ColorExtractor DI. pipeline_b 는 lazy import (vision extras 격리)."""
+    if choice == "pipeline_b":
+        # vision extras 미설치 환경에서는 이 import 자체가 ImportError — 즉시 실패가 맞음.
+        from vision.pipeline_b_adapter import PipelineBColorExtractor  # noqa: I001
+        from vision.pipeline_b_extractor import load_models
+        bundle = load_models()
+        return PipelineBColorExtractor(bundle, settings.vision, image_root=image_root)
+    return FakeColorExtractor(cfg=settings.vlm)
+
+
 def main() -> None:
     args = _parse_args()
     settings = load_settings()
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
     llm_client = FakeLLMClient(seed=DEFAULT_LLM_SEED)
-    vlm_client = FakeVLMClient(cfg=settings.vlm)
-    run_pipeline(settings, target, llm_client, vlm_client)
+    color_extractor = _select_color_extractor(args.color_extractor, settings, args.image_root)
+    run_pipeline(settings, target, llm_client, color_extractor)
 
 
 if __name__ == "__main__":

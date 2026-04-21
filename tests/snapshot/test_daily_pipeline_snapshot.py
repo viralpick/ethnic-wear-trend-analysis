@@ -1,7 +1,7 @@
 """Daily pipeline snapshot (spec §10.1 전체 흐름).
 
-sample_data 에 대해 FakeLLM + FakeVLM 을 쓴 결정론적 출력을 golden_summaries.json 과 비교한다.
-LLM/VLM 팩터를 갈아끼우지 않는 이상 출력이 바뀌면 바로 drift 로 잡는다.
+sample_data 에 대해 FakeLLM + FakeColorExtractor 를 쓴 결정론적 출력을 golden_summaries.json
+과 비교한다. 추출기를 갈아끼우지 않는 이상 출력이 바뀌면 바로 drift 로 잡는다.
 
 갱신 절차: 코드 변경이 의도적 드리프트이면 env SNAPSHOT_UPDATE=1 로 실행해 golden 재생성.
 """
@@ -17,7 +17,7 @@ import pytest
 from attributes.extract_text_attributes_llm import DEFAULT_LLM_SEED, FakeLLMClient
 from pipelines.run_daily_pipeline import run_pipeline
 from settings import load_settings
-from vision.extract_color_features import FakeVLMClient
+from vision.color_extractor import FakeColorExtractor
 
 _FIXED_DATE = date(2026, 4, 21)
 _GOLDEN = Path(__file__).parent / "golden_summaries.json"
@@ -33,8 +33,8 @@ def tmp_settings(tmp_path: Path):
 
 def _run(settings) -> Path:
     llm = FakeLLMClient(seed=DEFAULT_LLM_SEED)
-    vlm = FakeVLMClient(cfg=settings.vlm)
-    run_pipeline(settings, _FIXED_DATE, llm, vlm)
+    extractor = FakeColorExtractor(cfg=settings.vlm)
+    run_pipeline(settings, _FIXED_DATE, llm, extractor)
     return settings.paths.outputs / _FIXED_DATE.isoformat() / "summaries.json"
 
 
