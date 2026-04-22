@@ -175,16 +175,10 @@ def extract_garment_pixels(
     return out
 
 
-def extract_palette(
-    source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
+def _pixels_to_palette(
+    combined: np.ndarray, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
-    """FrameSource → 모든 frame 의 garment cleaned pixel concat → KMeans → palette."""
-    all_pixels: list[np.ndarray] = []
-    for frame in source.iter_frames():
-        all_pixels.extend(extract_garment_pixels(frame, bundle, cfg))
-    if not all_pixels:
-        return []
-    combined = np.concatenate(all_pixels)
+    """cleaned pixel concat → KMeans → ColorPaletteItem. pure helper."""
     colors = extract_colors(
         combined, k=cfg.extract_colors.k, min_pixels=cfg.extract_colors.min_pixels,
     )
@@ -202,3 +196,92 @@ def extract_palette(
             )
         )
     return palette
+
+
+def extract_palette(
+    source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
+) -> list[ColorPaletteItem]:
+    """FrameSource → 모든 frame 의 garment cleaned pixel concat → KMeans → palette."""
+    all_pixels: list[np.ndarray] = []
+    for frame in source.iter_frames():
+        all_pixels.extend(extract_garment_pixels(frame, bundle, cfg))
+    if not all_pixels:
+        return []
+    combined = np.concatenate(all_pixels)
+    return _pixels_to_palette(combined, cfg)
+
+
+@dataclass(frozen=True)
+class ExtractionDiagnostics:
+    """extract_palette 의 중간 단계를 노출 — quality badge / 디버깅용."""
+    palette: list[ColorPaletteItem]
+    yolo_detected_persons: int
+    fallback_triggered: bool
+    post_total_garment_pixels: int
+    garment_class_counts: dict[str, int]
+
+
+def extract_palette_with_diagnostics(
+    source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
+) -> ExtractionDiagnostics:
+    """extract_palette 의 superset. YOLO bbox 수 / fallback 여부 / class pixel 수도 함께 수집."""
+    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
+    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
+    yolo_count = 0
+    fallback = False
+    class_counts: dict[str, int] = {}
+    all_pixels: list[np.ndarray] = []
+    for frame in source.iter_frames():
+        boxes = detect_people(bundle.yolo, frame.rgb)
+        yolo_count += len(boxes)
+        if not boxes and cfg.fallback_full_image_on_no_person:
+            h, w = frame.rgb.shape[:2]
+            boxes = [(0, 0, w, h)]
+            fallback = True
+        all_pixels.extend(
+            _collect_frame_garments(frame, boxes, bundle, cfg, lab_min, lab_max, class_counts)
+        )
+    if not all_pixels:
+        palette: list[ColorPaletteItem] = []
+    else:
+        palette = _pixels_to_palette(np.concatenate(all_pixels), cfg)
+    total = int(sum(arr.shape[0] for arr in all_pixels))
+    return ExtractionDiagnostics(
+        palette=palette,
+        yolo_detected_persons=yolo_count,
+        fallback_triggered=fallback,
+        post_total_garment_pixels=total,
+        garment_class_counts=class_counts,
+    )
+
+
+def _collect_frame_garments(
+    frame: Frame,
+    boxes: list[tuple[int, int, int, int]],
+    bundle: SegBundle,
+    cfg: VisionConfig,
+    lab_min: np.ndarray,
+    lab_max: np.ndarray,
+    class_counts: dict[str, int],
+) -> list[np.ndarray]:
+    """frame 1개 × bboxes → cleaned pixel 리스트 (class counts in-place 업데이트)."""
+    out: list[np.ndarray] = []
+    for (x1, y1, x2, y2) in boxes:
+        x1c, y1c = max(0, x1), max(0, y1)
+        x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
+        if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
+            continue
+        crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
+        seg = run_segformer(bundle, crop_rgb)
+        for class_id, label in ATR_LABELS.items():
+            if label not in WEAR_KEEP:
+                continue
+            pixels = crop_rgb[seg == class_id]
+            if pixels.shape[0] < cfg.extract_colors.min_pixels:
+                continue
+            cleaned = drop_skin(pixels, lab_min=lab_min, lab_max=lab_max)
+            if cleaned.shape[0] < cfg.extract_colors.min_pixels:
+                continue
+            class_counts[label] = class_counts.get(label, 0) + cleaned.shape[0]
+            out.append(cleaned)
+    return out
