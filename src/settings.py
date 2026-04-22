@@ -160,9 +160,17 @@ class ExtractColorsConfig(BaseModel):
     min_pixels: int = 150
 
 
+class InstanceConfig(BaseModel):
+    """phase 3 — (frame × person × garment_class) instance 기반 palette 설정."""
+    single_color_max_delta_e: float = 8.0   # instance 내 top chip 간 ΔE 미만이면 단색 판정
+    duplicate_max_delta_e: float = 15.0     # instance 간 top-1 chip ΔE 미만이면 같은 옷
+    weight_formula: str = "log"             # "log" | "linear" | "sqrt"
+
+
 class VisionConfig(BaseModel):
     skin_lab_box: SkinLabBox
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
+    instance: InstanceConfig = InstanceConfig()
     # YOLO person detect 실패 시 전체 이미지를 bbox 로 간주. mirror selfie (거울 셀카) 처럼
     # YOLOv8n 이 OOD 로 놓치는 케이스 방어. segformer 가 skin/background/의류 자체적으로 분리하므로
     # 전체 이미지 → segformer 도 의류 pixel 을 제대로 뽑아낸다. IG 에 거울 셀카가 흔해 기본 True.

@@ -134,3 +134,8 @@ vision:
   # 0.5 — 50% 이상이면 "진짜 skin-tone 의류" 로 확실할 때만 보존. 그 이하는 drop.
   # smoke 131 post 실측 후 0.3 → 0.5 상향 (0.3 은 adaptive 너무 자주 발동).
   skin_drop_threshold_pct: 0.5
+  # phase 3 — (frame × person × garment_class) instance 기반 palette 설정.
+  instance:
+    single_color_max_delta_e: 8.0   # instance 내 chip 간 ΔE 미만이면 단색 판정
+    duplicate_max_delta_e: 15.0     # instance 간 top-1 ΔE 미만이면 같은 옷
+    weight_formula: log             # log(1+count) | linear | sqrt
