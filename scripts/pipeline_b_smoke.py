@@ -9,6 +9,11 @@ phase 2 업데이트:
 - overlay v2: drop_skin_adaptive kept/dropped 2색 표시 (흰색 = skin box 에 걸려 제거된 영역)
 - comparison.html 의 palette column 에 frame-level palette 도 strip 으로 표시
 
+phase 3 업데이트:
+- comparison.html 에 instance 단위 정보 추가 — (frame × person × class) 각각 독립 palette
+- duplicate group 을 단일 블록으로 묶어 표시 (같은 옷 ΔE 기준 합쳐짐 + sub-linear weight)
+- 각 instance 의 단색/다색 판정, pixel_count, skin_drop_ratio 노출
+
 전제: `uv sync --extra vision` (torch + transformers + ultralytics) 완료.
 
 실행:
@@ -34,6 +39,7 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from settings import VisionConfig, load_settings  # noqa: E402
 from vision.color_space import rgb_to_lab  # noqa: E402
 from vision.frame_source import ImageFrameSource  # noqa: E402
+from vision.garment_instance import GarmentInstance, _weight_for  # noqa: E402
 from vision.pipeline_b_extractor import (  # noqa: E402
     ATR_LABELS,
     WEAR_KEEP,
@@ -210,6 +216,60 @@ def _frame_palettes_html(frame_palettes: list[dict]) -> str:
     return "".join(rows)
 
 
+def _instance_to_json(inst: GarmentInstance) -> dict:
+    """GarmentInstance → JSON-serializable dict (HTML 렌더 + palette.json 공용)."""
+    return {
+        "instance_id": inst.instance_id,
+        "frame_id": inst.frame_id,
+        "garment_class": inst.garment_class,
+        "is_single_color": inst.is_single_color,
+        "pixel_count": inst.pixel_count,
+        "skin_drop_ratio": inst.skin_drop_ratio,
+        "palette": [item.model_dump(mode="json") for item in inst.palette],
+    }
+
+
+def _instance_block_html(inst: dict) -> str:
+    """instance 1 개 = class 1 개의 palette block. single/multi + drop ratio 표시."""
+    single_badge = "단색" if inst["is_single_color"] else "다색"
+    badge_bg = "#e7f3ff" if inst["is_single_color"] else "#fff0e5"
+    short_id = inst["instance_id"].split(":", 1)[-1]
+    return (
+        f'<div style="display:inline-block;margin:2px;padding:4px;'
+        f'border:1px solid #ddd;border-radius:4px;background:#fafafa;font-size:10px">'
+        f'<div><strong>{inst["garment_class"]}</strong> '
+        f'<span style="background:{badge_bg};padding:1px 4px;'
+        f'border-radius:3px">{single_badge}</span></div>'
+        f'<div style="color:#888">'
+        f'<code>{short_id}</code> px={inst["pixel_count"]} '
+        f'drop={inst["skin_drop_ratio"]:.2f}</div>'
+        f'<div style="margin-top:2px">{_chip_strip(inst["palette"])}</div>'
+        f'</div>'
+    )
+
+
+def _duplicate_groups_html(groups: list[dict]) -> str:
+    """duplicate group 별 bracket — 같은 옷 묶음 + weight 시각 표시."""
+    if not groups:
+        return '<span style="color:#aaa;font-size:10px">(no instances)</span>'
+    blocks = []
+    for g in groups:
+        count = len(g["instances"])
+        weight = g["weight"]
+        group_label = f"× {count}  weight={weight:.2f}"
+        weight_bg = "#ffeaa7" if count >= 2 else "#f0f0f0"
+        inner = "".join(_instance_block_html(inst) for inst in g["instances"])
+        blocks.append(
+            f'<div style="margin:4px 0;padding:4px;border-left:3px solid #888">'
+            f'<div style="font-size:10px;background:{weight_bg};'
+            f'padding:2px 6px;display:inline-block;border-radius:3px">'
+            f'group: {group_label}</div>'
+            f'<div style="margin-top:2px">{inner}</div>'
+            f'</div>'
+        )
+    return "".join(blocks)
+
+
 def _render_html(results: list[dict], output_path: Path) -> None:
     """post 당: ULID+quality / carousel / overlay (kept+dropped) / post + frame palette."""
     rows: list[str] = []
@@ -242,8 +302,9 @@ def _render_html(results: list[dict], output_path: Path) -> None:
         ) or '<span style="color:#888">(no palette)</span>'
         badge_html = _quality_badge_html(r["quality"])
         frame_palettes_html = _frame_palettes_html(r.get("frame_palettes", []))
+        groups_html = _duplicate_groups_html(r.get("duplicate_groups", []))
         palette_cell = (
-            f'<div><strong style="font-size:11px">Post palette (aggregate):</strong>'
+            f'<div><strong style="font-size:11px">Post palette (duplicate-weighted):</strong>'
             f'<br>{chips_html}</div>'
             f'<div style="margin-top:8px"><strong style="font-size:11px">'
             f'Frame palettes (독립 KMeans):</strong>{frame_palettes_html}</div>'
@@ -253,6 +314,7 @@ def _render_html(results: list[dict], output_path: Path) -> None:
             f"<br><small>{len(r['image_paths'])} imgs</small>{badge_html}</td>"
             f"<td style='padding:8px'>{imgs_html}</td>"
             f"<td style='padding:8px'>{overlay_html}</td>"
+            f"<td style='padding:8px;vertical-align:top;max-width:360px'>{groups_html}</td>"
             f"<td style='padding:8px;vertical-align:top'>{palette_cell}</td></tr>"
         )
     html = f"""<!doctype html>
@@ -270,8 +332,14 @@ Quality: 🟢 ok / 🟡 warning (skin leak or chip similarity or fallback) /
 Post palette = 전 frame 합쳐 한 번의 KMeans (cluster aggregate 용).<br>
 Frame palettes = 각 frame 독립 KMeans (캐러셀 outfit 변화 검증용).
 </p>
-<table><thead><tr><th>post ULID + quality</th><th>carousel</th><th>overlay (kept + dropped)</th>
-<th>palette</th></tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>
+<p style="font-size:12px">
+Instances = (frame × person × garment_class) 단위 독립 palette.
+Groups = 같은 garment_class + top-1 chip ΔE &lt; threshold 인 instance 들을 묶음.
+weight = 1 + log(count) 로 sub-linear 가중치 — 같은 옷 N 번 등장해도 N 배로 부풀지 않게.
+</p>
+<table><thead><tr><th>post ULID + quality</th><th>carousel</th>
+<th>overlay (kept + dropped)</th><th>instances + groups</th><th>palette</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table></body></html>
 """
     output_path.write_text(html, encoding="utf-8")
 
@@ -317,12 +385,23 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             }
             for fp in diag.frame_palettes
         ]
+        duplicate_groups_json = [
+            {
+                "instances": [_instance_to_json(inst) for inst in group],
+                "weight": _weight_for(
+                    len(group), settings.vision.instance.weight_formula,
+                ),
+            }
+            for group in diag.duplicate_groups
+        ]
         results.append({
             "post_ulid": post_ulid,
             "image_paths": [str(p) for p in paths],
             "overlay_paths": [str(p) for p in overlay_paths],
             "palette": [item.model_dump(mode="json") for item in diag.palette],
             "frame_palettes": frame_palettes_json,
+            "duplicate_groups": duplicate_groups_json,
+            "instances": [_instance_to_json(inst) for inst in diag.instances],
             "quality": {
                 "level": quality.level,
                 "skin_leak_count": quality.skin_leak_count,
