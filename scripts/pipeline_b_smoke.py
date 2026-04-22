@@ -37,10 +37,11 @@ from vision.pipeline_b_extractor import (  # noqa: E402
     WEAR_KEEP,
     SegBundle,
     detect_people,
-    extract_palette,
+    extract_palette_with_diagnostics,
     load_models,
     run_segformer,
 )
+from vision.quality import PostQuality, count_chip_similarity, count_skin_leaks  # noqa: E402
 
 # class 별 overlay 색상 (RGB). 시각 구분만 위한 것 (분리 품질 확인용).
 _OVERLAY_COLORS: dict[str, tuple[int, int, int]] = {
@@ -119,8 +120,26 @@ def save_overlay_png(
     Image.fromarray(overlay).save(output_path, format="PNG", optimize=True)
 
 
+def _quality_badge_html(q: dict) -> str:
+    """quality dict → 색상 배경 badge + 지표 요약."""
+    level = q.get("level", "ok")
+    bg = {"ok": "#d4edda", "warning": "#fff3cd", "danger": "#f8d7da"}[level]
+    icon = {"ok": "🟢", "warning": "🟡", "danger": "🔴"}[level]
+    details = (
+        f"skin_leak={q['skin_leak_count']} "
+        f"sim_warn={q['chip_similarity_warning']} "
+        f"px={q['post_total_garment_pixels']} "
+        f"yolo={q['yolo_detected_persons']}"
+        + (" fallback" if q.get("fallback_triggered") else "")
+    )
+    return (
+        f'<div style="background:{bg};padding:4px 8px;border-radius:4px;'
+        f'font-size:11px;margin-top:4px">{icon} <code>{details}</code></div>'
+    )
+
+
 def _render_html(results: list[dict], output_path: Path) -> None:
-    """post 당 썸네일 + overlay + palette chip 3열. 분리 품질 눈으로 검증."""
+    """post 당 썸네일 + overlay + palette chip + quality badge 4열. 분리 품질 눈으로 검증."""
     rows: list[str] = []
     legend = " ".join(
         f'<span style="background:rgb{_OVERLAY_COLORS[lbl]};'
@@ -145,9 +164,10 @@ def _render_html(results: list[dict], output_path: Path) -> None:
             f'<span>{c["hex_display"]}<br>{c["pct"]:.1%}</span></div>'
             for c in r["palette"]
         ) or '<span style="color:#888">(no palette)</span>'
+        badge_html = _quality_badge_html(r["quality"])
         rows.append(
             f"<tr><td style='vertical-align:top;padding:8px'><code>{r['post_ulid']}</code>"
-            f"<br><small>{len(r['image_paths'])} imgs</small></td>"
+            f"<br><small>{len(r['image_paths'])} imgs</small>{badge_html}</td>"
             f"<td style='padding:8px'>{imgs_html}</td>"
             f"<td style='padding:8px'>{overlay_html}</td>"
             f"<td style='padding:8px'>{chips_html}</td></tr>"
@@ -159,9 +179,13 @@ table{{border-collapse:collapse}} td,th{{border:1px solid #ccc}}
 .legend{{margin:12px 0;font-size:13px}}</style></head>
 <body><h1>Pipeline B Smoke — sample_data/image</h1>
 <p>Rows: {len(results)} posts. HEX = LAB KMeans centroid, pct = pixel weight.
-overlay = segformer class mask 반투명 덧씌움 (분리 품질 검증).</p>
+overlay = segformer class mask 반투명 덧씌움. badge = post quality 지표.</p>
 <div class="legend">Legend: {legend}</div>
-<table><thead><tr><th>post ULID</th><th>carousel</th><th>segformer overlay</th>
+<p style="font-size:12px">
+Quality: 🟢 ok / 🟡 warning (skin leak or chip similarity or fallback) /
+🔴 danger (total garment pixels &lt; 5000)
+</p>
+<table><thead><tr><th>post ULID + quality</th><th>carousel</th><th>segformer overlay</th>
 <th>palette (top-k)</th></tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>
 """
     output_path.write_text(html, encoding="utf-8")
@@ -190,14 +214,34 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             save_overlay_png(p, bundle, settings.vision, overlay_path)
             overlay_paths.append(overlay_path)
         source = ImageFrameSource(paths)
-        palette = extract_palette(source, bundle, settings.vision)
+        diag = extract_palette_with_diagnostics(source, bundle, settings.vision)
+        quality = PostQuality(
+            skin_leak_count=count_skin_leaks(diag.palette),
+            chip_similarity_warning=count_chip_similarity(diag.palette),
+            post_total_garment_pixels=diag.post_total_garment_pixels,
+            yolo_detected_persons=diag.yolo_detected_persons,
+            fallback_triggered=diag.fallback_triggered,
+            garment_class_counts=dict(diag.garment_class_counts),
+        )
         results.append({
             "post_ulid": post_ulid,
             "image_paths": [str(p) for p in paths],
             "overlay_paths": [str(p) for p in overlay_paths],
-            "palette": [item.model_dump(mode="json") for item in palette],
+            "palette": [item.model_dump(mode="json") for item in diag.palette],
+            "quality": {
+                "level": quality.level,
+                "skin_leak_count": quality.skin_leak_count,
+                "chip_similarity_warning": quality.chip_similarity_warning,
+                "post_total_garment_pixels": quality.post_total_garment_pixels,
+                "yolo_detected_persons": quality.yolo_detected_persons,
+                "fallback_triggered": quality.fallback_triggered,
+                "garment_class_counts": quality.garment_class_counts,
+            },
         })
-        print(f"[smoke] {post_ulid}: {len(paths)} imgs → {len(palette)} chips")
+        print(
+            f"[smoke] {post_ulid}: {len(paths)} imgs → {len(diag.palette)} chips "
+            f"{quality.badge} {quality.level}"
+        )
 
     (output_dir / "palette.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False)

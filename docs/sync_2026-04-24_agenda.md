@@ -70,6 +70,17 @@ fixture + 실 TSV 4건을 `TsvRawLoader` 로 변환하며 발견된 가정 / Ope
 | `fashionagram_profile_posting.tsv` | posting.tsv 와 URL 100% 중복이라 **제외** | 삭제 가능? |
 | `posting.tsv` 빈 post_date (`""`) | 일부 row skip (예: `01KPNKV3S2...`) — `Invalid isoformat` raise 후 drop | 크롤러가 post_date 를 항상 채우도록 보장 |
 
+**2026-04-22 업데이트 — 크롤링 담당자 (남궁현) 회신 반영**:
+
+1. `hashtag_search` 는 **별도 blob 저장 안 함**. 썸네일 URL + caption 만 수집.
+2. "상세 수집" 을 돌리면 hashtag_search URL 들이 `inatagram_posting` 에 합류.
+   내일 (4/23) 상세 수집 완료 예정 → posting.tsv 행 수 10 → ~51 확장 기대.
+3. → 우리 TsvRawLoader 의 `_build_hashtag_search` 분기는 내일 결과 확인 후 deprecate 고려.
+   `hashtag_search.tsv` 자체는 "미상세 수집 태그 감지" 용도로만 남을 가능성.
+4. **StarRocks DB 직접 접근** 도 infra 쪽에 요청하면 받을 수 있음 (schema: `png`).
+   → M3 `loaders/starrocks_reader.py` 에서 TSV export 생략하고 DB 쿼리로 전환 가능.
+   → **4/24 싱크에 명시적 접근 권한 요청**.
+
 contract 변경 (breaking, 2026-04-22):
 - `RawInstagramPost.account_handle: str` → `str | None = None`
 - 이유: hashtag_search 는 계정 정보 없이 수집되는 포스트 존재
