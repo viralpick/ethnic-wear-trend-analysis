@@ -39,9 +39,10 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from settings import VisionConfig, load_settings  # noqa: E402
 from vision.color_space import rgb_to_lab  # noqa: E402
 from vision.frame_source import ImageFrameSource  # noqa: E402
-from vision.garment_instance import GarmentInstance, _weight_for  # noqa: E402
+from vision.garment_instance import GarmentInstance, compute_group_weight  # noqa: E402
 from vision.pipeline_b_extractor import (  # noqa: E402
     ATR_LABELS,
+    MIN_CROP_PX,
     WEAR_KEEP,
     SegBundle,
     detect_people,
@@ -138,7 +139,7 @@ def build_segformer_overlay(
     for (x1, y1, x2, y2) in boxes:
         x1c, y1c = max(0, x1), max(0, y1)
         x2c, y2c = min(rgb.shape[1], x2), min(rgb.shape[0], y2)
-        if x2c - x1c < 32 or y2c - y1c < 32:
+        if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
             continue
         crop = rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop)
@@ -187,30 +188,62 @@ def _quality_badge_html(q: dict) -> str:
     )
 
 
-def _chip_strip(palette_items: list[dict]) -> str:
-    """palette → 색 칩 가로 strip. 작은 사이즈 (frame 단위용)."""
+def _chip_strip(palette_items: list[dict], width: int = 180, height: int = 16) -> str:
+    """palette → pct 비례 width 의 가로 bar. frame/instance 단위 소형."""
     if not palette_items:
         return '<span style="color:#aaa;font-size:10px">(empty)</span>'
-    return "".join(
+    segs = "".join(
         f'<div title="{c["hex_display"]} {c["pct"]:.0%}" '
-        f'style="display:inline-block;width:24px;height:24px;margin:1px;'
-        f'background:{c["hex_display"]};border:1px solid #888"></div>'
+        f'style="flex:{max(c["pct"], 0.001):.4f};height:{height}px;'
+        f'background:{c["hex_display"]};"></div>'
         for c in palette_items
+    )
+    return (
+        f'<div style="display:flex;width:{width}px;border:1px solid #888;'
+        f'border-radius:2px;overflow:hidden">{segs}</div>'
+    )
+
+
+def _chip_bar(palette_items: list[dict]) -> str:
+    """Post palette — 큰 pct-bar + hex + pct label. 시각적 주목."""
+    if not palette_items:
+        return '<span style="color:#888">(no palette)</span>'
+    segs = "".join(
+        f'<div title="{c["hex_display"]} {c["pct"]:.1%}" '
+        f'style="flex:{max(c["pct"], 0.001):.4f};height:48px;'
+        f'background:{c["hex_display"]};position:relative;'
+        f'display:flex;flex-direction:column;justify-content:flex-end;'
+        f'font-size:10px;color:#fff;text-shadow:0 0 2px #000;'
+        f'padding:2px;text-align:center">'
+        f'<span>{c["pct"]:.0%}</span></div>'
+        for c in palette_items
+    )
+    labels = "".join(
+        f'<div style="flex:{max(c["pct"], 0.001):.4f};font-size:10px;'
+        f'color:#333;text-align:center;padding:2px 0">{c["hex_display"]}</div>'
+        for c in palette_items
+    )
+    return (
+        f'<div style="width:360px;border:1px solid #888;border-radius:3px;'
+        f'overflow:hidden"><div style="display:flex">{segs}</div>'
+        f'<div style="display:flex;background:#f4f4f4">{labels}</div></div>'
     )
 
 
 def _frame_palettes_html(frame_palettes: list[dict]) -> str:
-    """frame 별 palette strip — 캐러셀 frame 간 색 변화 시각 검증."""
+    """frame 별 palette bar — 영향력 desc 정렬 (extract_palette_with_diagnostics 순서 유지)."""
     if not frame_palettes:
         return ""
     rows = []
     for fp in frame_palettes:
-        pixel_summary = ", ".join(
-            f"{lbl}={cnt}" for lbl, cnt in fp.get("garment_pixel_counts", {}).items()
-        )
+        pc = fp.get("garment_pixel_counts", {})
+        total_px = sum(pc.values())
+        pixel_summary = ", ".join(f"{lbl}={cnt}" for lbl, cnt in pc.items())
         rows.append(
-            f'<div style="margin:2px 0;font-size:10px">'
-            f'<code>{fp["frame_id"][:16]}…</code> {_chip_strip(fp["palette"])} '
+            f'<div style="margin:3px 0;font-size:10px">'
+            f'<code>{fp["frame_id"][:16]}…</code> '
+            f'<span style="color:#555">total_px={total_px}</span><br>'
+            f'{_chip_strip(fp["palette"])} '
             f'<span style="color:#888">{pixel_summary}</span></div>'
         )
     return "".join(rows)
@@ -293,13 +326,7 @@ def _render_html(results: list[dict], output_path: Path) -> None:
             f'style="width:120px;margin:2px;border:1px solid #ddd;">'
             for p in r.get("overlay_paths", [])
         )
-        chips_html = "".join(
-            f'<div style="display:inline-block;margin:4px;text-align:center;font-size:11px">'
-            f'<div style="background:{c["hex_display"]};width:48px;height:48px;'
-            f'border:1px solid #888"></div>'
-            f'<span>{c["hex_display"]}<br>{c["pct"]:.1%}</span></div>'
-            for c in r["palette"]
-        ) or '<span style="color:#888">(no palette)</span>'
+        chips_html = _chip_bar(r["palette"])
         badge_html = _quality_badge_html(r["quality"])
         frame_palettes_html = _frame_palettes_html(r.get("frame_palettes", []))
         groups_html = _duplicate_groups_html(r.get("duplicate_groups", []))
@@ -388,7 +415,7 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
         duplicate_groups_json = [
             {
                 "instances": [_instance_to_json(inst) for inst in group],
-                "weight": _weight_for(
+                "weight": compute_group_weight(
                     len(group), settings.vision.instance.weight_formula,
                 ),
             }

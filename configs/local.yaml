@@ -139,3 +139,10 @@ vision:
     single_color_max_delta_e: 8.0   # instance 내 chip 간 ΔE 미만이면 단색 판정
     duplicate_max_delta_e: 15.0     # instance 간 top-1 ΔE 미만이면 같은 옷
     weight_formula: log             # log(1+count) | linear | sqrt
+  # bbox-level 오탐 필터. 동상/마네킹/옷 없는 제품샷에서 의류 추출 방지.
+  # - min_skin_ratio_for_person: crop 내 segformer skin class pixel 비율 최소값.
+  #   미만이면 drop (동상=skin 없음). 0.005 = 0.5%.
+  # - max_garment_ratio_for_person: crop 내 의류 pixel 비율 최대값.
+  #   초과하면 drop (배경 오분류 또는 전체 의류 flat shot).
+  min_skin_ratio_for_person: 0.005
+  max_garment_ratio_for_person: 0.90

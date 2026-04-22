@@ -104,8 +104,12 @@ def find_duplicate_groups(
     return groups
 
 
-def _weight_for(count: int, formula: WeightFormula) -> float:
-    """sub-linear 가중치 — count 에 따른 영향력. 기본 log(1 + count) 형태."""
+def compute_group_weight(count: int, formula: WeightFormula) -> float:
+    """sub-linear 가중치 — count 에 따른 영향력. 기본 log(1 + count) 형태.
+
+    같은 옷이 여러 frame 에 반복 등장할 때 N 배로 부풀지 않게 억제. 단일 instance 는 1.0.
+    외부 (smoke HTML / diagnostics) 에서도 group 표시에 쓰므로 public API.
+    """
     if count <= 1:
         return 1.0
     if formula == "log":
@@ -142,7 +146,7 @@ def aggregate_post_palette(
         rep = group[0]
         if not rep.palette:
             continue
-        weight = _weight_for(len(group), weight_formula)
+        weight = compute_group_weight(len(group), weight_formula)
         for chip in rep.palette:
             scored.append((chip, chip.pct * weight))
     if not scored:

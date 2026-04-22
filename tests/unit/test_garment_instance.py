@@ -6,9 +6,9 @@ import pytest
 from contracts.common import ColorFamily, ColorPaletteItem
 from vision.garment_instance import (
     GarmentInstance,
-    _weight_for,
     aggregate_post_palette,
     classify_single_color,
+    compute_group_weight,
     find_duplicate_groups,
 )
 
@@ -106,12 +106,12 @@ def test_duplicate_groups_empty_palette_isolated() -> None:
     (4, "sqrt", 2.0),
 ])
 def test_weight_for_supported_formulas(count: int, formula: str, expected: float) -> None:
-    assert _weight_for(count, formula) == pytest.approx(expected)
+    assert compute_group_weight(count, formula) == pytest.approx(expected)
 
 
 def test_weight_for_unknown_raises() -> None:
     with pytest.raises(ValueError):
-        _weight_for(5, "unknown")  # type: ignore[arg-type]
+        compute_group_weight(5, "unknown")  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #

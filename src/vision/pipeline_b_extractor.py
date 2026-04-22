@@ -58,8 +58,19 @@ ATR_LABELS: dict[int, str] = {
 WEAR_KEEP: frozenset[str] = frozenset({
     "upper-clothes", "pants", "skirt", "dress", "hat", "left-shoe", "right-shoe",
 })
+# ATR 의 피부 클래스 라벨 (bbox false positive 필터용). "진짜 사람" 검증에 사용 —
+# 동상/마네킹/제품샷은 skin class pixel 이 거의 0.
+SKIN_LABELS: frozenset[str] = frozenset({
+    "skin-face", "skin-left-arm", "skin-right-arm", "skin-left-leg", "skin-right-leg",
+})
+_WEAR_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl in WEAR_KEEP}
+)
+_SKIN_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl in SKIN_LABELS}
+)
 
-_MIN_CROP_PX = 32
+MIN_CROP_PX = 32  # bbox 짧은 변이 이 값 미만이면 crop drop. smoke overlay 에서도 재사용.
 _YOLO_CONF = 0.35
 _YOLO_DEDUP_IOU = 0.45
 
@@ -169,52 +180,83 @@ def _pixels_to_palette(
 # Phase 3: instance 추출
 # --------------------------------------------------------------------------- #
 
+@dataclass(frozen=True)
+class _ExtractCtx:
+    """bbox 루프마다 재계산 피하려고 frame loop 진입 전 만드는 컨텍스트."""
+    bundle: SegBundle
+    cfg: VisionConfig
+    lab_min: np.ndarray
+    lab_max: np.ndarray
+
+
 def extract_instances(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
-) -> list[GarmentInstance]:
-    """frame × person_bbox × garment_class 단위 GarmentInstance 리스트."""
-    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
-    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
-    min_pixels = cfg.extract_colors.min_pixels
-    keep_threshold = cfg.skin_drop_threshold_pct
-    single_de = cfg.instance.single_color_max_delta_e
+) -> tuple[list[GarmentInstance], int, bool]:
+    """frame × person_bbox × garment_class 단위 GarmentInstance + YOLO 통계.
 
+    반환: `(instances, yolo_detected_persons, fallback_triggered)`. diagnostics 별도 순회
+    없이 단일 iter_frames 로 집계 — `ImageFrameSource.iter_frames()` 가 매 호출마다 PIL
+    로 이미지를 다시 열기 때문에 FrameSource 를 두 번 도는 건 disk 재로딩 + YOLO 이중 추론.
+    """
+    ctx = _ExtractCtx(
+        bundle=bundle, cfg=cfg,
+        lab_min=np.asarray(cfg.skin_lab_box.min, dtype=np.float32),
+        lab_max=np.asarray(cfg.skin_lab_box.max, dtype=np.float32),
+    )
     instances: list[GarmentInstance] = []
+    yolo_count = 0
+    fallback = False
     for frame in source.iter_frames():
         boxes = detect_people(bundle.yolo, frame.rgb)
+        yolo_count += len(boxes)
         if not boxes and cfg.fallback_full_image_on_no_person:
+            fallback = True
             h, w = frame.rgb.shape[:2]
             boxes = [(0, 0, w, h)]
         for bbox_idx, bbox in enumerate(boxes):
-            instances.extend(
-                _instances_from_bbox(
-                    frame, bbox_idx, bbox, bundle,
-                    cfg, lab_min, lab_max, min_pixels, keep_threshold, single_de,
-                )
-            )
-    return instances
+            instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
+    return instances, yolo_count, fallback
+
+
+def _is_person_bbox(seg: np.ndarray, cfg: VisionConfig) -> bool:
+    """segformer 결과 기반 실 사람 bbox 판정. skin pixel 비율 낮거나 의류 비율 극단적이면 False.
+
+    - skin 비율 < min_skin_ratio_for_person → 동상/마네킹 또는 사람 없음 (전체 이미지 fallback)
+    - 의류 비율 > max_garment_ratio_for_person → 배경까지 의류 오분류 (제품샷)
+    """
+    area = int(seg.size)
+    if area == 0:
+        return False
+    skin_count = int(np.isin(seg, tuple(_SKIN_CLASS_IDS)).sum())
+    garment_count = int(np.isin(seg, tuple(_WEAR_CLASS_IDS)).sum())
+    skin_ratio = skin_count / area
+    garment_ratio = garment_count / area
+    if skin_ratio < cfg.min_skin_ratio_for_person:
+        return False
+    if garment_ratio > cfg.max_garment_ratio_for_person:
+        return False
+    return True
 
 
 def _instances_from_bbox(
     frame: Frame,
     bbox_idx: int,
     bbox: tuple[int, int, int, int],
-    bundle: SegBundle,
-    cfg: VisionConfig,
-    lab_min: np.ndarray,
-    lab_max: np.ndarray,
-    min_pixels: int,
-    keep_threshold: float,
-    single_de: float,
+    ctx: _ExtractCtx,
 ) -> list[GarmentInstance]:
     """하나의 bbox → (그 안의 garment_class 별) GarmentInstance 리스트."""
+    cfg = ctx.cfg
+    min_pixels = cfg.extract_colors.min_pixels
     x1, y1, x2, y2 = bbox
     x1c, y1c = max(0, x1), max(0, y1)
     x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
-    if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
+    if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
         return []
     crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
-    seg = run_segformer(bundle, crop_rgb)
+    seg = run_segformer(ctx.bundle, crop_rgb)
+    # false-positive filter: 동상/마네킹/제품샷 방어. segformer 결과로 판정.
+    if not _is_person_bbox(seg, cfg):
+        return []
     out: list[GarmentInstance] = []
     for class_id, label in ATR_LABELS.items():
         if label not in WEAR_KEEP:
@@ -223,8 +265,8 @@ def _instances_from_bbox(
         if pixels.shape[0] < min_pixels:
             continue
         cleaned, ratio, _kept = drop_skin_adaptive(
-            pixels, lab_min=lab_min, lab_max=lab_max,
-            keep_threshold_pct=keep_threshold,
+            pixels, lab_min=ctx.lab_min, lab_max=ctx.lab_max,
+            keep_threshold_pct=cfg.skin_drop_threshold_pct,
         )
         if cleaned.shape[0] < min_pixels:
             continue
@@ -237,7 +279,9 @@ def _instances_from_bbox(
             bbox=(x1c, y1c, x2c, y2c),
             garment_class=label,
             palette=palette,
-            is_single_color=classify_single_color(palette, max_delta_e=single_de),
+            is_single_color=classify_single_color(
+                palette, max_delta_e=cfg.instance.single_color_max_delta_e,
+            ),
             pixel_count=int(cleaned.shape[0]),
             skin_drop_ratio=ratio,
         ))
@@ -290,7 +334,7 @@ def extract_palette(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
     """instance 기반 post-level aggregate palette (phase 3 backwards-compatible wrapper)."""
-    instances = extract_instances(source, bundle, cfg)
+    instances, _yolo, _fallback = extract_instances(source, bundle, cfg)
     palette, _groups = aggregate_post_palette(
         instances,
         top_k=cfg.extract_colors.k,
@@ -326,19 +370,15 @@ def extract_palette_with_diagnostics(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> ExtractionDiagnostics:
     """instance 단위 추출 → frame 별 palette + duplicate-weighted post palette."""
-    # yolo/fallback 통계는 별도 순회 (instance 추출과 분리 — debug 용도 충돌 방지).
-    yolo_count = 0
-    fallback = False
-    for frame in source.iter_frames():
-        boxes = detect_people(bundle.yolo, frame.rgb)
-        yolo_count += len(boxes)
-        if not boxes and cfg.fallback_full_image_on_no_person:
-            fallback = True
+    instances, yolo_count, fallback = extract_instances(source, bundle, cfg)
 
-    instances = extract_instances(source, bundle, cfg)
-
-    # frame palette 를 instance 들로부터 재구성 (모델 호출 추가 없음)
-    frame_ids = list({i.frame_id for i in instances})
+    # frame palette 를 instance 들로부터 재구성 (모델 호출 추가 없음).
+    # 영향력 큰 frame (총 pixel 합 × instance 개수) 이 상단으로.
+    frame_stats: dict[str, tuple[int, int]] = {}
+    for inst in instances:
+        px, cnt = frame_stats.get(inst.frame_id, (0, 0))
+        frame_stats[inst.frame_id] = (px + inst.pixel_count, cnt + 1)
+    frame_ids = sorted(frame_stats, key=lambda fid: (-frame_stats[fid][0], -frame_stats[fid][1]))
     frame_palettes = [
         _frame_palette_from_instances(instances, fid, cfg.extract_colors.k)
         for fid in frame_ids
@@ -385,7 +425,7 @@ def extract_garment_pixels(
     for (x1, y1, x2, y2) in boxes:
         x1c, y1c = max(0, x1), max(0, y1)
         x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
-        if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
+        if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
             continue
         crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop_rgb)
