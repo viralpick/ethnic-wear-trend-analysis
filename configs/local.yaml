@@ -129,3 +129,8 @@ vision:
   # 거울 셀카 등 YOLOv8n 이 못 잡는 mirror/occlusion 케이스 방어. true 면 YOLO 0 bbox 일 때
   # 전체 이미지를 segformer 에 태워 의류/피부/배경 분리로 진행.
   fallback_full_image_on_no_person: true
+  # drop_skin_adaptive threshold — class pixel 의 이 비율 이상이 skin LAB box 안이면
+  # 옷 자체가 skin-tone (베이지/탄) 판정, 원본 pixel 전체 유지. 미만이면 edge noise 제거.
+  # 0.5 — 50% 이상이면 "진짜 skin-tone 의류" 로 확실할 때만 보존. 그 이하는 drop.
+  # smoke 131 post 실측 후 0.3 → 0.5 상향 (0.3 은 adaptive 너무 자주 발동).
+  skin_drop_threshold_pct: 0.5

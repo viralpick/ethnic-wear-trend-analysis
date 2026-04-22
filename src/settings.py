@@ -169,6 +169,10 @@ class VisionConfig(BaseModel):
     # 부작용 주의: product-only shot (사람 없는 상품 단독 이미지) 에서 배경이 의류로 오분류될
     # 수 있음 — 이 경우 false 로 내려서 YOLO 필터 유지.
     fallback_full_image_on_no_person: bool = True
+    # drop_skin_adaptive threshold. class pixel 중 skin LAB box 안 비율이 이 값 초과하면
+    # "skin-tone 의류" 로 판정하고 원본 pixel 전체 유지 (베이지/탄 kurta 등 보호).
+    # 그 미만이면 edge noise 로 간주해 box 안 pixel 만 제거. 0.0~1.0 범위.
+    skin_drop_threshold_pct: float = 0.5
 
 
 class Settings(BaseSettings):

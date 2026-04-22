@@ -13,6 +13,7 @@ from vision.color_space import (
     SKIN_LAB_MIN,
     delta_e76,
     drop_skin,
+    drop_skin_adaptive,
     extract_colors,
     hex_skin_leak,
     hex_to_rgb,
@@ -141,6 +142,52 @@ def test_drop_skin_custom_box_wider_drops_more() -> None:
     wide_max = np.array([200.0, 200.0, 200.0])
     cleaned = drop_skin(pixels, lab_min=wide_min, lab_max=wide_max)
     assert cleaned.shape[0] == 0
+
+
+# --------------------------------------------------------------------------- #
+# drop_skin_adaptive — skin-tone garment 보호 (Q1 phase 2)
+# --------------------------------------------------------------------------- #
+
+def test_adaptive_below_threshold_drops_inside_pixels() -> None:
+    # 5 pixel 중 1개만 skin box 안 (20%) → threshold 0.3 미만 → 일반 drop
+    skin = _make_pixel_in_box()
+    non_skin = _make_pixel_outside_box()
+    pixels = np.stack([skin, non_skin, non_skin, non_skin, non_skin])
+    cleaned, ratio, kept_whole = drop_skin_adaptive(pixels, keep_threshold_pct=0.3)
+    assert cleaned.shape[0] == 4           # skin 1개 제거
+    assert ratio == pytest.approx(0.2)
+    assert kept_whole is False
+
+
+def test_adaptive_above_threshold_keeps_whole_garment() -> None:
+    # 5 pixel 중 3개가 skin box 안 (60%) → threshold 0.3 초과 → garment-as-skin 판정
+    # 원본 전체 유지 (베이지 코트 보호 등)
+    skin = _make_pixel_in_box()
+    non_skin = _make_pixel_outside_box()
+    pixels = np.stack([skin, skin, skin, non_skin, non_skin])
+    cleaned, ratio, kept_whole = drop_skin_adaptive(pixels, keep_threshold_pct=0.3)
+    assert cleaned.shape[0] == 5           # 전체 유지
+    assert ratio == pytest.approx(0.6)
+    assert kept_whole is True
+
+
+def test_adaptive_exactly_at_threshold_drops() -> None:
+    # boundary: ratio == threshold 인 경우. 구현은 `>` 이라 drop.
+    skin = _make_pixel_in_box()
+    non_skin = _make_pixel_outside_box()
+    pixels = np.stack([skin, skin, skin, non_skin, non_skin, non_skin, non_skin])
+    # 3/7 ≈ 0.428. threshold 0.43 으로 설정 → just below.
+    cleaned, ratio, kept_whole = drop_skin_adaptive(pixels, keep_threshold_pct=0.43)
+    assert kept_whole is False             # 0.428 < 0.43
+    assert cleaned.shape[0] == 4
+
+
+def test_adaptive_empty_pixels_returns_empty() -> None:
+    empty = np.zeros((0, 3), dtype=np.uint8)
+    cleaned, ratio, kept_whole = drop_skin_adaptive(empty)
+    assert cleaned.shape == (0, 3)
+    assert ratio == 0.0
+    assert kept_whole is False
 
 
 # --------------------------------------------------------------------------- #

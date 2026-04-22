@@ -109,7 +109,10 @@ def drop_skin(
     lab_min: np.ndarray | None = None,
     lab_max: np.ndarray | None = None,
 ) -> np.ndarray:
-    """LAB box 안에 드는 픽셀 제거. box 는 호출부에서 override 가능 (config 주입)."""
+    """LAB box 안에 드는 픽셀 제거. 무조건 bin 필터 — adaptive 보호 없음.
+
+    대부분의 호출부는 `drop_skin_adaptive` 를 사용해야 한다. 이 함수는 테스트/디버깅 용.
+    """
     if rgb_pixels.size == 0:
         return rgb_pixels
     lo = SKIN_LAB_MIN if lab_min is None else np.asarray(lab_min, dtype=np.float32)
@@ -117,6 +120,35 @@ def drop_skin(
     lab = rgb_to_lab(rgb_pixels)
     inside = np.all((lab >= lo) & (lab <= hi), axis=-1)
     return rgb_pixels[~inside]
+
+
+def drop_skin_adaptive(
+    rgb_pixels: np.ndarray,
+    lab_min: np.ndarray | None = None,
+    lab_max: np.ndarray | None = None,
+    keep_threshold_pct: float = 0.5,
+) -> tuple[np.ndarray, float, bool]:
+    """class pixel 중 LAB-skin box 안 비율이 threshold 초과 시 원본 유지, 미만 시 제거.
+
+    논리:
+      - 포스트에 나체 사진 없음 → segformer 가 WEAR_KEEP 로 잡은 class 는 "옷"
+      - class pixel 의 30%+ 가 skin box 안이면 → 옷 자체가 skin-tone (베이지/탄) → 유지
+      - 그 미만이면 → edge noise (목/손목 경계 새어나온 skin) → 제거
+
+    반환: (cleaned_pixels, drop_ratio, kept_whole)
+      - drop_ratio: box 안 pixel 의 비율 (판정 근거)
+      - kept_whole: True 면 원본 유지 (skin-tone garment 판정), False 면 inside 제거
+    """
+    if rgb_pixels.size == 0:
+        return rgb_pixels, 0.0, False
+    lo = SKIN_LAB_MIN if lab_min is None else np.asarray(lab_min, dtype=np.float32)
+    hi = SKIN_LAB_MAX if lab_max is None else np.asarray(lab_max, dtype=np.float32)
+    lab = rgb_to_lab(rgb_pixels)
+    inside = np.all((lab >= lo) & (lab <= hi), axis=-1)
+    drop_ratio = float(inside.sum()) / rgb_pixels.shape[0]
+    if drop_ratio > keep_threshold_pct:
+        return rgb_pixels, drop_ratio, True
+    return rgb_pixels[~inside], drop_ratio, False
 
 
 def hex_skin_leak(
