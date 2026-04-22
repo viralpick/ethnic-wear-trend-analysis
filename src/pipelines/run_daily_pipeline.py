@@ -183,8 +183,8 @@ def _parse_args() -> argparse.Namespace:
         help="pipeline_b 모드에서 URL basename 매핑용 이미지 디렉토리 (예: sample_data/image).",
     )
     parser.add_argument(
-        "--source", choices=["local", "tsv"], default="local",
-        help="raw source loader 선택. local=sample JSON, tsv=png_india_ai_fashion_*.tsv.",
+        "--source", choices=["local", "tsv", "starrocks"], default="local",
+        help="raw source loader 선택. local=sample JSON, tsv=파일, starrocks=DB SQL.",
     )
     parser.add_argument(
         "--tsv-dir", type=Path, default=None,
@@ -215,7 +215,11 @@ def _select_color_extractor(
 def _select_raw_loader(
     choice: str, settings: Settings, tsv_dir: Path | None
 ) -> RawLoader:
-    """CLI flag 기반 RawLoader DI."""
+    """CLI flag 기반 RawLoader DI. starrocks 는 lazy import (extras 격리)."""
+    if choice == "starrocks":
+        # vision/blob 과 동일 패턴 — top-level import X (extras 미설치 환경 보호).
+        from loaders.starrocks_raw_loader import StarRocksRawLoader  # noqa: I001
+        return StarRocksRawLoader.from_env()
     if choice == "tsv":
         return TsvRawLoader(tsv_dir or settings.paths.sample_data)
     return LocalSampleLoader(settings.paths.sample_data)

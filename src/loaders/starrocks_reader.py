@@ -116,6 +116,28 @@ class StarRocksReader:
                 cur.execute(f"SELECT * FROM `{table}` LIMIT {int(limit)}")
                 return list(cur.fetchall())
 
+    def describe(self, table: str) -> list[dict]:
+        """`DESC {table}` — 실 컬럼명/타입 확인. StarRocksRawLoader 의 컬럼명 가정 검증용."""
+        self._assert_safe_identifier(table)
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"DESC `{table}`")
+                return list(cur.fetchall())
+
+    def select(
+        self, query: str, params: tuple = (),
+    ) -> list[dict]:
+        """임의 SELECT — 파라미터 바인딩은 pymysql 이 escape. query 는 호출자가 책임.
+
+        SQL injection 방지: query 를 f-string 으로 만들지 말 것. WHERE 값은 %s 로.
+        """
+        if not query.strip().upper().startswith("SELECT"):
+            raise ValueError("select() only accepts SELECT statements")
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return list(cur.fetchall())
+
     @staticmethod
     def _assert_safe_identifier(name: str) -> None:
         """alphanumeric + underscore 만 허용. StarRocks 테이블 이름 convention 에 맞음."""

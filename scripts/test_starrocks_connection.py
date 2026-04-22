@@ -38,6 +38,11 @@ def main() -> None:
         if t in tables:
             n = reader.count_rows(t)
             print(f"[starrocks] {t}: {n:,} rows")
+            print(f"[starrocks] schema of {t}:")
+            for col in reader.describe(t):
+                field = col.get("Field") or col.get("field") or list(col.values())[0]
+                col_type = col.get("Type") or col.get("type") or list(col.values())[1]
+                print(f"    {field}: {col_type}")
         else:
             print(f"[starrocks] {t}: (missing)")
 
