@@ -173,15 +173,19 @@ class SceneFilterConfig(BaseModel):
     """M4.I — CLIP zero-shot pre-filter (scene + gender + age).
 
     enabled=False 이면 NoopSceneFilter 로 매 frame pass. True 이면 CLIPSceneFilter 로드.
-    prompts / pass_index / min_confidence 모두 tunable — 인도 ethnic wear bias 대응용.
+    prompts / pass_index / scene_min_pass_score 모두 tunable — 인도 ethnic wear bias 대응.
 
-    pass 조건: (scene argmax == scene_pass_index) AND (argmax confidence >= min_confidence)
-    AND (gender argmax == gender_pass_index) AND (age argmax == age_pass_index).
+    pass 조건: (scene[pass_index] >= scene_min_pass_score) AND
+    (gender argmax == gender_pass_index) AND (age argmax == age_pass_index).
+    scene 은 argmax 조건 없음 — 야외 배경 등으로 다른 prompt 가 argmax 여도 fashion score
+    가 임계값 이상이면 살린다.
     """
     enabled: bool = False
     model_id: str = "openai/clip-vit-base-patch32"
-    # scene argmax 가 이 index 여야 pass. "product only" 제외 — fashion shot 이 옷 중심
-    # 구도라 CLIP 이 product 로 오분류 빈발. statue / landscape 만 negative class.
+    # scene 판정: pass prompt (index=scene_pass_index) 의 softmax score 가 min_pass_score
+    # 이상이면 pass. argmax 조건 X — 여성+옷 야외샷이 "landscape" 쪽에 argmax 이어도 fashion
+    # 쪽 점수가 임계값 이상이면 살린다. "product only" 는 negative class 에서 제외 — fashion
+    # shot 이 옷 중심 구도라 product 와 혼동 빈발.
     scene_prompts: list[str] = Field(default_factory=lambda: [
         "a fashion photo of a person wearing clothing",
         "a photo of a statue or mannequin",
@@ -200,8 +204,10 @@ class SceneFilterConfig(BaseModel):
         "a photo of a teenager or adult",
     ])
     age_pass_index: int = 1
-    # argmax confidence 가 이 값 미만이면 scene_low_confidence drop. 0.3 = 경계 case 는 살림.
-    min_confidence: float = 0.3
+    # scene pass prompt 의 softmax score 가 이 값 이상이면 pass. 낮출수록 drop 감소.
+    # 0.25 = fashion 쪽이 25% 이상이면 살림 — 야외 배경 / product-like 구도에서도 fashion
+    # 신호가 있으면 통과.
+    scene_min_pass_score: float = 0.25
 
 
 class VisionConfig(BaseModel):

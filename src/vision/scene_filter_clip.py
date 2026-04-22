@@ -78,16 +78,14 @@ class CLIPSceneFilter:
         scene_list = list(scene_scores.values())
         gender_list = list(gender_scores.values())
         age_list = list(age_scores.values())
-        scene_idx = int(np.argmax(scene_list))
         gender_idx = int(np.argmax(gender_list))
         age_idx = int(np.argmax(age_list))
+        scene_pass_score = scene_list[self._cfg.scene_pass_index]
 
-        if scene_idx != self._cfg.scene_pass_index:
+        # scene: pass prompt 의 score 만 확인 (argmax 조건 X). 야외 배경 / product-like 구도
+        # 에서도 fashion 신호가 임계값 이상이면 살림.
+        if scene_pass_score < self._cfg.scene_min_pass_score:
             return FilterVerdict(False, "scene_reject", scene_scores, gender_scores, age_scores)
-        if scene_list[scene_idx] < self._cfg.min_confidence:
-            return FilterVerdict(
-                False, "scene_low_confidence", scene_scores, gender_scores, age_scores,
-            )
         if gender_idx != self._cfg.gender_pass_index:
             return FilterVerdict(False, "gender_reject", scene_scores, gender_scores, age_scores)
         if age_idx != self._cfg.age_pass_index:

@@ -142,7 +142,7 @@ vision:
   # M4.I — CLIP zero-shot pre-filter (scene + gender + age).
   # enabled: false 이면 NoopSceneFilter — 모든 frame pass (기본).
   # true 이면 CLIP ViT-B/32 로드해 frame 당 3 판정 (scene / gender / age) → drop 결정.
-  # 인도 ethnic wear bias 대응을 위해 모든 prompt / pass_index / min_confidence 가 tunable.
+  # 인도 ethnic wear bias 대응을 위해 prompt / pass_index / scene_min_pass_score 전부 tunable.
   scene_filter:
     enabled: false
     model_id: openai/clip-vit-base-patch32
@@ -151,7 +151,7 @@ vision:
       - a fashion photo of a person wearing clothing
       - a photo of a statue or mannequin
       - a photo of a landscape or outdoor scenery
-    scene_pass_index: 0   # fashion shot 이 argmax 여야 pass
+    scene_pass_index: 0   # scene_prompts 중 이 index 의 score 가 min_pass_score 이상이면 pass
     gender_prompts:
       - a photo of a woman
       - a photo of a man
@@ -161,7 +161,9 @@ vision:
       - a photo of a young child
       - a photo of a teenager or adult
     age_pass_index: 1     # teenager/adult argmax 여야 pass
-    min_confidence: 0.3   # 0.4 → 0.3 완화 (경계 case 살림)
+    # scene pass prompt 의 softmax score 가 이 값 이상이면 pass (argmax 조건 X).
+    # 야외 배경 / product-like 구도에서도 fashion 신호가 있으면 살림.
+    scene_min_pass_score: 0.25
 
   # bbox-level 오탐 필터. 동상/마네킹/옷 없는 제품샷에서 의류 추출 방지.
   # - min_skin_ratio_for_person: crop 내 segformer skin class pixel 비율 최소값.
