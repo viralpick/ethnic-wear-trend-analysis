@@ -131,5 +131,6 @@ vision:
   fallback_full_image_on_no_person: true
   # drop_skin_adaptive threshold — class pixel 의 이 비율 이상이 skin LAB box 안이면
   # 옷 자체가 skin-tone (베이지/탄) 판정, 원본 pixel 전체 유지. 미만이면 edge noise 제거.
-  # 0.3 은 초기값 — smoke 결과 보면서 tune (0.2 ~ 0.4 권장 범위).
-  skin_drop_threshold_pct: 0.3
+  # 0.5 — 50% 이상이면 "진짜 skin-tone 의류" 로 확실할 때만 보존. 그 이하는 drop.
+  # smoke 131 post 실측 후 0.3 → 0.5 상향 (0.3 은 adaptive 너무 자주 발동).
+  skin_drop_threshold_pct: 0.5

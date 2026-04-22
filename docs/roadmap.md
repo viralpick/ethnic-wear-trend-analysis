@@ -114,7 +114,52 @@ SAS 가 placeholder 라 실 download 불가.
 - IG 이미지 포스트 (주력) + Reel (보조) 을 같은 cluster 에서 합치는 aggregate 설계
 - `posting.tsv` row 10 처럼 image 0장인 post 를 "video 포스트" 로 식별하는 스키마 확정 필요
 
-**활성화 조건**: M4.A 보다 먼저 (더 쉬운 선행 검증).
+**frame sampling + quality filter** (phase 3 instance palette 와 연계):
+
+*sampling 전략* (기본: 고정 frame count, uniform):
+```yaml
+vision:
+  video_sample:
+    fps: null              # null 이면 frame_count 우선
+    frame_count: 20        # 영상 길이 무관 고정 샘플
+    max_duration_sec: 300  # 5분 초과 영상은 앞부분만
+```
+
+장점: 영상 길이 무관 비용 일정, 결정론. 이후 필요하면 scene change detection
+(`ffmpeg scdet` 또는 `cv2.absdiff`) 으로 outfit 전환 시점 기반 샘플링으로 upgrade.
+
+*frame quality filter* (저품질 drop):
+
+| 지표 | 계산 | drop 조건 | 라이브러리 |
+|---|---|---|---|
+| **motion blur** | `cv2.Laplacian(gray, CV_64F).var()` | < `blur_min` (예: 100) | opencv (vision extras) |
+| **exposure** | `np.mean(gray)` + 극단값 비율 | mean < 30 or > 225, 또는 극단값 > 70% | numpy |
+| **garment presence** | YOLO + segformer pre-check | WEAR_KEEP pixel < `min_pixels` | 기존 Pipeline B 재활용 |
+
+```yaml
+vision:
+  frame_quality:
+    blur_min: 100.0
+    exposure_mean_min: 30.0
+    exposure_mean_max: 225.0
+    saturation_ratio_max: 0.7
+```
+
+프레임당 ms 단위라 오버헤드 없음. 20 frame 샘플 중 보통 3~5 장 drop 예상 (인도 IG Reel
+셀카 조명 편차 고려).
+
+`FramePalette` 에 quality 메타데이터 추가:
+```python
+@dataclass(frozen=True)
+class FramePalette:
+    ...existing...
+    blur_score: float
+    exposure_ok: bool
+    quality_filtered: bool   # drop 처리됐나
+```
+
+**활성화 조건**: M4.A 보다 먼저 (더 쉬운 선행 검증). M3.B blob_raw_loader 가 Reel 경로
+확보 완료 후.
 
 ### M4.C — YouTube 영상 ASR + 텍스트 attribute 보강
 
@@ -153,6 +198,30 @@ SAS 가 placeholder 라 실 download 불가.
 **조건**: 설명력을 **잃지 않는** 구조로만. 예: 스코어링 공식은 유지하고, "notable change
 detection" 만 학습 기반으로 추가하는 hybrid.
 
+### M4.H — Palette cluster → spatial 역매핑 overlay
+
+**현재 상태**: phase 2 에서 kept/dropped 2색 overlay 는 구현 (quality/phase-2 브랜치).
+다만 "palette chip 이 이미지의 어느 영역에서 왔는지" 는 아직 안 보임.
+
+**M4 에서 할 것**:
+- post-level KMeans 결과를 post 전체 pixel 로 label assignment
+- 각 cluster 에 속한 pixel 을 해당 cluster hex 색으로 덧칠 (heat-map 아니라 실 색 overlay)
+- 드릴다운에서 "chip #B8D4C3 (sage 32%) 는 이 post 의 셔츠 오른쪽 소매에서 나왔다" 같은
+  정보가 시각적으로 매핑
+
+**기술 난이도**:
+- 현재 구조는 모든 frame pixel 을 concat 해서 KMeans 돌리므로 "어느 pixel 이 어느 cluster"
+  정보를 유지하려면 pixel 좌표 (frame_id, y, x) 를 원래 순서 그대로 tracking 해야 함
+- frame 별 cluster label 을 배열로 받아 frame rgb 에 역매핑 (palette_mask per frame)
+- `extract_palette_with_diagnostics` 확장 또는 새 함수 `extract_palette_with_spatial_labels`
+
+**활용 시나리오**:
+- "왜 이 chip 이 나왔나" 즉각 확인 (소품 오분류 / 배경 침입 진단)
+- 캐러셀에서 "이 frame 은 어느 cluster 에 많이 기여했나" 정량 측정
+- drill-down 화면에서 chip 클릭 시 대표 post 의 overlay 보여주기
+
+**선행 조건**: Phase 2 검증 완료 후 (131 post smoke 결과 보고 개선 방향 확정).
+
 ### M4.G — Semantic similarity / embedding
 
 **현재 상태**: contract v2 후보 (per-attribute confidence / evidence span 와 함께 미룸).
@@ -183,6 +252,7 @@ in breathable fabric") 을 jaccard 가 아닌 embedding 으로 매칭.
 | M4.D 세분 속성 | 고 | 고 (세분 라벨 데이터 확보) | M3.A 완료 | 4 |
 | M4.F 학습 랭커 | 저 (v1) | 중 | business 요구 있을 때 | 5 |
 | M4.G Embedding | 저-중 | 저 | 긴 꼬리 표현 실측 확인 | 6 |
+| M4.H Palette cluster 역매핑 | 중 | 중 | Phase 2 검증 완료 | 4 |
 | M4.E 인도 직물 세분 | 저 (R&D) | 고 | 도메인 전문가 합의 | 7 |
 
 **Rule of thumb**: M4 는 data-driven 으로 우선순위 조정. 실 사용에서 빈번히 실패하는 지점을

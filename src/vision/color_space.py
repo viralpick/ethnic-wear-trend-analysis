@@ -126,7 +126,7 @@ def drop_skin_adaptive(
     rgb_pixels: np.ndarray,
     lab_min: np.ndarray | None = None,
     lab_max: np.ndarray | None = None,
-    keep_threshold_pct: float = 0.3,
+    keep_threshold_pct: float = 0.5,
 ) -> tuple[np.ndarray, float, bool]:
     """class pixel 중 LAB-skin box 안 비율이 threshold 초과 시 원본 유지, 미만 시 제거.
 
