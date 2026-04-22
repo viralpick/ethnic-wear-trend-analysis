@@ -122,14 +122,20 @@ def _split_kept_dropped(
     return kept_mask, dropped_mask
 
 
-def build_segformer_overlay(
+def build_segformer_views(
     rgb: np.ndarray, bundle: SegBundle, cfg: VisionConfig,
-) -> np.ndarray:
-    """WEAR_KEEP class 를 kept / dropped 2색으로 반투명 overlay (phase 2)."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """segformer 1회 호출로 overlay (RGB) + cloth-only (RGBA) 두 뷰 생성.
+
+    - overlay: WEAR_KEEP class 반투명 (kept = class 색, dropped = 흰색) — phase 2 와 동일
+    - cloth-only: WEAR_KEEP kept pixel 만 원래 색 + alpha=255, 나머지는 alpha=0 (완전 투명).
+      HTML 은 체스판 CSS 배경 위에 이 PNG 를 올려 "투명 영역" 을 시각화.
+    """
     overlay = rgb.copy()
+    h, w = rgb.shape[:2]
+    cloth_rgba = np.zeros((h, w, 4), dtype=np.uint8)  # 기본 완전 투명
     boxes = detect_people(bundle.yolo, rgb)
     if not boxes and cfg.fallback_full_image_on_no_person:
-        h, w = rgb.shape[:2]
         boxes = [(0, 0, w, h)]
     lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
     lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
@@ -143,7 +149,7 @@ def build_segformer_overlay(
             continue
         crop = rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop)
-        patch = overlay[y1c:y2c, x1c:x2c].copy()
+        overlay_patch = overlay[y1c:y2c, x1c:x2c].copy()
         for class_id, label in ATR_LABELS.items():
             if label not in WEAR_KEEP:
                 continue
@@ -154,21 +160,27 @@ def build_segformer_overlay(
             kept_mask, dropped_mask = _split_kept_dropped(
                 crop, class_mask, lab_min, lab_max, threshold,
             )
-            _blend(patch, kept_mask, class_color, _OVERLAY_ALPHA)
-            _blend(patch, dropped_mask, drop_color, _OVERLAY_DROPPED_ALPHA)
-        overlay[y1c:y2c, x1c:x2c] = patch
-    return overlay
+            _blend(overlay_patch, kept_mask, class_color, _OVERLAY_ALPHA)
+            _blend(overlay_patch, dropped_mask, drop_color, _OVERLAY_DROPPED_ALPHA)
+            # cloth-only (RGBA): kept pixel 에 원 crop RGB + alpha=255
+            ys, xs = np.where(kept_mask)
+            cloth_rgba[y1c + ys, x1c + xs, :3] = crop[ys, xs]
+            cloth_rgba[y1c + ys, x1c + xs, 3] = 255
+        overlay[y1c:y2c, x1c:x2c] = overlay_patch
+    return overlay, cloth_rgba
 
 
-def save_overlay_png(
-    image_path: Path, bundle: SegBundle, cfg: VisionConfig, output_path: Path,
+def save_views_png(
+    image_path: Path, bundle: SegBundle, cfg: VisionConfig,
+    overlay_path: Path, cloth_path: Path,
 ) -> None:
-    """이미지 1장 → segformer overlay PNG 저장 (kept/dropped 2색)."""
+    """이미지 1장 → overlay (RGB) PNG + cloth-only (RGBA) PNG 저장 (segformer 1회)."""
     img = Image.open(image_path).convert("RGB")
     rgb = np.asarray(img, dtype=np.uint8)
-    overlay = build_segformer_overlay(rgb, bundle, cfg)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(overlay).save(output_path, format="PNG", optimize=True)
+    overlay, cloth_rgba = build_segformer_views(rgb, bundle, cfg)
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(overlay).save(overlay_path, format="PNG", optimize=True)
+    Image.fromarray(cloth_rgba, mode="RGBA").save(cloth_path, format="PNG", optimize=True)
 
 
 def _quality_badge_html(q: dict) -> str:
@@ -228,6 +240,37 @@ def _chip_bar(palette_items: list[dict]) -> str:
         f'overflow:hidden"><div style="display:flex">{segs}</div>'
         f'<div style="display:flex;background:#f4f4f4">{labels}</div></div>'
     )
+
+
+def _views_cell_html(r: dict, html_dir: Path) -> str:
+    """carousel / overlay / cloth-only 3 뷰 stack + post-row 단위 토글 버튼.
+
+    클릭할 때마다 세 view 가 순환. post 안의 모든 이미지가 동시에 같은 view 로 전환.
+    JS 는 페이지 공용 `cycleView` (_render_html 에서 <script> 한 번 삽입).
+    """
+    imgs = r["image_paths"]
+    overlays = r.get("overlay_paths", [])
+    cloths = r.get("cloth_paths", [])
+
+    def _row(paths: list[str]) -> str:
+        if not paths:
+            return '<span style="color:#aaa;font-size:11px">(no data)</span>'
+        return "".join(
+            f'<img src="{_relpath(Path(p), html_dir)}" '
+            f'style="width:120px;margin:2px;border:1px solid #ddd">'
+            for p in paths
+        )
+
+    carousel = f'<div class="view view-active" data-view="carousel">{_row(imgs)}</div>'
+    overlay = f'<div class="view" data-view="overlay">{_row(overlays)}</div>'
+    cloth = f'<div class="view" data-view="cloth">{_row(cloths)}</div>'
+    btn = (
+        '<button class="view-toggle" onclick="cycleView(this)" '
+        'style="margin-bottom:6px;padding:4px 10px;font-size:11px;cursor:pointer;'
+        'border:1px solid #888;border-radius:3px;background:#f0f0f0">'
+        '▶ carousel</button>'
+    )
+    return f'<div class="views-cell">{btn}{carousel}{overlay}{cloth}</div>'
 
 
 def _frame_palettes_html(frame_palettes: list[dict]) -> str:
@@ -328,16 +371,7 @@ def _render_html(results: list[dict], output_path: Path) -> None:
         'padding:2px 6px;margin:2px;border:1px solid #555">drop_skin removed</span>'
     )
     for r in results:
-        imgs_html = "".join(
-            f'<img src="{_relpath(Path(p), output_path.parent)}" '
-            f'style="width:120px;margin:2px;border:1px solid #ddd;">'
-            for p in r["image_paths"]
-        )
-        overlay_html = "".join(
-            f'<img src="{_relpath(Path(p), output_path.parent)}" '
-            f'style="width:120px;margin:2px;border:1px solid #ddd;">'
-            for p in r.get("overlay_paths", [])
-        )
+        views_cell = _views_cell_html(r, output_path.parent)
         chips_html = _chip_bar(r["palette"])
         badge_html = _quality_badge_html(r["quality"])
         frame_palettes_html = _frame_palettes_html(r.get("frame_palettes", []))
@@ -351,34 +385,62 @@ def _render_html(results: list[dict], output_path: Path) -> None:
         rows.append(
             f"<tr><td style='vertical-align:top;padding:8px'><code>{r['post_ulid']}</code>"
             f"<br><small>{len(r['image_paths'])} imgs</small>{badge_html}</td>"
-            f"<td style='padding:8px'>{imgs_html}</td>"
-            f"<td style='padding:8px'>{overlay_html}</td>"
+            f"<td style='padding:8px;vertical-align:top'>{views_cell}</td>"
             f"<td style='padding:8px;vertical-align:top;max-width:360px'>{groups_html}</td>"
             f"<td style='padding:8px;vertical-align:top'>{palette_cell}</td></tr>"
         )
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Pipeline B Smoke</title>
-<style>body{{font-family:system-ui;margin:20px}}
+<style>
+body{{font-family:system-ui;margin:20px}}
 table{{border-collapse:collapse}} td,th{{border:1px solid #ccc}}
-.legend{{margin:12px 0;font-size:13px}}</style></head>
-<body><h1>Pipeline B Smoke — sample_data/image</h1>
+.legend{{margin:12px 0;font-size:13px}}
+.views-cell .view{{display:none}}
+.views-cell .view.view-active{{display:block}}
+.views-cell .view[data-view="cloth"] img {{
+  background-color:#eee;
+  background-image:
+    linear-gradient(45deg, #bbb 25%, transparent 25%),
+    linear-gradient(-45deg, #bbb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #bbb 75%),
+    linear-gradient(-45deg, transparent 75%, #bbb 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}}
+</style></head>
+<body><h1>Pipeline B Smoke</h1>
 <p>Rows: {len(results)} posts. HEX = LAB KMeans centroid, pct = pixel weight.
-overlay = segformer class mask 반투명 + drop_skin 제거 영역 흰색. badge = post quality.</p>
+view 버튼을 누르면 carousel → overlay → cloth-only 순환. badge = post quality.</p>
 <div class="legend">Class legend: {legend}<br>Dropped legend: {dropped_legend}</div>
 <p style="font-size:12px">
 Quality: 🟢 ok / 🟡 warning (skin leak or chip similarity or fallback) /
 🔴 danger (total garment pixels &lt; 5000).<br>
-Post palette = 전 frame 합쳐 한 번의 KMeans (cluster aggregate 용).<br>
-Frame palettes = 각 frame 독립 KMeans (캐러셀 outfit 변화 검증용).
+Post palette = instance duplicate-weighted aggregate. Frame palettes = 각 frame 독립 KMeans.
 </p>
 <p style="font-size:12px">
 Instances = (frame × person × garment_class) 단위 독립 palette.
-Groups = 같은 garment_class + top-1 chip ΔE &lt; threshold 인 instance 들을 묶음.
-weight = 1 + log(count) 로 sub-linear 가중치 — 같은 옷 N 번 등장해도 N 배로 부풀지 않게.
+Groups = 같은 garment_class + top-1 chip ΔE &lt; threshold 인 instance 묶음.
+weight = 1 + log(count) — sub-linear.
 </p>
-<table><thead><tr><th>post ULID + quality</th><th>carousel</th>
-<th>overlay (kept + dropped)</th><th>instances + groups</th><th>palette</th></tr></thead>
-<tbody>{''.join(rows)}</tbody></table></body></html>
+<table><thead><tr><th>post ULID + quality</th>
+<th>views (carousel / overlay / cloth)</th>
+<th>instances + groups</th><th>palette</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table>
+<script>
+const VIEW_ORDER = ['carousel', 'overlay', 'cloth'];
+const VIEW_LABEL = {{ carousel: '▶ carousel', overlay: '▶ overlay', cloth: '▶ cloth' }};
+function cycleView(btn) {{
+  const cell = btn.parentElement;
+  const current = cell.querySelector('.view.view-active');
+  const currentKey = current ? current.dataset.view : 'carousel';
+  const nextKey = VIEW_ORDER[(VIEW_ORDER.indexOf(currentKey) + 1) % VIEW_ORDER.length];
+  cell.querySelectorAll('.view').forEach(v => {{
+    v.classList.toggle('view-active', v.dataset.view === nextKey);
+  }});
+  btn.textContent = VIEW_LABEL[nextKey];
+}}
+</script>
+</body></html>
 """
     output_path.write_text(html, encoding="utf-8")
 
@@ -401,10 +463,15 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
     results: list[dict] = []
     for post_ulid, paths in grouped.items():
         overlay_paths: list[Path] = []
+        cloth_paths: list[Path] = []
         for p in paths:
             overlay_path = masks_dir / f"{p.stem}_overlay.png"
-            save_overlay_png(p, bundle, settings.vision, overlay_path)
+            cloth_path = masks_dir / f"{p.stem}_cloth.png"
+            save_views_png(
+                p, bundle, settings.vision, overlay_path, cloth_path,
+            )
             overlay_paths.append(overlay_path)
+            cloth_paths.append(cloth_path)
         source = ImageFrameSource(paths)
         diag = extract_palette_with_diagnostics(source, bundle, settings.vision)
         quality = PostQuality(
@@ -437,6 +504,7 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             "post_ulid": post_ulid,
             "image_paths": [str(p) for p in paths],
             "overlay_paths": [str(p) for p in overlay_paths],
+            "cloth_paths": [str(p) for p in cloth_paths],
             "palette": [item.model_dump(mode="json") for item in diag.palette],
             "frame_palettes": frame_palettes_json,
             "duplicate_groups": duplicate_groups_json,
