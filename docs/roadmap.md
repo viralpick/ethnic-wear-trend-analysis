@@ -222,6 +222,26 @@ detection" 만 학습 기반으로 추가하는 hybrid.
 
 **선행 조건**: Phase 2 검증 완료 후 (131 post smoke 결과 보고 개선 방향 확정).
 
+### M4.I — Demographic filter (여성 × 성인만 타겟)
+
+**현재 상태**: Pipeline B 가 detected person 전원을 처리. 인도 ethnic wear 여성 타겟
+데모에서 남성·아동 포스트는 시그널이 되지 않고 오히려 오염 소스.
+
+**M4 에서 할 것**:
+- `insightface` (buffalo_s pack) 또는 동급 ONNX 로 face → age + gender 추론
+- bbox 별 (age >= adult_min) & (gender == female) 두 조건 모두 통과한 instance 만 보존
+- face 미검출 bbox policy 는 데이터 실측 후 결정 (drop vs pass-through)
+- `[demographics]` optional extra 로 분리 (모델 파일 ~300MB, tuning 필요)
+
+**위험**:
+- 인도인 female/male 분류 정확도가 western 학습 데이터셋에서 떨어질 수 있음 — false negative
+  로 demo 샘플 축소
+- age 임계값 (e.g. 15세) 은 face-crop 아웃 포스트에서 판정 불가
+- bias 감사를 위해 drop 된 instance 를 별도 리뷰 큐로 보존하는 설계 권장
+
+**활성화 조건**: 4/24 싱크 후 실 데이터에서 남성/아동 비중이 몇 % 인지 측정. 10% 이하면
+우선순위 낮음.
+
 ### M4.G — Semantic similarity / embedding
 
 **현재 상태**: contract v2 후보 (per-attribute confidence / evidence span 와 함께 미룸).
