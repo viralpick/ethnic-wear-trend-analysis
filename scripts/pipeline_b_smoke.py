@@ -9,6 +9,11 @@ phase 2 업데이트:
 - overlay v2: drop_skin_adaptive kept/dropped 2색 표시 (흰색 = skin box 에 걸려 제거된 영역)
 - comparison.html 의 palette column 에 frame-level palette 도 strip 으로 표시
 
+phase 3 업데이트:
+- comparison.html 에 instance 단위 정보 추가 — (frame × person × class) 각각 독립 palette
+- duplicate group 을 단일 블록으로 묶어 표시 (같은 옷 ΔE 기준 합쳐짐 + sub-linear weight)
+- 각 instance 의 단색/다색 판정, pixel_count, skin_drop_ratio 노출
+
 전제: `uv sync --extra vision` (torch + transformers + ultralytics) 완료.
 
 실행:
@@ -34,8 +39,10 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 from settings import VisionConfig, load_settings  # noqa: E402
 from vision.color_space import rgb_to_lab  # noqa: E402
 from vision.frame_source import ImageFrameSource  # noqa: E402
+from vision.garment_instance import GarmentInstance, compute_group_weight  # noqa: E402
 from vision.pipeline_b_extractor import (  # noqa: E402
     ATR_LABELS,
+    MIN_CROP_PX,
     WEAR_KEEP,
     SegBundle,
     detect_people,
@@ -132,7 +139,7 @@ def build_segformer_overlay(
     for (x1, y1, x2, y2) in boxes:
         x1c, y1c = max(0, x1), max(0, y1)
         x2c, y2c = min(rgb.shape[1], x2), min(rgb.shape[0], y2)
-        if x2c - x1c < 32 or y2c - y1c < 32:
+        if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
             continue
         crop = rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop)
@@ -181,33 +188,131 @@ def _quality_badge_html(q: dict) -> str:
     )
 
 
-def _chip_strip(palette_items: list[dict]) -> str:
-    """palette → 색 칩 가로 strip. 작은 사이즈 (frame 단위용)."""
+def _chip_strip(palette_items: list[dict], width: int = 180, height: int = 16) -> str:
+    """palette → pct 비례 width 의 가로 bar. frame/instance 단위 소형."""
     if not palette_items:
         return '<span style="color:#aaa;font-size:10px">(empty)</span>'
-    return "".join(
+    segs = "".join(
         f'<div title="{c["hex_display"]} {c["pct"]:.0%}" '
-        f'style="display:inline-block;width:24px;height:24px;margin:1px;'
-        f'background:{c["hex_display"]};border:1px solid #888"></div>'
+        f'style="flex:{max(c["pct"], 0.001):.4f};height:{height}px;'
+        f'background:{c["hex_display"]};"></div>'
         for c in palette_items
+    )
+    return (
+        f'<div style="display:flex;width:{width}px;border:1px solid #888;'
+        f'border-radius:2px;overflow:hidden">{segs}</div>'
+    )
+
+
+def _chip_bar(palette_items: list[dict]) -> str:
+    """Post palette — 큰 pct-bar + hex + pct label. 시각적 주목."""
+    if not palette_items:
+        return '<span style="color:#888">(no palette)</span>'
+    segs = "".join(
+        f'<div title="{c["hex_display"]} {c["pct"]:.1%}" '
+        f'style="flex:{max(c["pct"], 0.001):.4f};height:48px;'
+        f'background:{c["hex_display"]};position:relative;'
+        f'display:flex;flex-direction:column;justify-content:flex-end;'
+        f'font-size:10px;color:#fff;text-shadow:0 0 2px #000;'
+        f'padding:2px;text-align:center">'
+        f'<span>{c["pct"]:.0%}</span></div>'
+        for c in palette_items
+    )
+    labels = "".join(
+        f'<div style="flex:{max(c["pct"], 0.001):.4f};font-size:10px;'
+        f'color:#333;text-align:center;padding:2px 0">{c["hex_display"]}</div>'
+        for c in palette_items
+    )
+    return (
+        f'<div style="width:360px;border:1px solid #888;border-radius:3px;'
+        f'overflow:hidden"><div style="display:flex">{segs}</div>'
+        f'<div style="display:flex;background:#f4f4f4">{labels}</div></div>'
     )
 
 
 def _frame_palettes_html(frame_palettes: list[dict]) -> str:
-    """frame 별 palette strip — 캐러셀 frame 간 색 변화 시각 검증."""
+    """frame 별 palette bar — 영향력 desc 정렬 (extract_palette_with_diagnostics 순서 유지)."""
     if not frame_palettes:
         return ""
     rows = []
     for fp in frame_palettes:
-        pixel_summary = ", ".join(
-            f"{lbl}={cnt}" for lbl, cnt in fp.get("garment_pixel_counts", {}).items()
-        )
+        pc = fp.get("garment_pixel_counts", {})
+        total_px = sum(pc.values())
+        pixel_summary = ", ".join(f"{lbl}={cnt}" for lbl, cnt in pc.items())
         rows.append(
-            f'<div style="margin:2px 0;font-size:10px">'
-            f'<code>{fp["frame_id"][:16]}…</code> {_chip_strip(fp["palette"])} '
+            f'<div style="margin:3px 0;font-size:10px">'
+            f'<code>{fp["frame_id"][:16]}…</code> '
+            f'<span style="color:#555">total_px={total_px}</span><br>'
+            f'{_chip_strip(fp["palette"])} '
             f'<span style="color:#888">{pixel_summary}</span></div>'
         )
     return "".join(rows)
+
+
+def _instance_to_json(inst: GarmentInstance) -> dict:
+    """GarmentInstance → JSON-serializable dict (HTML 렌더 + palette.json 공용)."""
+    return {
+        "instance_id": inst.instance_id,
+        "frame_id": inst.frame_id,
+        "garment_class": inst.garment_class,
+        "is_single_color": inst.is_single_color,
+        "pixel_count": inst.pixel_count,
+        "skin_drop_ratio": inst.skin_drop_ratio,
+        "palette": [item.model_dump(mode="json") for item in inst.palette],
+    }
+
+
+def _instance_block_html(inst: dict) -> str:
+    """instance 1 개 = class 1 개의 palette block. single/multi + drop ratio 표시."""
+    single_badge = "단색" if inst["is_single_color"] else "다색"
+    badge_bg = "#e7f3ff" if inst["is_single_color"] else "#fff0e5"
+    short_id = inst["instance_id"].split(":", 1)[-1]
+    return (
+        f'<div style="display:inline-block;margin:2px;padding:4px;'
+        f'border:1px solid #ddd;border-radius:4px;background:#fafafa;font-size:10px">'
+        f'<div><strong>{inst["garment_class"]}</strong> '
+        f'<span style="background:{badge_bg};padding:1px 4px;'
+        f'border-radius:3px">{single_badge}</span></div>'
+        f'<div style="color:#888">'
+        f'<code>{short_id}</code> px={inst["pixel_count"]} '
+        f'drop={inst["skin_drop_ratio"]:.2f}</div>'
+        f'<div style="margin-top:2px">{_chip_strip(inst["palette"])}</div>'
+        f'</div>'
+    )
+
+
+def _duplicate_groups_html(groups: list[dict]) -> str:
+    """duplicate group 별 <details> 토글 — 같은 옷 묶음 + weight + chip 미리보기.
+
+    기본 접힘 (closed). summary 에 class / count / weight / 대표 chip bar 를 노출해
+    "열지 않고도" 어떤 옷인지 판별 가능하게.
+    """
+    if not groups:
+        return '<span style="color:#aaa;font-size:10px">(no instances)</span>'
+    blocks = []
+    for g in groups:
+        count = len(g["instances"])
+        weight = g["weight"]
+        insts = g["instances"]
+        cls = insts[0]["garment_class"] if insts else "?"
+        preview_palette = insts[0]["palette"] if insts else []
+        weight_bg = "#ffeaa7" if count >= 2 else "#f0f0f0"
+        inner = "".join(_instance_block_html(inst) for inst in insts)
+        summary = (
+            f'<summary style="cursor:pointer;font-size:11px;padding:3px 6px;'
+            f'background:{weight_bg};border-radius:3px;display:flex;'
+            f'align-items:center;gap:6px;list-style:revert">'
+            f'<strong>{cls}</strong> × {count} '
+            f'<span style="color:#555">w={weight:.2f}</span>'
+            f'{_chip_strip(preview_palette, width=120, height=12)}'
+            f'</summary>'
+        )
+        blocks.append(
+            f'<details style="margin:3px 0;border-left:3px solid #888;'
+            f'padding:2px 0 2px 4px">'
+            f'{summary}<div style="margin-top:3px">{inner}</div></details>'
+        )
+    return "".join(blocks)
 
 
 def _render_html(results: list[dict], output_path: Path) -> None:
@@ -233,17 +338,12 @@ def _render_html(results: list[dict], output_path: Path) -> None:
             f'style="width:120px;margin:2px;border:1px solid #ddd;">'
             for p in r.get("overlay_paths", [])
         )
-        chips_html = "".join(
-            f'<div style="display:inline-block;margin:4px;text-align:center;font-size:11px">'
-            f'<div style="background:{c["hex_display"]};width:48px;height:48px;'
-            f'border:1px solid #888"></div>'
-            f'<span>{c["hex_display"]}<br>{c["pct"]:.1%}</span></div>'
-            for c in r["palette"]
-        ) or '<span style="color:#888">(no palette)</span>'
+        chips_html = _chip_bar(r["palette"])
         badge_html = _quality_badge_html(r["quality"])
         frame_palettes_html = _frame_palettes_html(r.get("frame_palettes", []))
+        groups_html = _duplicate_groups_html(r.get("duplicate_groups", []))
         palette_cell = (
-            f'<div><strong style="font-size:11px">Post palette (aggregate):</strong>'
+            f'<div><strong style="font-size:11px">Post palette (duplicate-weighted):</strong>'
             f'<br>{chips_html}</div>'
             f'<div style="margin-top:8px"><strong style="font-size:11px">'
             f'Frame palettes (독립 KMeans):</strong>{frame_palettes_html}</div>'
@@ -253,6 +353,7 @@ def _render_html(results: list[dict], output_path: Path) -> None:
             f"<br><small>{len(r['image_paths'])} imgs</small>{badge_html}</td>"
             f"<td style='padding:8px'>{imgs_html}</td>"
             f"<td style='padding:8px'>{overlay_html}</td>"
+            f"<td style='padding:8px;vertical-align:top;max-width:360px'>{groups_html}</td>"
             f"<td style='padding:8px;vertical-align:top'>{palette_cell}</td></tr>"
         )
     html = f"""<!doctype html>
@@ -270,8 +371,14 @@ Quality: 🟢 ok / 🟡 warning (skin leak or chip similarity or fallback) /
 Post palette = 전 frame 합쳐 한 번의 KMeans (cluster aggregate 용).<br>
 Frame palettes = 각 frame 독립 KMeans (캐러셀 outfit 변화 검증용).
 </p>
-<table><thead><tr><th>post ULID + quality</th><th>carousel</th><th>overlay (kept + dropped)</th>
-<th>palette</th></tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>
+<p style="font-size:12px">
+Instances = (frame × person × garment_class) 단위 독립 palette.
+Groups = 같은 garment_class + top-1 chip ΔE &lt; threshold 인 instance 들을 묶음.
+weight = 1 + log(count) 로 sub-linear 가중치 — 같은 옷 N 번 등장해도 N 배로 부풀지 않게.
+</p>
+<table><thead><tr><th>post ULID + quality</th><th>carousel</th>
+<th>overlay (kept + dropped)</th><th>instances + groups</th><th>palette</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table></body></html>
 """
     output_path.write_text(html, encoding="utf-8")
 
@@ -317,12 +424,23 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             }
             for fp in diag.frame_palettes
         ]
+        duplicate_groups_json = [
+            {
+                "instances": [_instance_to_json(inst) for inst in group],
+                "weight": compute_group_weight(
+                    len(group), settings.vision.instance.weight_formula,
+                ),
+            }
+            for group in diag.duplicate_groups
+        ]
         results.append({
             "post_ulid": post_ulid,
             "image_paths": [str(p) for p in paths],
             "overlay_paths": [str(p) for p in overlay_paths],
             "palette": [item.model_dump(mode="json") for item in diag.palette],
             "frame_palettes": frame_palettes_json,
+            "duplicate_groups": duplicate_groups_json,
+            "instances": [_instance_to_json(inst) for inst in diag.instances],
             "quality": {
                 "level": quality.level,
                 "skin_leak_count": quality.skin_leak_count,
@@ -349,6 +467,19 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
     }
 
 
+def rerender_html_from_json(output_dir: Path) -> dict:
+    """기존 palette.json 만 읽어서 comparison.html 재생성 (모델 호출 없음).
+
+    HTML 렌더러 수정 후 full smoke 결과 재활용용. YOLO/segformer 안 돌림.
+    """
+    json_path = output_dir / "palette.json"
+    if not json_path.exists():
+        raise FileNotFoundError(f"palette.json 이 없다: {json_path}")
+    results = json.loads(json_path.read_text())
+    _render_html(results, output_dir / "comparison.html")
+    return {"posts": len(results), "output_dir": str(output_dir), "mode": "html-only"}
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pipeline B smoke on local JPG directory.")
     parser.add_argument(
@@ -359,12 +490,19 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir", type=Path, default=_REPO_ROOT / "outputs" / "pipeline_b_smoke",
         help="palette.json + masks/*.png + comparison.html 쓸 디렉토리",
     )
+    parser.add_argument(
+        "--html-only", action="store_true",
+        help="모델 호출 없이 기존 palette.json 으로 comparison.html 만 재생성",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    summary = run_smoke(args.image_root, args.output_dir)
+    if args.html_only:
+        summary = rerender_html_from_json(args.output_dir)
+    else:
+        summary = run_smoke(args.image_root, args.output_dir)
     print(f"[smoke] done {summary}")
 
 

@@ -1,14 +1,11 @@
 """Pipeline B — YOLOv8 person detect → segformer garment seg → LAB KMeans palette.
 
-출처: ~/dev/clothing-color-extraction-poc/scripts/run_pipeline_b.py (2026-04-17 동료 PoC).
-동료 PoC 는 영상 전용. 여기서는 FrameSource 추상화로 이미지/영상 공용화.
+phase 3 (2026-04-22): instance 단위로 완전 재구성. (frame × person bbox × garment_class)
+교집합을 GarmentInstance 1개로 보고 각자 독립 KMeans. post aggregate 는 instance 들을
+duplicate 그룹으로 묶어 sub-linear weight 로 top-k 선별.
 
 이 모듈은 top-level 로 torch / transformers / ultralytics 를 import. vision extras 미설치
-시 ImportError — core 코드는 **절대 top-level import 금지** (Step D 에서 ColorExtractor
-Protocol 뒤 DI 로 연결).
-
-aggregation 전략: frame 별 garment 픽셀을 전부 cleaned → concat → 한 번의 KMeans.
-계층적 (frame→cluster→reKMeans) 보다 단순 + 결정론.
+시 ImportError — core 코드는 **절대 top-level import 금지** (ColorExtractor Protocol 뒤 DI).
 
 spec §4.1 ④ / §7 대응. spec §7.2 의 YT 경계는 frame_source 레이어에서 강제.
 """
@@ -29,6 +26,11 @@ from vision.color_space import (
     hex_to_rgb,
 )
 from vision.frame_source import Frame, FrameSource
+from vision.garment_instance import (
+    GarmentInstance,
+    aggregate_post_palette,
+    classify_single_color,
+)
 
 # ATR 18-class segformer label 매핑 (동료 PoC 에서 인용).
 # spec §4.1 ① GarmentType (kurta_set/anarkali 등) 과 직접 매칭 X — ATR 은 서양 복식.
@@ -56,8 +58,19 @@ ATR_LABELS: dict[int, str] = {
 WEAR_KEEP: frozenset[str] = frozenset({
     "upper-clothes", "pants", "skirt", "dress", "hat", "left-shoe", "right-shoe",
 })
+# ATR 의 피부 클래스 라벨 (bbox false positive 필터용). "진짜 사람" 검증에 사용 —
+# 동상/마네킹/제품샷은 skin class pixel 이 거의 0.
+SKIN_LABELS: frozenset[str] = frozenset({
+    "skin-face", "skin-left-arm", "skin-right-arm", "skin-left-leg", "skin-right-leg",
+})
+_WEAR_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl in WEAR_KEEP}
+)
+_SKIN_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl in SKIN_LABELS}
+)
 
-_MIN_CROP_PX = 32
+MIN_CROP_PX = 32  # bbox 짧은 변이 이 값 미만이면 crop drop. smoke overlay 에서도 재사용.
 _YOLO_CONF = 0.35
 _YOLO_DEDUP_IOU = 0.45
 
@@ -140,45 +153,6 @@ def run_segformer(bundle: SegBundle, crop_rgb: np.ndarray) -> np.ndarray:
         return upsampled.argmax(dim=1)[0].cpu().numpy().astype(np.int32)
 
 
-def extract_garment_pixels(
-    frame: Frame, bundle: SegBundle, cfg: VisionConfig,
-) -> list[np.ndarray]:
-    """frame 1개 → 의류 class 별 skin-cleaned pixel (N,3) 리스트. 빈 리스트면 skip.
-
-    YOLO 0 bbox + fallback 활성 시 전체 이미지를 bbox 로 사용. class 별 drop_skin_adaptive
-    적용 — class pixel 의 skin_drop_threshold_pct 이상이 skin box 안이면 옷 자체가
-    skin-tone (베이지/탄 kurta 등) 판정으로 원본 유지.
-    """
-    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
-    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
-    boxes = detect_people(bundle.yolo, frame.rgb)
-    if not boxes and cfg.fallback_full_image_on_no_person:
-        h, w = frame.rgb.shape[:2]
-        boxes = [(0, 0, w, h)]
-    out: list[np.ndarray] = []
-    for (x1, y1, x2, y2) in boxes:
-        x1c, y1c = max(0, x1), max(0, y1)
-        x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
-        if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
-            continue
-        crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
-        seg = run_segformer(bundle, crop_rgb)
-        for class_id, label in ATR_LABELS.items():
-            if label not in WEAR_KEEP:
-                continue
-            pixels = crop_rgb[seg == class_id]
-            if pixels.shape[0] < cfg.extract_colors.min_pixels:
-                continue
-            cleaned, _ratio, _kept_whole = drop_skin_adaptive(
-                pixels, lab_min=lab_min, lab_max=lab_max,
-                keep_threshold_pct=cfg.skin_drop_threshold_pct,
-            )
-            if cleaned.shape[0] < cfg.extract_colors.min_pixels:
-                continue
-            out.append(cleaned)
-    return out
-
-
 def _pixels_to_palette(
     combined: np.ndarray, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
@@ -202,38 +176,190 @@ def _pixels_to_palette(
     return palette
 
 
+# --------------------------------------------------------------------------- #
+# Phase 3: instance 추출
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class _ExtractCtx:
+    """bbox 루프마다 재계산 피하려고 frame loop 진입 전 만드는 컨텍스트."""
+    bundle: SegBundle
+    cfg: VisionConfig
+    lab_min: np.ndarray
+    lab_max: np.ndarray
+
+
+def extract_instances(
+    source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
+) -> tuple[list[GarmentInstance], int, bool]:
+    """frame × person_bbox × garment_class 단위 GarmentInstance + YOLO 통계.
+
+    반환: `(instances, yolo_detected_persons, fallback_triggered)`. diagnostics 별도 순회
+    없이 단일 iter_frames 로 집계 — `ImageFrameSource.iter_frames()` 가 매 호출마다 PIL
+    로 이미지를 다시 열기 때문에 FrameSource 를 두 번 도는 건 disk 재로딩 + YOLO 이중 추론.
+    """
+    ctx = _ExtractCtx(
+        bundle=bundle, cfg=cfg,
+        lab_min=np.asarray(cfg.skin_lab_box.min, dtype=np.float32),
+        lab_max=np.asarray(cfg.skin_lab_box.max, dtype=np.float32),
+    )
+    instances: list[GarmentInstance] = []
+    yolo_count = 0
+    fallback = False
+    for frame in source.iter_frames():
+        boxes = detect_people(bundle.yolo, frame.rgb)
+        yolo_count += len(boxes)
+        if not boxes and cfg.fallback_full_image_on_no_person:
+            fallback = True
+            h, w = frame.rgb.shape[:2]
+            boxes = [(0, 0, w, h)]
+        for bbox_idx, bbox in enumerate(boxes):
+            instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
+    return instances, yolo_count, fallback
+
+
+def _is_person_bbox(seg: np.ndarray, cfg: VisionConfig) -> bool:
+    """segformer 결과 기반 실 사람 bbox 판정. skin pixel 비율 낮거나 의류 비율 극단적이면 False.
+
+    - skin 비율 < min_skin_ratio_for_person → 동상/마네킹 또는 사람 없음 (전체 이미지 fallback)
+    - 의류 비율 > max_garment_ratio_for_person → 배경까지 의류 오분류 (제품샷)
+    """
+    area = int(seg.size)
+    if area == 0:
+        return False
+    skin_count = int(np.isin(seg, tuple(_SKIN_CLASS_IDS)).sum())
+    garment_count = int(np.isin(seg, tuple(_WEAR_CLASS_IDS)).sum())
+    skin_ratio = skin_count / area
+    garment_ratio = garment_count / area
+    if skin_ratio < cfg.min_skin_ratio_for_person:
+        return False
+    if garment_ratio > cfg.max_garment_ratio_for_person:
+        return False
+    return True
+
+
+def _instances_from_bbox(
+    frame: Frame,
+    bbox_idx: int,
+    bbox: tuple[int, int, int, int],
+    ctx: _ExtractCtx,
+) -> list[GarmentInstance]:
+    """하나의 bbox → (그 안의 garment_class 별) GarmentInstance 리스트."""
+    cfg = ctx.cfg
+    min_pixels = cfg.extract_colors.min_pixels
+    x1, y1, x2, y2 = bbox
+    x1c, y1c = max(0, x1), max(0, y1)
+    x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
+    if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
+        return []
+    crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
+    seg = run_segformer(ctx.bundle, crop_rgb)
+    # false-positive filter: 동상/마네킹/제품샷 방어. segformer 결과로 판정.
+    if not _is_person_bbox(seg, cfg):
+        return []
+    out: list[GarmentInstance] = []
+    for class_id, label in ATR_LABELS.items():
+        if label not in WEAR_KEEP:
+            continue
+        pixels = crop_rgb[seg == class_id]
+        if pixels.shape[0] < min_pixels:
+            continue
+        cleaned, ratio, _kept = drop_skin_adaptive(
+            pixels, lab_min=ctx.lab_min, lab_max=ctx.lab_max,
+            keep_threshold_pct=cfg.skin_drop_threshold_pct,
+        )
+        if cleaned.shape[0] < min_pixels:
+            continue
+        palette = _pixels_to_palette(cleaned, cfg)
+        if not palette:
+            continue
+        out.append(GarmentInstance(
+            instance_id=f"{frame.id}:p{bbox_idx}:{label}",
+            frame_id=frame.id,
+            bbox=(x1c, y1c, x2c, y2c),
+            garment_class=label,
+            palette=palette,
+            is_single_color=classify_single_color(
+                palette, max_delta_e=cfg.instance.single_color_max_delta_e,
+            ),
+            pixel_count=int(cleaned.shape[0]),
+            skin_drop_ratio=ratio,
+        ))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Frame / post palette — instance 기반 재구성
+# --------------------------------------------------------------------------- #
+
+def _frame_palette_from_instances(
+    instances: list[GarmentInstance], frame_id: str, top_k: int,
+) -> "FramePalette":
+    """frame 의 instance chip 들을 weight 없이 (pct × pixel_count) 로 top-k 선별."""
+    frame_inst = [i for i in instances if i.frame_id == frame_id]
+    if not frame_inst:
+        return FramePalette(
+            frame_id=frame_id, palette=[],
+            garment_pixel_counts={}, skin_drop_ratios={},
+        )
+    scored: list[tuple[ColorPaletteItem, float]] = []
+    for inst in frame_inst:
+        for chip in inst.palette:
+            scored.append((chip, chip.pct * inst.pixel_count))
+    scored.sort(key=lambda x: -x[1])
+    top = scored[: top_k]
+    total = sum(s for _, s in top)
+    palette = [
+        ColorPaletteItem(
+            r=c.r, g=c.g, b=c.b, hex_display=c.hex_display,
+            name=c.name, family=c.family,
+            pct=s / total if total > 0 else 0.0,
+        )
+        for c, s in top
+    ]
+    pixel_counts: dict[str, int] = {}
+    drop_ratios: dict[str, float] = {}
+    for inst in frame_inst:
+        pixel_counts[inst.garment_class] = (
+            pixel_counts.get(inst.garment_class, 0) + inst.pixel_count
+        )
+        drop_ratios[inst.garment_class] = inst.skin_drop_ratio
+    return FramePalette(
+        frame_id=frame_id, palette=palette,
+        garment_pixel_counts=pixel_counts, skin_drop_ratios=drop_ratios,
+    )
+
+
 def extract_palette(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
-    """FrameSource → 모든 frame 의 garment cleaned pixel concat → KMeans → palette."""
-    all_pixels: list[np.ndarray] = []
-    for frame in source.iter_frames():
-        all_pixels.extend(extract_garment_pixels(frame, bundle, cfg))
-    if not all_pixels:
-        return []
-    combined = np.concatenate(all_pixels)
-    return _pixels_to_palette(combined, cfg)
+    """instance 기반 post-level aggregate palette (phase 3 backwards-compatible wrapper)."""
+    instances, _yolo, _fallback = extract_instances(source, bundle, cfg)
+    palette, _groups = aggregate_post_palette(
+        instances,
+        top_k=cfg.extract_colors.k,
+        duplicate_max_delta_e=cfg.instance.duplicate_max_delta_e,
+        weight_formula=cfg.instance.weight_formula,
+    )
+    return palette
 
 
 @dataclass(frozen=True)
 class FramePalette:
-    """frame 1장의 독립 palette — 캐러셀 여러 옷 섞임 방지 (Q2 phase 2).
-
-    post-level aggregate 이전의 중간 결과. frame 마다 KMeans 따로 돌려 "이 frame 의 outfit"
-    을 대표하는 top-k chip 집합. downstream (cluster aggregation) 에서 frame palette 들을
-    다시 합칠지, frame 별로 표시할지는 소비자 선택.
-    """
+    """frame 1장의 aggregate palette — instance chip 들을 선별 (phase 3 재구성)."""
     frame_id: str
     palette: list[ColorPaletteItem]
-    garment_pixel_counts: dict[str, int]   # class → cleaned pixel 수
-    skin_drop_ratios: dict[str, float]     # class → drop_skin_adaptive 의 drop_ratio
+    garment_pixel_counts: dict[str, int]
+    skin_drop_ratios: dict[str, float]
 
 
 @dataclass(frozen=True)
 class ExtractionDiagnostics:
-    """extract_palette 의 중간 단계를 노출 — quality badge / 디버깅용."""
-    palette: list[ColorPaletteItem]               # post-level aggregate
-    frame_palettes: list[FramePalette]            # frame 별 palette (Q2)
+    """phase 3 — instance 중심 + post/frame aggregate 모두 노출."""
+    palette: list[ColorPaletteItem]               # post-level aggregate (duplicate weighted)
+    frame_palettes: list[FramePalette]            # frame 별 aggregate (no duplicate weight)
+    instances: list[GarmentInstance]              # 원자 단위 instance
+    duplicate_groups: list[list[GarmentInstance]] # 같은 옷 묶음
     yolo_detected_persons: int
     fallback_triggered: bool
     post_total_garment_pixels: int
@@ -243,44 +369,41 @@ class ExtractionDiagnostics:
 def extract_palette_with_diagnostics(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> ExtractionDiagnostics:
-    """extract_palette 의 superset. 추가로 frame-level palette 까지 내는 경로.
+    """instance 단위 추출 → frame 별 palette + duplicate-weighted post palette."""
+    instances, yolo_count, fallback = extract_instances(source, bundle, cfg)
 
-    post-level aggregate (all frames concat → KMeans) 와 frame-level palette (각 frame
-    독립 KMeans) 둘 다 반환. 소비자가 "post 전체 대표색" 또는 "frame 별 outfit 대비" 중
-    필요한 쪽을 선택.
-    """
-    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
-    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
-    yolo_count = 0
-    fallback = False
+    # frame palette 를 instance 들로부터 재구성 (모델 호출 추가 없음).
+    # 영향력 큰 frame (총 pixel 합 × instance 개수) 이 상단으로.
+    frame_stats: dict[str, tuple[int, int]] = {}
+    for inst in instances:
+        px, cnt = frame_stats.get(inst.frame_id, (0, 0))
+        frame_stats[inst.frame_id] = (px + inst.pixel_count, cnt + 1)
+    frame_ids = sorted(frame_stats, key=lambda fid: (-frame_stats[fid][0], -frame_stats[fid][1]))
+    frame_palettes = [
+        _frame_palette_from_instances(instances, fid, cfg.extract_colors.k)
+        for fid in frame_ids
+    ]
+
+    # post palette — duplicate 그룹 + sub-linear weight
+    post_palette, dup_groups = aggregate_post_palette(
+        instances,
+        top_k=cfg.extract_colors.k,
+        duplicate_max_delta_e=cfg.instance.duplicate_max_delta_e,
+        weight_formula=cfg.instance.weight_formula,
+    )
+
     class_counts: dict[str, int] = {}
-    all_pixels: list[np.ndarray] = []
-    frame_palettes: list[FramePalette] = []
-    for frame in source.iter_frames():
-        boxes = detect_people(bundle.yolo, frame.rgb)
-        yolo_count += len(boxes)
-        if not boxes and cfg.fallback_full_image_on_no_person:
-            h, w = frame.rgb.shape[:2]
-            boxes = [(0, 0, w, h)]
-            fallback = True
-        frame_collection = _collect_frame_garments_detailed(
-            frame, boxes, bundle, cfg, lab_min, lab_max,
+    for inst in instances:
+        class_counts[inst.garment_class] = (
+            class_counts.get(inst.garment_class, 0) + inst.pixel_count
         )
-        # frame-level palette
-        frame_palettes.append(_build_frame_palette(frame, frame_collection, cfg))
-        # post-level aggregate 재료 + 전체 class counts 누적
-        for label, pixels in frame_collection.pixels_by_class.items():
-            class_counts[label] = class_counts.get(label, 0) + pixels.shape[0]
-            all_pixels.append(pixels)
+    total = sum(inst.pixel_count for inst in instances)
 
-    if not all_pixels:
-        palette: list[ColorPaletteItem] = []
-    else:
-        palette = _pixels_to_palette(np.concatenate(all_pixels), cfg)
-    total = int(sum(arr.shape[0] for arr in all_pixels))
     return ExtractionDiagnostics(
-        palette=palette,
+        palette=post_palette,
         frame_palettes=frame_palettes,
+        instances=instances,
+        duplicate_groups=dup_groups,
         yolo_detected_persons=yolo_count,
         fallback_triggered=fallback,
         post_total_garment_pixels=total,
@@ -288,86 +411,21 @@ def extract_palette_with_diagnostics(
     )
 
 
-@dataclass(frozen=True)
-class _FrameCollection:
-    """_collect_frame_garments_detailed 의 중간 구조 (내부용)."""
-    pixels_by_class: dict[str, np.ndarray]   # class → cleaned pixels
-    drop_ratios: dict[str, float]            # class → adaptive drop_ratio
-
-
-def _collect_frame_garments_detailed(
-    frame: Frame,
-    boxes: list[tuple[int, int, int, int]],
-    bundle: SegBundle,
-    cfg: VisionConfig,
-    lab_min: np.ndarray,
-    lab_max: np.ndarray,
-) -> _FrameCollection:
-    """frame 의 class 별 cleaned pixel + drop_skin_adaptive ratio 수집."""
-    pixels_by_class: dict[str, np.ndarray] = {}
-    drop_ratios: dict[str, float] = {}
-    for (x1, y1, x2, y2) in boxes:
-        x1c, y1c = max(0, x1), max(0, y1)
-        x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
-        if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
-            continue
-        crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
-        seg = run_segformer(bundle, crop_rgb)
-        for class_id, label in ATR_LABELS.items():
-            if label not in WEAR_KEEP:
-                continue
-            pixels = crop_rgb[seg == class_id]
-            if pixels.shape[0] < cfg.extract_colors.min_pixels:
-                continue
-            cleaned, ratio, _kept = drop_skin_adaptive(
-                pixels, lab_min=lab_min, lab_max=lab_max,
-                keep_threshold_pct=cfg.skin_drop_threshold_pct,
-            )
-            if cleaned.shape[0] < cfg.extract_colors.min_pixels:
-                continue
-            # 같은 frame 안에 다중 bbox (여러 사람) 일 때 동일 class 는 누적.
-            if label in pixels_by_class:
-                pixels_by_class[label] = np.concatenate([pixels_by_class[label], cleaned])
-            else:
-                pixels_by_class[label] = cleaned
-            drop_ratios[label] = ratio
-    return _FrameCollection(pixels_by_class=pixels_by_class, drop_ratios=drop_ratios)
-
-
-def _build_frame_palette(
-    frame: Frame, collection: _FrameCollection, cfg: VisionConfig,
-) -> FramePalette:
-    """frame 의 모든 class pixel 을 concat 해서 frame-level top-k palette 추출."""
-    if not collection.pixels_by_class:
-        return FramePalette(
-            frame_id=frame.id, palette=[],
-            garment_pixel_counts={}, skin_drop_ratios={},
-        )
-    combined = np.concatenate(list(collection.pixels_by_class.values()))
-    palette = _pixels_to_palette(combined, cfg)
-    return FramePalette(
-        frame_id=frame.id,
-        palette=palette,
-        garment_pixel_counts={k: v.shape[0] for k, v in collection.pixels_by_class.items()},
-        skin_drop_ratios=dict(collection.drop_ratios),
-    )
-
-
-def _collect_frame_garments(
-    frame: Frame,
-    boxes: list[tuple[int, int, int, int]],
-    bundle: SegBundle,
-    cfg: VisionConfig,
-    lab_min: np.ndarray,
-    lab_max: np.ndarray,
-    class_counts: dict[str, int],
+def extract_garment_pixels(
+    frame: Frame, bundle: SegBundle, cfg: VisionConfig,
 ) -> list[np.ndarray]:
-    """frame 1개 × bboxes → cleaned pixel 리스트 (class counts in-place 업데이트)."""
+    """frame 1개 → 의류 class 별 cleaned pixel list. legacy helper (phase 1/2 호환)."""
+    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
+    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
+    boxes = detect_people(bundle.yolo, frame.rgb)
+    if not boxes and cfg.fallback_full_image_on_no_person:
+        h, w = frame.rgb.shape[:2]
+        boxes = [(0, 0, w, h)]
     out: list[np.ndarray] = []
     for (x1, y1, x2, y2) in boxes:
         x1c, y1c = max(0, x1), max(0, y1)
         x2c, y2c = min(frame.rgb.shape[1], x2), min(frame.rgb.shape[0], y2)
-        if x2c - x1c < _MIN_CROP_PX or y2c - y1c < _MIN_CROP_PX:
+        if x2c - x1c < MIN_CROP_PX or y2c - y1c < MIN_CROP_PX:
             continue
         crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop_rgb)
@@ -377,12 +435,11 @@ def _collect_frame_garments(
             pixels = crop_rgb[seg == class_id]
             if pixels.shape[0] < cfg.extract_colors.min_pixels:
                 continue
-            cleaned, _ratio, _kept_whole = drop_skin_adaptive(
+            cleaned, _ratio, _kept = drop_skin_adaptive(
                 pixels, lab_min=lab_min, lab_max=lab_max,
                 keep_threshold_pct=cfg.skin_drop_threshold_pct,
             )
             if cleaned.shape[0] < cfg.extract_colors.min_pixels:
                 continue
-            class_counts[label] = class_counts.get(label, 0) + cleaned.shape[0]
             out.append(cleaned)
     return out

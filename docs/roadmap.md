@@ -222,6 +222,35 @@ detection" 만 학습 기반으로 추가하는 hybrid.
 
 **선행 조건**: Phase 2 검증 완료 후 (131 post smoke 결과 보고 개선 방향 확정).
 
+### M4.I — Demographic filter (여성 × 성인만 타겟)
+
+**현재 상태**: Pipeline B 가 detected person 전원을 처리. 인도 ethnic wear 여성 타겟
+데모에서 남성·아동 포스트는 시그널이 되지 않고 오히려 오염 소스.
+
+**Primary 접근 (다음 PR 에서 구현)**: CLIP zero-shot prompt 기반.
+- scene + gender + age 대역을 단일 모델 (CLIP ViT-B/32) forward 1회로 판정
+- image-level pre-filter — YOLO/segformer 돌기 전 drop → 비용 절감
+- `[vision]` extras 에 CLIP 만 추가 (~600MB). 현재 `transformers` 이미 의존
+- prompts:
+  - scene: `["a person wearing clothing", "a statue", "a product-only shot", "a landscape"]`
+  - gender: `["a woman", "a man"]`
+  - age: `["a child", "an adult"]`
+- 판정: argmax + confidence threshold. 세 판정 모두 통과한 이미지만 Pipeline B 돌림
+- drop 사유는 HTML 에 노출 (수동 검증 + bias 감사)
+
+**업그레이드 후보 (CLIP 정확도가 부족하면)**: `insightface` (buffalo_s pack).
+- face detection + age (숫자) + gender 전용 학습 모델 — 정확도 CLIP 대비 높음 (~95%)
+- 단점: 얼굴 안 보이는 샷은 판정 불가 (CLIP 은 전체 이미지로 판정 가능), 추가 ~300MB
+- `[demographics]` optional extra 로 분리
+- 4/24 싱크 후 실 데이터에서 CLIP 오분류율 측정 → 10% 초과시 전환 검토
+
+**공통 위험**:
+- 인도인 female/male / 전통 복식 (kurta 남성, shalwar kameez) bias — 서양 중심 학습 데이터
+- adult/child 경계 (특히 10대 후반) 가 모호
+- false negative 로 demo 샘플 축소 리스크 → drop 투명성 설계 (HTML 노출) 필수
+
+**활성화 조건**: 이번 PR (phase 3) 머지 직후. 4/24 싱크 이전 완성 목표.
+
 ### M4.G — Semantic similarity / embedding
 
 **현재 상태**: contract v2 후보 (per-attribute confidence / evidence span 와 함께 미룸).

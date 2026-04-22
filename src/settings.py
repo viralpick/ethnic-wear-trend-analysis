@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
@@ -160,9 +161,18 @@ class ExtractColorsConfig(BaseModel):
     min_pixels: int = 150
 
 
+class InstanceConfig(BaseModel):
+    """phase 3 — (frame × person × garment_class) instance 기반 palette 설정."""
+    single_color_max_delta_e: float = 8.0   # instance 내 top chip 간 ΔE 미만이면 단색 판정
+    duplicate_max_delta_e: float = 15.0     # instance 간 top-1 chip ΔE 미만이면 같은 옷
+    # Literal 로 로드 시점 검증 — 오타 시 runtime ValueError 가 아니라 Settings 초기화 실패.
+    weight_formula: Literal["log", "linear", "sqrt"] = "log"
+
+
 class VisionConfig(BaseModel):
     skin_lab_box: SkinLabBox
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
+    instance: InstanceConfig = InstanceConfig()
     # YOLO person detect 실패 시 전체 이미지를 bbox 로 간주. mirror selfie (거울 셀카) 처럼
     # YOLOv8n 이 OOD 로 놓치는 케이스 방어. segformer 가 skin/background/의류 자체적으로 분리하므로
     # 전체 이미지 → segformer 도 의류 pixel 을 제대로 뽑아낸다. IG 에 거울 셀카가 흔해 기본 True.
@@ -173,6 +183,14 @@ class VisionConfig(BaseModel):
     # "skin-tone 의류" 로 판정하고 원본 pixel 전체 유지 (베이지/탄 kurta 등 보호).
     # 그 미만이면 edge noise 로 간주해 box 안 pixel 만 제거. 0.0~1.0 범위.
     skin_drop_threshold_pct: float = 0.5
+    # bbox-level false positive filter — 동상/마네킹/제품샷 오탐 방어.
+    # - min_skin_ratio: segformer skin class pixel / crop area. 미만이면 "사람 아님" 판정
+    #   drop. 동상은 돌/금속 색이라 skin 감지 거의 0. 0.005 = 0.5% 기본 (전신샷 얼굴/손만
+    #   나와도 통과).
+    # - max_garment_ratio: crop 면적 중 의류 class 비율. 초과하면 "배경까지 의류로 오분류"
+    #   판정 drop. 실제 전신 의류샷도 배경 여유가 있어 보통 60% 이하. 0.90 으로 여유.
+    min_skin_ratio_for_person: float = 0.005
+    max_garment_ratio_for_person: float = 0.90
 
 
 class Settings(BaseSettings):
