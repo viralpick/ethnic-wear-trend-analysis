@@ -190,6 +190,42 @@ open outputs/pipeline_b_smoke/comparison.html
 Instagram CDN 이미지 (hashtag_search.tsv) 는 현재 blob downloader 대상이 아니고, IG CDN 의
 referer/토큰 expiry 제약 때문에 별도 검토 필요 (roadmap M4).
 
+## StarRocks read 접속 (starrocks extras 필요)
+
+크롤러가 `png` 스키마에 직접 쌓는 raw 테이블 (`india_ai_fashion_*`) 을 SQL 로 쿼리. TSV
+export 수동 수령 단계를 생략하기 위함. M3 에서 `src/loaders/starrocks_reader.py` 를 daily
+pipeline 에 연결 예정.
+
+준비:
+
+```bash
+uv sync --extra starrocks    # 또는 --all-extras
+```
+
+`.env` 에 아래 추가 (gitignored). StarRocks 접근이 VPN 필요할 수 있으니 VPN ON 후 실행.
+
+```dotenv
+STARROCKS_HOST=...
+STARROCKS_PORT=9030
+STARROCKS_USER=...
+STARROCKS_PASSWORD=...
+STARROCKS_DATABASE=png
+```
+
+연결 확인:
+
+```bash
+uv run python scripts/test_starrocks_connection.py
+# 예상 출력:
+#   [starrocks] host=...:9030 db=png user=...
+#   [starrocks] server version: 5.5.0 StarRocks x.x.x
+#   [starrocks] N tables in `png`
+#   [starrocks] india_ai_fashion_inatagram_posting: N rows
+#   ...
+```
+
+현재는 read only 접근만 확보. write 는 분석 결과 포맷 확정 후 DW 팀과 별도 합의 (agenda §3).
+
 ## `src/settings.py` 수정 시 주의
 
 `pyproject.toml`의 `[tool.hatch.build.targets.wheel.force-include]` 는 `src/settings.py` 를

@@ -42,6 +42,12 @@ blob = [
     "azure-identity>=1.15",
     "python-dotenv>=1.0",
 ]
+# StarRocks read access — `png` 스키마 SELECT. MySQL wire protocol 호환이라 pymysql 사용.
+# `.env` 에서 STARROCKS_HOST / USER / PASSWORD / (PORT=9030) / (DATABASE=png) 읽기.
+starrocks = [
+    "pymysql>=1.1",
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 # 사용자 요청 이름: "attributes". hatchling sources 매핑(src="")으로 src/ prefix 가 설치 후 제거되므로
