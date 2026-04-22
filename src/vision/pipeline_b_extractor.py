@@ -24,7 +24,7 @@ from ultralytics import YOLO
 from contracts.common import ColorFamily, ColorPaletteItem
 from settings import VisionConfig
 from vision.color_space import (
-    drop_skin,
+    drop_skin_adaptive,
     extract_colors,
     hex_to_rgb,
 )
@@ -145,8 +145,9 @@ def extract_garment_pixels(
 ) -> list[np.ndarray]:
     """frame 1개 → 의류 class 별 skin-cleaned pixel (N,3) 리스트. 빈 리스트면 skip.
 
-    YOLO 가 person 0 bbox 이고 cfg.fallback_full_image_on_no_person=True 이면 전체 이미지를
-    하나의 bbox 로 사용 (mirror selfie 방어).
+    YOLO 0 bbox + fallback 활성 시 전체 이미지를 bbox 로 사용. class 별 drop_skin_adaptive
+    적용 — class pixel 의 skin_drop_threshold_pct 이상이 skin box 안이면 옷 자체가
+    skin-tone (베이지/탄 kurta 등) 판정으로 원본 유지.
     """
     lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
     lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
@@ -168,7 +169,10 @@ def extract_garment_pixels(
             pixels = crop_rgb[seg == class_id]
             if pixels.shape[0] < cfg.extract_colors.min_pixels:
                 continue
-            cleaned = drop_skin(pixels, lab_min=lab_min, lab_max=lab_max)
+            cleaned, _ratio, _kept_whole = drop_skin_adaptive(
+                pixels, lab_min=lab_min, lab_max=lab_max,
+                keep_threshold_pct=cfg.skin_drop_threshold_pct,
+            )
             if cleaned.shape[0] < cfg.extract_colors.min_pixels:
                 continue
             out.append(cleaned)
@@ -279,7 +283,10 @@ def _collect_frame_garments(
             pixels = crop_rgb[seg == class_id]
             if pixels.shape[0] < cfg.extract_colors.min_pixels:
                 continue
-            cleaned = drop_skin(pixels, lab_min=lab_min, lab_max=lab_max)
+            cleaned, _ratio, _kept_whole = drop_skin_adaptive(
+                pixels, lab_min=lab_min, lab_max=lab_max,
+                keep_threshold_pct=cfg.skin_drop_threshold_pct,
+            )
             if cleaned.shape[0] < cfg.extract_colors.min_pixels:
                 continue
             class_counts[label] = class_counts.get(label, 0) + cleaned.shape[0]
