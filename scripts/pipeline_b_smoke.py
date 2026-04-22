@@ -282,23 +282,35 @@ def _instance_block_html(inst: dict) -> str:
 
 
 def _duplicate_groups_html(groups: list[dict]) -> str:
-    """duplicate group 별 bracket — 같은 옷 묶음 + weight 시각 표시."""
+    """duplicate group 별 <details> 토글 — 같은 옷 묶음 + weight + chip 미리보기.
+
+    기본 접힘 (closed). summary 에 class / count / weight / 대표 chip bar 를 노출해
+    "열지 않고도" 어떤 옷인지 판별 가능하게.
+    """
     if not groups:
         return '<span style="color:#aaa;font-size:10px">(no instances)</span>'
     blocks = []
     for g in groups:
         count = len(g["instances"])
         weight = g["weight"]
-        group_label = f"× {count}  weight={weight:.2f}"
+        insts = g["instances"]
+        cls = insts[0]["garment_class"] if insts else "?"
+        preview_palette = insts[0]["palette"] if insts else []
         weight_bg = "#ffeaa7" if count >= 2 else "#f0f0f0"
-        inner = "".join(_instance_block_html(inst) for inst in g["instances"])
+        inner = "".join(_instance_block_html(inst) for inst in insts)
+        summary = (
+            f'<summary style="cursor:pointer;font-size:11px;padding:3px 6px;'
+            f'background:{weight_bg};border-radius:3px;display:flex;'
+            f'align-items:center;gap:6px;list-style:revert">'
+            f'<strong>{cls}</strong> × {count} '
+            f'<span style="color:#555">w={weight:.2f}</span>'
+            f'{_chip_strip(preview_palette, width=120, height=12)}'
+            f'</summary>'
+        )
         blocks.append(
-            f'<div style="margin:4px 0;padding:4px;border-left:3px solid #888">'
-            f'<div style="font-size:10px;background:{weight_bg};'
-            f'padding:2px 6px;display:inline-block;border-radius:3px">'
-            f'group: {group_label}</div>'
-            f'<div style="margin-top:2px">{inner}</div>'
-            f'</div>'
+            f'<details style="margin:3px 0;border-left:3px solid #888;'
+            f'padding:2px 0 2px 4px">'
+            f'{summary}<div style="margin-top:3px">{inner}</div></details>'
         )
     return "".join(blocks)
 
@@ -455,6 +467,19 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
     }
 
 
+def rerender_html_from_json(output_dir: Path) -> dict:
+    """기존 palette.json 만 읽어서 comparison.html 재생성 (모델 호출 없음).
+
+    HTML 렌더러 수정 후 full smoke 결과 재활용용. YOLO/segformer 안 돌림.
+    """
+    json_path = output_dir / "palette.json"
+    if not json_path.exists():
+        raise FileNotFoundError(f"palette.json 이 없다: {json_path}")
+    results = json.loads(json_path.read_text())
+    _render_html(results, output_dir / "comparison.html")
+    return {"posts": len(results), "output_dir": str(output_dir), "mode": "html-only"}
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pipeline B smoke on local JPG directory.")
     parser.add_argument(
@@ -465,12 +490,19 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir", type=Path, default=_REPO_ROOT / "outputs" / "pipeline_b_smoke",
         help="palette.json + masks/*.png + comparison.html 쓸 디렉토리",
     )
+    parser.add_argument(
+        "--html-only", action="store_true",
+        help="모델 호출 없이 기존 palette.json 으로 comparison.html 만 재생성",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    summary = run_smoke(args.image_root, args.output_dir)
+    if args.html_only:
+        summary = rerender_html_from_json(args.output_dir)
+    else:
+        summary = run_smoke(args.image_root, args.output_dir)
     print(f"[smoke] done {summary}")
 
 
