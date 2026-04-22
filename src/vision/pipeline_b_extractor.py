@@ -19,7 +19,7 @@ from transformers import SegformerForSemanticSegmentation, SegformerImageProcess
 from ultralytics import YOLO
 
 from contracts.common import ColorFamily, ColorPaletteItem
-from settings import VisionConfig
+from settings import SceneFilterConfig, VisionConfig
 from vision.color_space import (
     drop_skin_adaptive,
     extract_colors,
@@ -31,6 +31,7 @@ from vision.garment_instance import (
     aggregate_post_palette,
     classify_single_color,
 )
+from vision.scene_filter import FilterVerdict, NoopSceneFilter, SceneFilter
 
 # ATR 18-class segformer label 매핑 (동료 PoC 에서 인용).
 # spec §4.1 ① GarmentType (kurta_set/anarkali 등) 과 직접 매칭 X — ATR 은 서양 복식.
@@ -82,6 +83,7 @@ class SegBundle:
     seg_processor: object
     seg_model: object
     device: str
+    scene_filter: SceneFilter  # disabled 면 NoopSceneFilter
 
 
 def _pick_device(override: str | None) -> str:
@@ -94,15 +96,34 @@ def _pick_device(override: str | None) -> str:
     return "cpu"
 
 
-def load_models(device: str | None = None) -> SegBundle:
-    """YOLOv8n + segformer_b2_clothes 로드. 첫 호출 시 모델 파일 다운로드 (~250MB)."""
+def load_models(
+    device: str | None = None,
+    scene_filter_cfg: SceneFilterConfig | None = None,
+) -> SegBundle:
+    """YOLOv8n + segformer_b2_clothes + (optional) CLIPSceneFilter 로드.
+
+    scene_filter_cfg 가 None 이거나 enabled=False 이면 NoopSceneFilter 부착. CLIPSceneFilter
+    로드 경로는 lazy import (scene_filter_clip 모듈) — transformers 가 이미 vision extras
+    에 있지만 CLIP 가중치 (~600MB) 다운로드는 enabled 때만.
+    """
     dev = _pick_device(device)
     yolo = YOLO("yolov8n.pt")
     seg_processor = SegformerImageProcessor.from_pretrained("mattmdjaga/segformer_b2_clothes")
     seg_model = SegformerForSemanticSegmentation.from_pretrained("mattmdjaga/segformer_b2_clothes")
     seg_model.eval()
     seg_model.to(dev)
-    return SegBundle(yolo=yolo, seg_processor=seg_processor, seg_model=seg_model, device=dev)
+
+    scene_filter: SceneFilter
+    if scene_filter_cfg is not None and scene_filter_cfg.enabled:
+        from vision.scene_filter_clip import load_clip_filter  # lazy
+        scene_filter = load_clip_filter(scene_filter_cfg, dev)
+    else:
+        scene_filter = NoopSceneFilter()
+
+    return SegBundle(
+        yolo=yolo, seg_processor=seg_processor, seg_model=seg_model, device=dev,
+        scene_filter=scene_filter,
+    )
 
 
 def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
@@ -189,14 +210,34 @@ class _ExtractCtx:
     lab_max: np.ndarray
 
 
+@dataclass(frozen=True)
+class FrameDropRecord:
+    """scene_filter 에 의해 drop 된 frame 기록 — reason + prompt scores.
+
+    HTML 에 bias 감사용으로 노출. frame_id 는 smoke 에서 원본 이미지 경로와 재매핑.
+    """
+    frame_id: str
+    verdict: FilterVerdict
+
+
+@dataclass(frozen=True)
+class ExtractStats:
+    """extract_instances 부가 통계 — diagnostics 생성에 필요한 frame 단위 집계."""
+    yolo_detected_persons: int
+    fallback_triggered: bool
+    filtered_out: list[FrameDropRecord]
+
+
 def extract_instances(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
-) -> tuple[list[GarmentInstance], int, bool]:
-    """frame × person_bbox × garment_class 단위 GarmentInstance + YOLO 통계.
+) -> tuple[list[GarmentInstance], ExtractStats]:
+    """frame × person_bbox × garment_class 단위 GarmentInstance + scene filter drop 집계.
 
-    반환: `(instances, yolo_detected_persons, fallback_triggered)`. diagnostics 별도 순회
-    없이 단일 iter_frames 로 집계 — `ImageFrameSource.iter_frames()` 가 매 호출마다 PIL
-    로 이미지를 다시 열기 때문에 FrameSource 를 두 번 도는 건 disk 재로딩 + YOLO 이중 추론.
+    `bundle.scene_filter.accept` 판정이 실패하면 frame 자체를 skip (YOLO+segformer 미호출 →
+    비용 절감). pass 인 frame 만 person detect → segformer 진행.
+
+    단일 iter_frames 순회 — `ImageFrameSource.iter_frames()` 는 매 호출마다 PIL 로 이미지를
+    다시 열어 disk 재로딩 + YOLO 이중 추론 위험이 있어 diagnostics 가 별도 순회하지 않음.
     """
     ctx = _ExtractCtx(
         bundle=bundle, cfg=cfg,
@@ -206,7 +247,12 @@ def extract_instances(
     instances: list[GarmentInstance] = []
     yolo_count = 0
     fallback = False
+    filtered: list[FrameDropRecord] = []
     for frame in source.iter_frames():
+        verdict = bundle.scene_filter.accept(frame.rgb, frame.id)
+        if not verdict.passed:
+            filtered.append(FrameDropRecord(frame_id=frame.id, verdict=verdict))
+            continue
         boxes = detect_people(bundle.yolo, frame.rgb)
         yolo_count += len(boxes)
         if not boxes and cfg.fallback_full_image_on_no_person:
@@ -215,7 +261,12 @@ def extract_instances(
             boxes = [(0, 0, w, h)]
         for bbox_idx, bbox in enumerate(boxes):
             instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
-    return instances, yolo_count, fallback
+    stats = ExtractStats(
+        yolo_detected_persons=yolo_count,
+        fallback_triggered=fallback,
+        filtered_out=filtered,
+    )
+    return instances, stats
 
 
 def _is_person_bbox(seg: np.ndarray, cfg: VisionConfig) -> bool:
@@ -334,7 +385,7 @@ def extract_palette(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
     """instance 기반 post-level aggregate palette (phase 3 backwards-compatible wrapper)."""
-    instances, _yolo, _fallback = extract_instances(source, bundle, cfg)
+    instances, _stats = extract_instances(source, bundle, cfg)
     palette, _groups = aggregate_post_palette(
         instances,
         top_k=cfg.extract_colors.k,
@@ -364,13 +415,15 @@ class ExtractionDiagnostics:
     fallback_triggered: bool
     post_total_garment_pixels: int
     garment_class_counts: dict[str, int]
+    # M4.I — scene filter 에 의해 drop 된 frame 들. 기본 비어있음 (Noop 사용 시).
+    filtered_out_frames: list[FrameDropRecord]
 
 
 def extract_palette_with_diagnostics(
     source: FrameSource, bundle: SegBundle, cfg: VisionConfig,
 ) -> ExtractionDiagnostics:
     """instance 단위 추출 → frame 별 palette + duplicate-weighted post palette."""
-    instances, yolo_count, fallback = extract_instances(source, bundle, cfg)
+    instances, stats = extract_instances(source, bundle, cfg)
 
     # frame palette 를 instance 들로부터 재구성 (모델 호출 추가 없음).
     # 영향력 큰 frame (총 pixel 합 × instance 개수) 이 상단으로.
@@ -404,10 +457,11 @@ def extract_palette_with_diagnostics(
         frame_palettes=frame_palettes,
         instances=instances,
         duplicate_groups=dup_groups,
-        yolo_detected_persons=yolo_count,
-        fallback_triggered=fallback,
+        yolo_detected_persons=stats.yolo_detected_persons,
+        fallback_triggered=stats.fallback_triggered,
         post_total_garment_pixels=total,
         garment_class_counts=class_counts,
+        filtered_out_frames=stats.filtered_out,
     )
 
 

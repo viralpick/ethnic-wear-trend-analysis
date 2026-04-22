@@ -169,10 +169,46 @@ class InstanceConfig(BaseModel):
     weight_formula: Literal["log", "linear", "sqrt"] = "log"
 
 
+class SceneFilterConfig(BaseModel):
+    """M4.I — CLIP zero-shot pre-filter (scene + gender + age).
+
+    enabled=False 이면 NoopSceneFilter 로 매 frame pass. True 이면 CLIPSceneFilter 로드.
+    prompts / pass_index / min_confidence 모두 tunable — 인도 ethnic wear bias 대응용.
+
+    pass 조건: (scene argmax == scene_pass_index) AND (argmax confidence >= min_confidence)
+    AND (gender argmax == gender_pass_index) AND (age argmax == age_pass_index).
+    """
+    enabled: bool = False
+    model_id: str = "openai/clip-vit-base-patch32"
+    # scene argmax 가 이 index 여야 pass. "product only" 제외 — fashion shot 이 옷 중심
+    # 구도라 CLIP 이 product 로 오분류 빈발. statue / landscape 만 negative class.
+    scene_prompts: list[str] = Field(default_factory=lambda: [
+        "a fashion photo of a person wearing clothing",
+        "a photo of a statue or mannequin",
+        "a photo of a landscape or outdoor scenery",
+    ])
+    scene_pass_index: int = 0
+    # gender argmax 가 이 index 여야 pass. 기본 0 = "woman"
+    gender_prompts: list[str] = Field(default_factory=lambda: [
+        "a photo of a woman",
+        "a photo of a man",
+    ])
+    gender_pass_index: int = 0
+    # age argmax 가 이 index 여야 pass. 10대는 adult 쪽으로 흡수하려 "teenager or adult" 명시.
+    age_prompts: list[str] = Field(default_factory=lambda: [
+        "a photo of a young child",
+        "a photo of a teenager or adult",
+    ])
+    age_pass_index: int = 1
+    # argmax confidence 가 이 값 미만이면 scene_low_confidence drop. 0.3 = 경계 case 는 살림.
+    min_confidence: float = 0.3
+
+
 class VisionConfig(BaseModel):
     skin_lab_box: SkinLabBox
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
     instance: InstanceConfig = InstanceConfig()
+    scene_filter: SceneFilterConfig = SceneFilterConfig()
     # YOLO person detect 실패 시 전체 이미지를 bbox 로 간주. mirror selfie (거울 셀카) 처럼
     # YOLOv8n 이 OOD 로 놓치는 케이스 방어. segformer 가 skin/background/의류 자체적으로 분리하므로
     # 전체 이미지 → segformer 도 의류 pixel 을 제대로 뽑아낸다. IG 에 거울 셀카가 흔해 기본 True.

@@ -139,6 +139,30 @@ vision:
     single_color_max_delta_e: 8.0   # instance 내 chip 간 ΔE 미만이면 단색 판정
     duplicate_max_delta_e: 15.0     # instance 간 top-1 ΔE 미만이면 같은 옷
     weight_formula: log             # log(1+count) | linear | sqrt
+  # M4.I — CLIP zero-shot pre-filter (scene + gender + age).
+  # enabled: false 이면 NoopSceneFilter — 모든 frame pass (기본).
+  # true 이면 CLIP ViT-B/32 로드해 frame 당 3 판정 (scene / gender / age) → drop 결정.
+  # 인도 ethnic wear bias 대응을 위해 모든 prompt / pass_index / min_confidence 가 tunable.
+  scene_filter:
+    enabled: false
+    model_id: openai/clip-vit-base-patch32
+    # "product only" 제거한 3-way — fashion shot 은 옷 중심 구도라 "product" 로 오분류 빈발
+    scene_prompts:
+      - a fashion photo of a person wearing clothing
+      - a photo of a statue or mannequin
+      - a photo of a landscape or outdoor scenery
+    scene_pass_index: 0   # fashion shot 이 argmax 여야 pass
+    gender_prompts:
+      - a photo of a woman
+      - a photo of a man
+    gender_pass_index: 0  # "woman" argmax 여야 pass
+    # 10대는 adult 쪽으로 흡수하기 위해 "teenager or adult" 문구로 명시
+    age_prompts:
+      - a photo of a young child
+      - a photo of a teenager or adult
+    age_pass_index: 1     # teenager/adult argmax 여야 pass
+    min_confidence: 0.3   # 0.4 → 0.3 완화 (경계 case 살림)
+
   # bbox-level 오탐 필터. 동상/마네킹/옷 없는 제품샷에서 의류 추출 방지.
   # - min_skin_ratio_for_person: crop 내 segformer skin class pixel 비율 최소값.
   #   미만이면 drop (동상=skin 없음). 0.005 = 0.5%.
