@@ -19,7 +19,7 @@ _CORE_TABLES = (
     "india_ai_fashion_inatagram_posting",
     "india_ai_fashion_inatagram_profile",
     "india_ai_fashion_youtube_posting",
-    "india_ai_fashionash_tag_search_result",
+    "india_ai_fashion_inatagram_hash_tag_search_result",
 )
 
 
@@ -32,7 +32,9 @@ def main() -> None:
     print(f"[starrocks] server version: {version}")
 
     tables = reader.list_tables()
-    print(f"[starrocks] {len(tables)} tables in `{cfg.database}`")
+    print(f"[starrocks] {len(tables)} tables in `{cfg.database}`:")
+    for t in tables:
+        print(f"    {t}")
 
     for t in _CORE_TABLES:
         if t in tables:
