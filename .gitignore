@@ -18,6 +18,9 @@ venv/
 
 # Pipeline outputs
 outputs/
+# Vision LLM 응답 캐시 (Phase 2). outputs/ 이미 제외되지만 명시 — BE 연동 시
+# AzureBlobCache 로 이관 예정, 그 전까진 로컬 전용.
+outputs/llm_cache/
 
 # Secrets / local config overrides
 .env
