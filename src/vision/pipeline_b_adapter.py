@@ -1,33 +1,51 @@
-"""PipelineBColorExtractor — ColorExtractor Protocol 의 Pipeline B 구현체.
+"""PipelineBColorExtractor — canonical path 기반 ColorExtractor 구현체 (Phase 5).
 
-ColorExtractor 는 post 단위 추출 (→ ColorExtractionResult) 지만, Pipeline B 는 pixel-level
-aggregation. 이 adapter 가 post → ImageFrameSource → extract_palette → top-1 dominant 로
-bridge.
+흐름:
+  post.image_urls
+    → _resolve_local_paths / _download_blob_paths (파일 시스템 / Azure Blob)
+    → _load_images (path → (image_id, bytes, rgb))
+    → VisionLLMClient.extract_garment(bytes, preset=llm_preset)
+    → extract_canonical_pixels(post_items, bundle, cfg, dedup_cfg, family_map)
+    → canonical 별 extract_dynamic_palette → rep 첫 non-empty 선택
+    → ΔE76 ≤ PRESET_MATCH_THRESHOLD 이면 preset name/family, 초과면 lab_to_family fallback
+    → ColorExtractionResult
 
-Top-level 로 vision extras (torch/transformers/ultralytics) 를 필요로 하는 pipeline_b_extractor
-를 import 한다 — 이 모듈 자체도 vision extras 없이는 import 불가. core 는 `import vision.
-pipeline_b_adapter` 를 절대 top-level 하지 말 것 (run_daily_pipeline 의 `_select_extractor`
-가 lazy import 로 격리).
+설계 결정 (project_phase5_adapter_design.md 참조):
+  - `_load_images` 를 module-level 로 분리 — 테스트가 monkeypatch 로 Path/PIL 의존 없이 stub.
+  - preset.json 은 factory 에서 1회 로드 (`load_preset_views`) — 3 view (llm_preset /
+    matcher_entries / family_map) 로 adapter 에 주입. adapter 안에서 I/O 재호출 X.
+  - scene filter 는 canonical path 에서 생략 — LLM 의 is_india_ethnic_wear=False 가 대체.
+  - per-image LLM 실패는 log-and-skip, post 내 모든 이미지가 실패하면 빈 결과.
+
+top-level 로 vision extras (torch/transformers/ultralytics) 를 필요로 하는
+pipeline_b_extractor 를 import 한다 — core 는 `import vision.pipeline_b_adapter` 를 절대
+top-level 하지 말 것 (run_daily_pipeline 의 `_select_extractor` 가 lazy import 로 격리).
 
 이미지 소스 우선순위:
 1. absolute local path 가 존재하면 그대로 사용
 2. image_root 가 주어지면 URL basename 으로 로컬 스캔
 3. blob_downloader + blob_cache_dir 가 주어지면 Azure Blob 에서 다운로드
 4. 위 모두 실패 시 해당 post skip (빈 결과)
-
-silhouette: Pipeline B 는 silhouette=None (ATR class → Silhouette enum 매핑 미완 — M4.D).
 """
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
+
+from contracts.common import ColorFamily, Silhouette
 from contracts.normalized import NormalizedContentItem
-from settings import VisionConfig
+from contracts.vision import GarmentAnalysis
+from settings import OutfitDedupConfig, VisionConfig
 from utils.logging import get_logger
+from vision.canonical_extractor import extract_canonical_pixels
 from vision.color_extractor import ColorExtractionResult
-from vision.frame_source import ImageFrameSource
-from vision.pipeline_b_extractor import SegBundle, extract_palette
+from vision.color_family_preset import MatcherEntry, lab_to_family
+from vision.dynamic_palette import PaletteCluster, extract_dynamic_palette
+from vision.llm_client import VisionLLMClient
+from vision.pipeline_b_extractor import SegBundle
 
 if TYPE_CHECKING:
     from loaders.blob_downloader import BlobDownloader
@@ -36,15 +54,15 @@ logger = get_logger(__name__)
 
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
 
+# ΔE76 preset 매칭 임계값 — 이하면 preset name+family, 초과면 lab_to_family fallback.
+# 근거: 3축 리뷰 advisor 권고 + 50-color preset 의 대략 spacing. Phase 5 smoke 후 튜닝.
+PRESET_MATCH_THRESHOLD: float = 15.0
 
-def _resolve_local_paths(item: NormalizedContentItem, image_root: Path | None) -> list[Path]:
-    """image_urls 를 로컬 Path 리스트로 변환.
 
-    규칙:
-    - 이미 absolute path 이고 존재하면 그대로.
-    - image_root 이 주어지면 URL basename 으로 {image_root}/basename 조회.
-    - 둘 다 실패하면 빈 리스트 (해당 post skip).
-    """
+def _resolve_local_paths(
+    item: NormalizedContentItem, image_root: Path | None
+) -> list[Path]:
+    """image_urls 를 로컬 Path 리스트로 변환."""
     out: list[Path] = []
     for url in item.image_urls:
         if Path(url).suffix.lower() not in _IMAGE_EXTS:
@@ -65,7 +83,7 @@ def _download_blob_paths(
     downloader: BlobDownloader,
     cache_dir: Path,
 ) -> list[Path]:
-    """image_urls 를 Azure Blob 에서 cache_dir 로 다운로드. MP4 등 비이미지 및 실패 URL 은 skip."""
+    """image_urls 를 Azure Blob 에서 cache_dir 로 다운로드."""
     out: list[Path] = []
     for url in item.image_urls:
         if Path(url).suffix.lower() not in _IMAGE_EXTS:
@@ -76,23 +94,123 @@ def _download_blob_paths(
     return out
 
 
+def _load_images(paths: list[Path]) -> list[tuple[str, bytes, np.ndarray]]:
+    """Path 리스트 → [(image_id, bytes, rgb_uint8), ...].
+
+    image_id = path.name (post carousel 내 고유). bytes 는 disk 원본 그대로 — 캐시 키에
+    쓰는 쪽이 re-encode 로 해시가 바뀌지 않게 raw bytes 유지. rgb 는 PIL convert("RGB").
+
+    Per-path 실패는 log-and-skip — 131-post run 에서 한 장 깨진 JPEG 이 전체 post 를
+    crash 시키지 않도록. `_analyze_images` 의 per-image LLM skip 과 parity.
+    """
+    from PIL import Image  # lazy — pillow 는 vision extras
+
+    out: list[tuple[str, bytes, np.ndarray]] = []
+    for path in paths:
+        try:
+            data = path.read_bytes()
+            rgb = np.array(Image.open(BytesIO(data)).convert("RGB"))
+        except Exception as exc:
+            logger.warning(
+                "pipeline_b_decode_skip path=%s reason=%r", path, exc,
+            )
+            continue
+        out.append((path.name, data, rgb))
+    return out
+
+
+def _analyze_images(
+    source_post_id: str,
+    images: list[tuple[str, bytes, np.ndarray]],
+    vision_llm: VisionLLMClient,
+    llm_preset: list[dict[str, str]],
+) -> list[tuple[str, np.ndarray, GarmentAnalysis]]:
+    """이미지 N 개에 대해 LLM 호출 → post_items (image_id, rgb, analysis).
+
+    per-image 실패는 log-and-skip — 한 이미지의 LLM 예외로 post 전체를 버리지 않음.
+    """
+    post_items: list[tuple[str, np.ndarray, GarmentAnalysis]] = []
+    for image_id, data, rgb in images:
+        try:
+            analysis = vision_llm.extract_garment(data, preset=llm_preset)
+        except Exception as exc:
+            logger.warning(
+                "pipeline_b_llm_skip post_id=%s image=%s reason=%r",
+                source_post_id, image_id, exc,
+            )
+            continue
+        post_items.append((image_id, rgb, analysis))
+    return post_items
+
+
+def _match_preset_or_family(
+    cluster: PaletteCluster, entries: list[MatcherEntry],
+) -> tuple[str, ColorFamily]:
+    """cluster.lab 과 가장 가까운 preset entry 선택 (ΔE76). threshold 초과 시 fallback."""
+    cL, ca, cb = cluster.lab
+    best: MatcherEntry | None = None
+    best_de = float("inf")
+    for entry in entries:
+        eL, ea, eb = entry.lab
+        de = ((cL - eL) ** 2 + (ca - ea) ** 2 + (cb - eb) ** 2) ** 0.5
+        if de < best_de:
+            best_de = de
+            best = entry
+    if best is not None and best_de <= PRESET_MATCH_THRESHOLD:
+        return best.name, best.family
+    name = f"pipeline_b_canonical_{cluster.hex.lstrip('#').lower()}"
+    return name, lab_to_family(cL, ca, cb)
+
+
+def _pick_top_cluster(
+    canonicals, dyn_cfg,
+) -> tuple[PaletteCluster, Silhouette | None] | None:
+    """rep.area_ratio desc 순으로 순회 — 첫 non-empty palette 의 top cluster 반환.
+
+    Returns:
+      (top PaletteCluster, representative.silhouette) 또는 None (전부 빈 pool).
+    """
+    sorted_canonicals = sorted(
+        canonicals,
+        key=lambda c: -c.representative.person_bbox_area_ratio,
+    )
+    for canonical in sorted_canonicals:
+        clusters = extract_dynamic_palette(canonical.pooled_pixels, dyn_cfg)
+        if clusters:
+            return clusters[0], canonical.representative.silhouette
+    return None
+
+
 class PipelineBColorExtractor:
-    """Pipeline B (YOLO+segformer+LAB KMeans) 기반 ColorExtractor 구현체.
+    """Pipeline B (LLM BBOX → canonical pool → 동적 k palette) ColorExtractor.
 
     blob_downloader + blob_cache_dir 를 주면 Azure Blob 이미지를 로컬 캐시로 받아서 처리.
     둘 다 None 이면 로컬 Path 접근만 시도 (sample_data 모드).
+
+    preset 은 factory 단계에서 `load_preset_views` 로 1회 로드 후 3 view 를 직접 주입한다.
     """
 
     def __init__(
         self,
         bundle: SegBundle,
         cfg: VisionConfig,
+        vision_llm: VisionLLMClient,
+        llm_preset: list[dict[str, str]],
+        matcher_entries: list[MatcherEntry],
+        family_map: dict[str, ColorFamily],
+        dedup_cfg: OutfitDedupConfig,
         image_root: Path | None = None,
         blob_downloader: BlobDownloader | None = None,
         blob_cache_dir: Path | None = None,
     ) -> None:
         self._bundle = bundle
         self._cfg = cfg
+        self._dyn_cfg = cfg.dynamic_palette
+        self._vision_llm = vision_llm
+        self._llm_preset = llm_preset
+        self._matcher_entries = matcher_entries
+        self._family_map = family_map
+        self._dedup_cfg = dedup_cfg
         self._image_root = image_root
         self._blob_downloader = blob_downloader
         self._blob_cache_dir = blob_cache_dir
@@ -100,35 +218,52 @@ class PipelineBColorExtractor:
     def extract_visual(
         self, items: list[NormalizedContentItem]
     ) -> list[ColorExtractionResult]:
-        results: list[ColorExtractionResult] = []
-        for item in items:
-            paths = _resolve_local_paths(item, self._image_root)
+        return [self._extract_one(item) for item in items]
 
-            if not paths and self._blob_downloader and self._blob_cache_dir:
-                paths = _download_blob_paths(item, self._blob_downloader, self._blob_cache_dir)
-
-            if not paths:
-                logger.info(
-                    "pipeline_b_skip post_id=%s reason=no_images",
-                    item.source_post_id,
-                )
-                results.append(ColorExtractionResult(source_post_id=item.source_post_id))
-                continue
-
-            source = ImageFrameSource(paths)
-            palette = extract_palette(source, self._bundle, self._cfg)
-            if not palette:
-                results.append(ColorExtractionResult(source_post_id=item.source_post_id))
-                continue
-
-            top = palette[0]
-            results.append(
-                ColorExtractionResult(
-                    source_post_id=item.source_post_id,
-                    r=top.r, g=top.g, b=top.b,
-                    name=top.name,
-                    family=top.family,
-                    silhouette=None,
-                )
+    def _extract_one(self, item: NormalizedContentItem) -> ColorExtractionResult:
+        paths = self._resolve_paths(item)
+        if not paths:
+            logger.info(
+                "pipeline_b_skip post_id=%s reason=no_images", item.source_post_id,
             )
-        return results
+            return ColorExtractionResult(source_post_id=item.source_post_id)
+
+        images = _load_images(paths)
+        post_items = _analyze_images(
+            item.source_post_id, images, self._vision_llm, self._llm_preset,
+        )
+        if not post_items:
+            return ColorExtractionResult(source_post_id=item.source_post_id)
+
+        canonicals = extract_canonical_pixels(
+            post_items, self._bundle, self._cfg,
+            self._dedup_cfg, self._family_map,
+        )
+        if not canonicals:
+            return ColorExtractionResult(source_post_id=item.source_post_id)
+
+        pick = _pick_top_cluster(canonicals, self._dyn_cfg)
+        if pick is None:
+            return ColorExtractionResult(source_post_id=item.source_post_id)
+        cluster, silhouette = pick
+        name, family = _match_preset_or_family(cluster, self._matcher_entries)
+        r, g, b = cluster.rgb
+        return ColorExtractionResult(
+            source_post_id=item.source_post_id,
+            r=int(r), g=int(g), b=int(b),
+            name=name, family=family, silhouette=silhouette,
+        )
+
+    def _resolve_paths(self, item: NormalizedContentItem) -> list[Path]:
+        """local → blob 순. 셋 다 실패 시 빈 리스트."""
+        paths = _resolve_local_paths(item, self._image_root)
+        if paths:
+            return paths
+        if self._blob_downloader is not None and self._blob_cache_dir is not None:
+            return _download_blob_paths(
+                item, self._blob_downloader, self._blob_cache_dir,
+            )
+        return []
+
+
+__all__ = ["PipelineBColorExtractor", "PRESET_MATCH_THRESHOLD"]

@@ -207,15 +207,22 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--page-index", type=int, default=None,
-        help="count 모드: 몇 번째 배치인지 직접 지정. 미지정 시 (target_date - collection_start).days.",
+        help="count 모드: 몇 번째 배치인지 직접 지정. "
+             "미지정 시 (target_date - collection_start).days.",
     )
     parser.add_argument(
         "--window-days", type=int, default=None,
-        help="date 모드: target_date 기준 N일 이내 포스트 로드 (기본: settings.pipeline.window_days).",
+        help="date 모드: target_date 기준 N일 이내 포스트 로드 "
+             "(기본: settings.pipeline.window_days).",
     )
     parser.add_argument(
         "--llm", choices=["fake", "azure-openai"], default="fake",
         help="LLM 클라이언트 선택. azure-openai 는 AZURE_OPENAI_* 환경변수 필요.",
+    )
+    parser.add_argument(
+        "--vision-llm", choices=["fake", "gemini"], default="fake",
+        help="Vision LLM (BBOX+attributes) 클라이언트 선택. gemini 는 GEMINI_API_KEY 필요. "
+             "--color-extractor pipeline_b 일 때만 사용됨.",
     )
     return parser.parse_args()
 
@@ -226,30 +233,63 @@ def _resolve_target_date(cli: str | None, settings_target: date | None) -> date:
     return settings_target or date.today()
 
 
+def _build_vision_llm(choice: str, settings: Settings):
+    """CLI --vision-llm 플래그 기반 VisionLLMClient DI. lazy import 로 extras 격리."""
+    from vision.llm_client import FakeVisionLLMClient  # noqa: I001
+    if choice == "gemini":
+        from vision.gemini_client import GeminiVisionLLMClient  # noqa: I001
+        from vision.llm_cache import LocalJSONCache
+        cfg = settings.vision_llm
+        cache = LocalJSONCache(
+            cfg.cache_dir,
+            model_id=cfg.model_id,
+            prompt_version=cfg.prompt_version,
+        )
+        return GeminiVisionLLMClient(
+            model_id=cfg.model_id,
+            prompt_version=cfg.prompt_version,
+            cache=cache,
+        )
+    return FakeVisionLLMClient()
+
+
 def _select_color_extractor(
     choice: str,
     settings: Settings,
     image_root: Path | None,
+    *,
+    vision_llm_choice: str = "fake",
     blob_cache: Path | None = None,
 ) -> ColorExtractor:
     """CLI flag 기반 ColorExtractor DI. pipeline_b 는 lazy import (vision extras 격리)."""
-    if choice == "pipeline_b":
-        # vision extras 미설치 환경에서는 이 import 자체가 ImportError — 즉시 실패가 맞음.
-        from vision.pipeline_b_adapter import PipelineBColorExtractor  # noqa: I001
-        from vision.pipeline_b_extractor import load_models
-        bundle = load_models()
-        blob_downloader = None
-        if blob_cache is not None:
-            # blob extras 미설치 환경에서는 ImportError — 즉시 실패가 맞음.
-            from loaders.blob_downloader import BlobDownloader  # noqa: I001
-            blob_downloader = BlobDownloader.from_env()
-        return PipelineBColorExtractor(
-            bundle, settings.vision,
-            image_root=image_root,
-            blob_downloader=blob_downloader,
-            blob_cache_dir=blob_cache,
-        )
-    return FakeColorExtractor(cfg=settings.vlm)
+    if choice != "pipeline_b":
+        return FakeColorExtractor(cfg=settings.vlm)
+
+    from vision.color_family_preset import load_preset_views  # noqa: I001
+    from vision.pipeline_b_adapter import PipelineBColorExtractor
+    from vision.pipeline_b_extractor import load_models
+
+    bundle = load_models()
+    views = load_preset_views(settings.outfit_dedup.preset_path)
+    vision_llm = _build_vision_llm(vision_llm_choice, settings)
+
+    blob_downloader = None
+    if blob_cache is not None:
+        from loaders.blob_downloader import BlobDownloader  # noqa: I001
+        blob_downloader = BlobDownloader.from_env()
+
+    return PipelineBColorExtractor(
+        bundle=bundle,
+        cfg=settings.vision,
+        vision_llm=vision_llm,
+        llm_preset=views.llm_preset,
+        matcher_entries=views.matcher_entries,
+        family_map=views.family_map,
+        dedup_cfg=settings.outfit_dedup,
+        image_root=image_root,
+        blob_downloader=blob_downloader,
+        blob_cache_dir=blob_cache,
+    )
 
 
 def _select_llm_client(choice: str, settings: Settings) -> LLMClient:
@@ -299,7 +339,9 @@ def main() -> None:
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
     llm_client = _select_llm_client(args.llm, settings)
     color_extractor = _select_color_extractor(
-        args.color_extractor, settings, args.image_root, blob_cache=args.blob_cache
+        args.color_extractor, settings, args.image_root,
+        vision_llm_choice=args.vision_llm,
+        blob_cache=args.blob_cache,
     )
     raw_loader = _select_raw_loader(
         args.source, settings, args.tsv_dir,

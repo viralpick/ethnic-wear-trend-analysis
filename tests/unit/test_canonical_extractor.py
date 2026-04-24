@@ -26,6 +26,7 @@ from contracts.vision import (  # noqa: E402
 )
 from settings import OutfitDedupConfig, load_settings  # noqa: E402
 from vision.canonical_extractor import (  # noqa: E402
+    _build_skin_drop_config,
     _extract_member_pixels,
     _pool_canonical,
     drop_small_outfits,
@@ -129,10 +130,10 @@ def test_extract_member_pixels_returns_cleaned_pool(monkeypatch) -> None:
         "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
     )
     rgb = _make_rgb(200, 200)
-    cfg = load_settings().vision
+    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
     # bbox (x=0.1, y=0.1, w=0.5, h=0.5) → crop 100x100 (x:20..120, y:20..120).
     cleaned, primary, secondary = _extract_member_pixels(
-        rgb, (0.1, 0.1, 0.5, 0.5), _make_bundle(), cfg,
+        rgb, (0.1, 0.1, 0.5, 0.5), _make_bundle(), skin_drop_cfg,
     )
     # 상단 50 row × 100 col = 5000 garment pixel, 전부 VIBRANT (LAB 밖) → skin drop 0.
     assert cleaned.shape == (5000, 3)
@@ -151,10 +152,10 @@ def test_extract_member_pixels_skips_too_small_bbox(monkeypatch) -> None:
         "vision.canonical_extractor.run_segformer", counting_stub,
     )
     rgb = _make_rgb(200, 200)
-    cfg = load_settings().vision
+    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
     # bbox 10×10 px < MIN_CROP_PX(32).
     cleaned, primary, secondary = _extract_member_pixels(
-        rgb, (0.0, 0.0, 0.05, 0.05), _make_bundle(), cfg,
+        rgb, (0.0, 0.0, 0.05, 0.05), _make_bundle(), skin_drop_cfg,
     )
     assert cleaned.shape == (0, 3)
     assert (primary, secondary) == (0, 0)
@@ -169,7 +170,7 @@ def test_pool_canonical_concats_members(monkeypatch) -> None:
     monkeypatch.setattr(
         "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
     )
-    cfg = load_settings().vision
+    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
     rep = _outfit(0.25)
     canonical = CanonicalOutfit(
         canonical_index=0,
@@ -186,7 +187,7 @@ def test_pool_canonical_concats_members(monkeypatch) -> None:
         ],
     )
     frame_map = {"img_0": _make_rgb(200, 200), "img_1": _make_rgb(200, 200)}
-    result = _pool_canonical(canonical, frame_map, _make_bundle(), cfg)
+    result = _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg)
     assert result is not None
     # crop 100x100 × 상단 절반 garment = 5000 pixel × 2 member = 10000.
     assert result.pooled_pixels.shape == (10000, 3)
@@ -199,7 +200,7 @@ def test_pool_canonical_returns_none_when_all_empty(monkeypatch) -> None:
     monkeypatch.setattr(
         "vision.canonical_extractor.run_segformer", _seg_stub_all_background,
     )
-    cfg = load_settings().vision
+    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
     rep = _outfit(0.25)
     canonical = CanonicalOutfit(
         canonical_index=0, representative=rep,
@@ -209,7 +210,7 @@ def test_pool_canonical_returns_none_when_all_empty(monkeypatch) -> None:
         )],
     )
     frame_map = {"img_0": _make_rgb(200, 200)}
-    assert _pool_canonical(canonical, frame_map, _make_bundle(), cfg) is None
+    assert _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg) is None
 
 
 # --------------------------------------------------------------------------- #

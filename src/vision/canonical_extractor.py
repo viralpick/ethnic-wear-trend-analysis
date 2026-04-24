@@ -23,7 +23,7 @@ from contracts.common import ColorFamily
 from contracts.vision import CanonicalOutfit, EthnicOutfit, GarmentAnalysis, OutfitMember
 from settings import OutfitDedupConfig, VisionConfig
 from vision.bbox_utils import normalized_xywh_to_pixel_xyxy
-from vision.color_space import drop_skin_2layer
+from vision.color_space import SkinDropConfig, drop_skin_2layer
 from vision.outfit_dedup import dedup_post
 from vision.pipeline_b_extractor import SegBundle, run_segformer
 from vision.segformer_constants import SKIN_CLASS_IDS, WEAR_CLASS_IDS
@@ -64,11 +64,21 @@ def drop_small_outfits(
     )
 
 
+def _build_skin_drop_config(cfg: VisionConfig) -> SkinDropConfig:
+    """VisionConfig → SkinDropConfig 조립. settings(core) ↔ color_space(vision) 분리 유지용."""
+    return SkinDropConfig(
+        lab_min=tuple(cfg.skin_lab_box.min),
+        lab_max=tuple(cfg.skin_lab_box.max),
+        secondary_drop_threshold_pct=cfg.skin_drop_threshold_pct,
+        upper_ceiling_pct=cfg.skin_drop_upper_ceiling,
+    )
+
+
 def _extract_member_pixels(
     rgb: np.ndarray,
     person_bbox: tuple[float, float, float, float],
     bundle: SegBundle,
-    cfg: VisionConfig,
+    skin_drop_cfg: SkinDropConfig,
 ) -> tuple[np.ndarray, int, int]:
     """member 1개 → cleaned pixel (N, 3) + (primary_drop, secondary_drop) count.
 
@@ -83,22 +93,14 @@ def _extract_member_pixels(
     seg = run_segformer(bundle, crop_rgb)
     garment_mask = np.isin(seg, list(WEAR_CLASS_IDS))
     skin_mask = np.isin(seg, list(SKIN_CLASS_IDS))
-    lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
-    lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
-    cleaned, primary, secondary = drop_skin_2layer(
-        crop_rgb, garment_mask, skin_mask,
-        lab_min=lab_min, lab_max=lab_max,
-        secondary_drop_threshold_pct=cfg.skin_drop_threshold_pct,
-        upper_ceiling_pct=cfg.skin_drop_upper_ceiling,
-    )
-    return cleaned, primary, secondary
+    return drop_skin_2layer(crop_rgb, garment_mask, skin_mask, skin_drop_cfg)
 
 
 def _pool_canonical(
     canonical: CanonicalOutfit,
     frame_rgb_map: dict[str, np.ndarray],
     bundle: SegBundle,
-    cfg: VisionConfig,
+    skin_drop_cfg: SkinDropConfig,
 ) -> CanonicalOutfitPixels | None:
     """canonical.members 의 member 별 pixel 을 concat. empty pool → None."""
     pooled: list[np.ndarray] = []
@@ -110,7 +112,7 @@ def _pool_canonical(
         if rgb is None:
             continue
         cleaned, primary, secondary = _extract_member_pixels(
-            rgb, member.person_bbox, bundle, cfg,
+            rgb, member.person_bbox, bundle, skin_drop_cfg,
         )
         primary_total += primary
         secondary_total += secondary
@@ -159,9 +161,10 @@ def extract_canonical_pixels(
         for img_id, _rgb, analysis in post_items
     ]
     canonicals = dedup_post(filtered_items, dedup_cfg, family_map)
+    skin_drop_cfg = _build_skin_drop_config(cfg)
     out: list[CanonicalOutfitPixels] = []
     for canonical in canonicals:
-        result = _pool_canonical(canonical, frame_rgb_map, bundle, cfg)
+        result = _pool_canonical(canonical, frame_rgb_map, bundle, skin_drop_cfg)
         if result is not None:
             out.append(result)
     return out

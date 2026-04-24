@@ -18,8 +18,9 @@ import torch
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 from ultralytics import YOLO
 
-from contracts.common import ColorFamily, ColorPaletteItem
+from contracts.common import ColorPaletteItem
 from settings import SceneFilterConfig, VisionConfig
+from vision.color_family_preset import lab_to_family
 from vision.color_space import (
     drop_skin_adaptive_spatial,
     extract_colors,
@@ -148,20 +149,25 @@ def run_segformer(bundle: SegBundle, crop_rgb: np.ndarray) -> np.ndarray:
 def _pixels_to_palette(
     combined: np.ndarray, cfg: VisionConfig,
 ) -> list[ColorPaletteItem]:
-    """cleaned pixel concat → KMeans → ColorPaletteItem. pure helper."""
+    """cleaned pixel concat → KMeans → ColorPaletteItem. pure helper.
+
+    family 는 `color_family_preset.lab_to_family` rule 로 결정 (coarse 5-class).
+    Phase 5 canonical path 와 legacy diagnostics 모두 같은 classifier 를 쓰게 해서
+    HTML 비교 / Phase 4.5 dedup 과 drift 없도록 단일 source 유지.
+    """
     colors = extract_colors(
         combined, k=cfg.extract_colors.k, min_pixels=cfg.extract_colors.min_pixels,
     )
     palette: list[ColorPaletteItem] = []
     for i, c in enumerate(colors):
         r, g, b = hex_to_rgb(c["hex"]).astype(int).tolist()
+        L_lab, a_lab, b_lab = c["lab"]
         palette.append(
             ColorPaletteItem(
                 r=int(r), g=int(g), b=int(b),
                 hex_display=c["hex"],
                 name=f"pipeline_b_{i}_{c['hex'].lstrip('#').lower()}",
-                # TODO(§4.1 ④): LAB → ColorFamily 분류기 M4 에서 추가. 지금은 NEUTRAL 디폴트.
-                family=ColorFamily.NEUTRAL,
+                family=lab_to_family(float(L_lab), float(a_lab), float(b_lab)),
                 pct=c["weight"],
             )
         )

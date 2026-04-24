@@ -18,6 +18,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -224,14 +226,25 @@ def drop_skin_adaptive_spatial(
     return crop_rgb[keep_mask], drop_ratio, False
 
 
+@dataclass(frozen=True)
+class SkinDropConfig:
+    """`drop_skin_2layer` 파라미터 번들 — LAB box + 3단 분기 threshold.
+
+    numpy-free (tuple[float, float, float]) 로 core 계약 compatible. 기본값은 모듈 기본
+    SKIN_LAB_MIN/MAX + secondary 0.5 + ceiling 0.97 — 이전 signature defaults 와 동일.
+    settings.VisionConfig 로부터 조립은 호출부 책임 (`canonical_extractor._build_skin_drop_config`).
+    """
+    lab_min: tuple[float, float, float] = (16.1, 0.0, -2.6)
+    lab_max: tuple[float, float, float] = (72.0, 29.6, 43.7)
+    secondary_drop_threshold_pct: float = 0.5
+    upper_ceiling_pct: float = 0.97
+
+
 def drop_skin_2layer(
     crop_rgb: np.ndarray,
     garment_mask: np.ndarray,
     segformer_skin_mask: np.ndarray,
-    lab_min: np.ndarray | None = None,
-    lab_max: np.ndarray | None = None,
-    secondary_drop_threshold_pct: float = 0.5,
-    upper_ceiling_pct: float = 0.97,
+    config: SkinDropConfig | None = None,
 ) -> tuple[np.ndarray, int, int]:
     """Phase 3 재설계용 2-layer skin drop — primary semantic, secondary LAB box.
 
@@ -244,9 +257,7 @@ def drop_skin_2layer(
       crop_rgb: (H, W, 3) uint8 — BBOX crop 원본.
       garment_mask: (H, W) bool — 이 canonical outfit 의 의류 class pixel (upper+lower OR).
       segformer_skin_mask: (H, W) bool — face/arms/legs semantic mask (SKIN_CLASS_IDS).
-      secondary_drop_threshold_pct: garment 픽셀 중 LAB box 안 비율이 이 값 초과면
-        "skin-tone 의류" (베이지 kurta 등) 로 보고 LAB drop 생략 — 전체 보존.
-      upper_ceiling_pct: 비율이 이 값 초과면 segment 자체가 mis-seg — 빈 배열 반환.
+      config: SkinDropConfig — lab box + 분기 threshold. None 이면 기본값.
 
     로직:
       1. primary: effective_garment = garment_mask AND NOT segformer_skin_mask.
@@ -263,6 +274,7 @@ def drop_skin_2layer(
       - primary_drop_count: primary 단계에서 제거된 픽셀 수 (진단/로깅).
       - secondary_drop_count: secondary(LAB) 단계에서 제거된 픽셀 수 (진단/로깅).
     """
+    cfg = config or SkinDropConfig()
     if garment_mask.sum() == 0:
         return np.empty((0, 3), dtype=crop_rgb.dtype), 0, 0
     effective_garment = garment_mask & ~segformer_skin_mask
@@ -270,17 +282,17 @@ def drop_skin_2layer(
     if effective_garment.sum() == 0:
         return np.empty((0, 3), dtype=crop_rgb.dtype), primary_drop_count, 0
     garment_pixels = crop_rgb[effective_garment]
-    lo = SKIN_LAB_MIN if lab_min is None else np.asarray(lab_min, dtype=np.float32)
-    hi = SKIN_LAB_MAX if lab_max is None else np.asarray(lab_max, dtype=np.float32)
+    lo = np.asarray(cfg.lab_min, dtype=np.float32)
+    hi = np.asarray(cfg.lab_max, dtype=np.float32)
     lab = rgb_to_lab(garment_pixels)
     inside = np.all((lab >= lo) & (lab <= hi), axis=-1)
     inside_count = int(inside.sum())
     total = garment_pixels.shape[0]
     drop_ratio = inside_count / total
-    if drop_ratio > upper_ceiling_pct:
+    if drop_ratio > cfg.upper_ceiling_pct:
         # 거의 전부 skin-tone — segformer mis-seg 로 판단, 전체 drop. secondary_drop 에 포함.
         return np.empty((0, 3), dtype=crop_rgb.dtype), primary_drop_count, inside_count
-    if drop_ratio > secondary_drop_threshold_pct:
+    if drop_ratio > cfg.secondary_drop_threshold_pct:
         # skin-tone garment 보존 — LAB drop 하지 않음.
         return garment_pixels, primary_drop_count, 0
     cleaned = garment_pixels[~inside]

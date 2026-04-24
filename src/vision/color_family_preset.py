@@ -19,6 +19,7 @@ Rule 의 경험적 threshold 는 `outputs/color_preset/color_preset.json` 50 col
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.common import ColorFamily
@@ -71,3 +72,53 @@ def load_preset_family_map(preset_path: Path) -> dict[str, ColorFamily]:
             )
         mapping[name] = lab_to_family(float(lab[0]), float(lab[1]), float(lab[2]))
     return mapping
+
+
+@dataclass(frozen=True)
+class MatcherEntry:
+    """Phase 5 adapter ΔE76 매칭용 preset entry — name + LAB + 사전계산 family."""
+    name: str
+    lab: tuple[float, float, float]
+    family: ColorFamily
+
+
+@dataclass(frozen=True)
+class PresetViews:
+    """color_preset.json 1회 로드에서 파생된 3 view — Phase 5 adapter 용.
+
+    llm_preset: VisionLLMClient.extract_garment(preset=...) 입력 형식 ([{"name","hex"}]).
+    matcher_entries: PaletteCluster.lab → preset.lab 최단 ΔE76 매칭 후보.
+    family_map: Phase 4.5 dedup_post 입력 (preset name → ColorFamily).
+    """
+    llm_preset: list[dict[str, str]]
+    matcher_entries: list[MatcherEntry]
+    family_map: dict[str, ColorFamily]
+
+
+def load_preset_views(preset_path: Path) -> PresetViews:
+    """color_preset.json → PresetViews (3 view). 파일 1회 로드.
+
+    entry 당 lab 필수 — 없으면 RuntimeError (load_preset_family_map 과 동일 gate).
+    """
+    raw = json.loads(preset_path.read_text(encoding="utf-8"))
+    llm_preset: list[dict[str, str]] = []
+    matcher_entries: list[MatcherEntry] = []
+    family_map: dict[str, ColorFamily] = {}
+    for entry in raw:
+        name = entry["name"]
+        lab = entry.get("lab")
+        if lab is None or len(lab) != 3:
+            raise RuntimeError(
+                f"preset entry name={name!r} 에 lab 필드 없음 또는 shape 불일치. "
+                "outputs/color_preset/color_preset.json 재생성 필요."
+            )
+        lab_tuple = (float(lab[0]), float(lab[1]), float(lab[2]))
+        family = lab_to_family(*lab_tuple)
+        llm_preset.append({"name": name, "hex": entry["hex"]})
+        matcher_entries.append(MatcherEntry(name=name, lab=lab_tuple, family=family))
+        family_map[name] = family
+    return PresetViews(
+        llm_preset=llm_preset,
+        matcher_entries=matcher_entries,
+        family_map=family_map,
+    )
