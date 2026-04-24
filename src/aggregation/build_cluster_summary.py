@@ -14,7 +14,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 
-from aggregation.color_palette import build_palette
+from aggregation.cluster_palette import build_cluster_palette
 from contracts.common import (
     ContentSource,
     DataMaturity,
@@ -101,22 +101,39 @@ def _top_influencers(items: list[EnrichedContentItem], limit: int) -> list[str]:
     return result
 
 
+def _canonical_silhouette_vote(item: EnrichedContentItem) -> str | None:
+    """B3d: post 당 1표. canonicals[0] 이 rep.area_ratio desc 0 번째이므로 post 내
+    대표 outfit. rep.silhouette 이 None 이거나 canonicals 가 비어 있으면 미기여.
+    """
+    if not item.canonicals:
+        return None
+    rep_silhouette = item.canonicals[0].representative.silhouette
+    return rep_silhouette.value if rep_silhouette else None
+
+
 def make_drilldown(
     items: list[EnrichedContentItem],
     palette_cfg: PaletteConfig,
     top_post_limit: int,
     top_video_ids: list[str],
 ) -> DrilldownPayload:
-    """한 클러스터의 enriched items → DrilldownPayload."""
-    colors = [i.color for i in items if i.color is not None]
-    palette = build_palette(colors, palette_cfg)
+    """한 클러스터의 enriched items → DrilldownPayload.
 
-    silhouettes = [i.silhouette.value if i.silhouette else None for i in items]
+    Color 3층 재설계 (2026-04-24) B3c: cluster palette 는 각 item 의 post_palette 를
+    one-post-one-vote 로 flatten → ΔE76 merge → top 5 cap. post_palette 가 비어 있는
+    item (vision 비활성 smoke 등) 은 자연 빈 기여.
+
+    B3d (2026-04-24): silhouette_distribution 은 canonicals[0].representative.silhouette
+    에서 one-post-one-vote 로 집계 (post-level item.silhouette 제거). multi-outfit 이어도
+    대표 canonical 1 개만 1표. occasion / styling 은 text 기반 속성이라 post-level 유지.
+    """
+    _ = palette_cfg  # 3층 설계에서 magic 은 aggregation.cluster_palette 상수로 이동
+    silhouettes = [_canonical_silhouette_vote(i) for i in items]
     occasions = [i.occasion.value if i.occasion else None for i in items]
     stylings = [i.styling_combo.value if i.styling_combo else None for i in items]
 
     return DrilldownPayload(
-        color_palette=palette,
+        color_palette=build_cluster_palette([item.post_palette for item in items]),
         silhouette_distribution=_distribution(silhouettes),
         occasion_distribution=_distribution(occasions),
         styling_distribution=_distribution(stylings),
