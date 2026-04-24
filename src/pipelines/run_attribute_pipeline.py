@@ -70,11 +70,12 @@ def run_pipeline(
     output_dir: Path,
     target_date: date,
     llm_client: LLMClient,
+    haul_tags: frozenset[str] = frozenset(),
 ) -> None:
     batch = _load_raw(input_dir, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
 
-    normalized = normalize_batch(batch.instagram, batch.youtube)
+    normalized = normalize_batch(batch.instagram, batch.youtube, haul_tags)
     logger.info("normalized items=%d", len(normalized))
 
     states = [extract_rule_based(item) for item in normalized]
@@ -118,7 +119,8 @@ def main() -> None:
     input_dir = args.input or settings.paths.sample_data
     output_dir = args.output or settings.paths.outputs
     llm_client = FakeLLMClient(seed=DEFAULT_LLM_SEED)
-    run_pipeline(input_dir, output_dir, date.today(), llm_client)
+    haul_tags = frozenset(settings.normalization.haul_tags)
+    run_pipeline(input_dir, output_dir, date.today(), llm_client, haul_tags)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from aggregation.build_cluster_summary import (
     build_summary,
     group_by_cluster,
 )
-from contracts.common import ContentSource
+from contracts.common import ContentSource, InstagramSourceType
 from contracts.enriched import EnrichedContentItem
 from contracts.output import TrendClusterSummary
 from exporters.write_json_output import write_payload, write_summaries
@@ -33,7 +33,7 @@ from scoring.direction import (
     classify_weekly_direction,
 )
 from scoring.score_history import ScoreHistory
-from settings import Settings, ScoringConfig, load_settings
+from settings import ScoringConfig, Settings, load_settings
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -68,6 +68,22 @@ def _influencer_weight(followers: int, cfg: ScoringConfig) -> float:
     if followers >= t.mid:
         return w.mid
     return w.micro
+
+
+def _source_type_weight(source_type: str | None, cfg: ScoringConfig) -> float:
+    """M3.E — ig_source_type 분류별 Social multiplier.
+
+    normalization 단계에서 파생된 `NormalizedContentItem.ig_source_type` 값을 받아
+    `cfg.source_type_weights` 의 해당 multiplier 반환. 알 수 없는 값이면 1.0 (no-op).
+    """
+    w = cfg.source_type_weights
+    mapping = {
+        InstagramSourceType.INFLUENCER_FIXED.value: w.influencer_fixed,
+        InstagramSourceType.HASHTAG_TRACKING.value: w.hashtag_tracking,
+        InstagramSourceType.HASHTAG_HAUL.value: w.hashtag_haul,
+        InstagramSourceType.BOLLYWOOD_DECODE.value: w.bollywood_decode,
+    }
+    return mapping.get(source_type or "", 1.0)
 
 
 def _festival_match_score(
@@ -115,9 +131,11 @@ def _build_contexts(
         ig_items = [i for i in items if i.normalized.source == ContentSource.INSTAGRAM]
         yt_items = [i for i in items if i.normalized.source == ContentSource.YOUTUBE]
 
-        # Social: 인플루언서 티어 가중 engagement 합산 (spec §9.2)
+        # Social: 인플루언서 티어 × source_type 가중 engagement 합산 (spec §9.2, M3.E)
         ig_engagement = sum(
-            i.normalized.engagement_raw * _influencer_weight(i.normalized.account_followers, cfg)
+            i.normalized.engagement_raw
+            * _influencer_weight(i.normalized.account_followers, cfg)
+            * _source_type_weight(i.normalized.ig_source_type, cfg)
             for i in ig_items
         )
         yt_engagement = float(sum(i.normalized.engagement_raw for i in yt_items))
