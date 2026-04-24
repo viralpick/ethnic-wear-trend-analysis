@@ -12,6 +12,30 @@ logging:
   level: INFO
 
 # --------------------------------------------------------------------------- #
+# M3.E — Raw → Normalized 단계의 파생 분류 규칙
+# haul_tags: HASHTAG_TRACKING 중 이 태그가 하나라도 섞이면 HASHTAG_HAUL 로 승격.
+# roadmap seed (5개) + 2026-04-24 실 DB 1,139 post 분포 조사에서 추가 (10개) = 15개.
+# 모두 lowercase, `#` 없이. 로더 스키마는 ajio/kurta/ethnic haul 미관측이지만 미래 수집 대비 유지.
+# --------------------------------------------------------------------------- #
+normalization:
+  haul_tags:
+    - myntrahaul
+    - ajiohaul
+    - kurtahaul
+    - ethnichaul
+    - myntrafinds
+    - myntrahauls
+    - meeshohaul
+    - amazonkurtihaul
+    - kurtasethaul
+    - haul
+    - meeshofinds
+    - amazonfinds
+    - flipkartfinds
+    - budgetfinds
+    - whatiorderedvswhatigot
+
+# --------------------------------------------------------------------------- #
 # Step 3-B (scoring / vlm / palette / export / pipeline) 설정
 # 아래 값은 1차 구현용 초안. 4/24 싱크에서 실제 3일치 데이터로 캘리브레이션한다.
 # 코드에는 magic number 를 두지 않고 전부 여기서 읽는다.
@@ -53,15 +77,26 @@ scoring:
     early_post_count_threshold: 10
 
   # spec §9.2 Social — 인플루언서 티어 가중치.
+  # 2026-04-24 완만화: 기존 3.0/2.0/1.5/1.0 은 mega 가 cluster Social 을 독점하는 경향이 강해
+  # micro 가 다수 포스트로 올려놓은 cluster 가 가려짐. max 를 2.0 으로 낮춰 engagement 양극화
+  # 증폭을 줄이고 micro/mid 기여가 살아나도록 조정. Post 수 비례성은 그대로 유지.
   influencer_weights:
-    mega: 3.0      # 팔로워 ≥ 1_000_000
-    macro: 2.0     # 100_000 ≤ 팔로워 < 1_000_000
-    mid: 1.5       # 10_000 ≤ 팔로워 < 100_000
+    mega: 2.0      # 팔로워 ≥ 1_000_000
+    macro: 1.5     # 100_000 ≤ 팔로워 < 1_000_000
+    mid: 1.2       # 10_000 ≤ 팔로워 < 100_000
     micro: 1.0     # 팔로워 < 10_000
   influencer_tier_thresholds:
     mega: 1000000
     macro: 100000
     mid: 10000
+
+  # M3.E — ig_source_type 별 Social multiplier. haul > hashtag > bollywood > profile.
+  # Social weighted_engagement = engagement_raw × influencer_weight × source_type_weight.
+  source_type_weights:
+    influencer_fixed: 1.0      # profile baseline
+    hashtag_tracking: 1.2      # 트렌드 발견 가중
+    hashtag_haul: 1.5          # 구매 검증 시그널 (가장 강함)
+    bollywood_decode: 1.1      # seed (ver2 "Bollywood=seed / Haul=검증")
 
   # spec §9.2 YouTube — V × a + views × b + view_growth × c (minmax 는 orchestrator 가 수행).
   youtube_factor_weights:

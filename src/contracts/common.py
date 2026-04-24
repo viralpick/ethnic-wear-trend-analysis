@@ -190,9 +190,12 @@ class ContentSource(StrEnum):
 
 
 class InstagramSourceType(StrEnum):
-    # spec §3.1 A/B/C — Instagram 수집 채널 구분
+    # spec §3.1 A/B/C — Instagram 수집 채널 구분 + M3.E 하울 파생 분류.
+    # HASHTAG_HAUL 은 raw 크롤러 값이 아니라 normalization 단계에서 HASHTAG_TRACKING 중
+    # haul 해시태그를 포함한 post 를 승격시킨 derived 값. raw contract 에는 사용 안 함.
     INFLUENCER_FIXED = "influencer_fixed"
     HASHTAG_TRACKING = "hashtag_tracking"
+    HASHTAG_HAUL = "hashtag_haul"
     BOLLYWOOD_DECODE = "bollywood_decode"
 
 

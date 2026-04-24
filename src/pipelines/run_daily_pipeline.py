@@ -155,7 +155,8 @@ def run_pipeline(
     batch = _load_raw(loader, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
 
-    normalized = normalize_batch(batch.instagram, batch.youtube)
+    haul_tags = frozenset(settings.normalization.haul_tags)
+    normalized = normalize_batch(batch.instagram, batch.youtube, haul_tags)
     states = [extract_rule_based(item) for item in normalized]
     apply_llm_extraction(states, llm_client)
     enriched = _assign_clusters(states)

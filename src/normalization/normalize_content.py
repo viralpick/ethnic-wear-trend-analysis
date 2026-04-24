@@ -1,7 +1,7 @@
 """Raw (IG/YT) → NormalizedContentItem 변환 (spec §5.2 전처리 단계)."""
 from __future__ import annotations
 
-from contracts.common import ContentSource
+from contracts.common import ContentSource, InstagramSourceType
 from contracts.normalized import NormalizedContentItem
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
 
@@ -14,7 +14,28 @@ def _as_hashtag_token(tag: str) -> str:
     return cleaned if cleaned.startswith("#") else f"#{cleaned}"
 
 
-def normalize_instagram_post(post: RawInstagramPost) -> NormalizedContentItem:
+def _classify_ig_source_type(
+    post: RawInstagramPost,
+    haul_tags: frozenset[str],
+) -> InstagramSourceType:
+    """M3.E — HASHTAG_TRACKING post 의 해시태그가 haul_tags 와 겹치면 HASHTAG_HAUL 로 승격.
+
+    raw contract 의 source_type 은 크롤러 원본값 그대로 유지한다. 분석 파생 분류는
+    NormalizedContentItem.ig_source_type 에만 기록 → 재수집 없이 분류 규칙만 갱신 가능.
+    비교 기준: lowercase, leading `#` 제거.
+    """
+    if post.source_type != InstagramSourceType.HASHTAG_TRACKING or not haul_tags:
+        return post.source_type
+    post_tags = {t.lstrip("#").lower() for t in post.hashtags}
+    if post_tags & haul_tags:
+        return InstagramSourceType.HASHTAG_HAUL
+    return post.source_type
+
+
+def normalize_instagram_post(
+    post: RawInstagramPost,
+    haul_tags: frozenset[str] = frozenset(),
+) -> NormalizedContentItem:
     """IG: text_blob = caption + hashtags, hashtags = post.hashtags, images = post.image_urls."""
     text_blob = post.caption_text
     if post.hashtags:
@@ -32,7 +53,7 @@ def normalize_instagram_post(post: RawInstagramPost) -> NormalizedContentItem:
         post_date=post.post_date,
         engagement_raw=engagement,
         account_followers=post.account_followers,
-        ig_source_type=post.source_type.value,
+        ig_source_type=_classify_ig_source_type(post, haul_tags).value,
         account_handle=post.account_handle,
     )
 
@@ -60,7 +81,8 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
 def normalize_batch(
     instagram_posts: list[RawInstagramPost],
     youtube_videos: list[RawYouTubeVideo],
+    haul_tags: frozenset[str] = frozenset(),
 ) -> list[NormalizedContentItem]:
-    ig = [normalize_instagram_post(p) for p in instagram_posts]
+    ig = [normalize_instagram_post(p, haul_tags) for p in instagram_posts]
     yt = [normalize_youtube_video(v) for v in youtube_videos]
     return ig + yt

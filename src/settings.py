@@ -40,6 +40,16 @@ class UnknownSignalsConfig(BaseModel):
     threshold: int = 10
 
 
+class NormalizationConfig(BaseModel):
+    """Raw → NormalizedContentItem 단계의 파생 분류 규칙.
+
+    M3.E 하울 파생: post.hashtags 중 이 리스트와 겹치는 게 있으면 HASHTAG_TRACKING →
+    HASHTAG_HAUL 로 승격 (raw source_type 은 건드리지 않고 normalized 계층에서만 반영).
+    모두 lowercase, `#` 없이 저장.
+    """
+    haul_tags: list[str] = Field(default_factory=list)
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
 
@@ -83,6 +93,19 @@ class InfluencerTierThresholds(BaseModel):
     mid: int
 
 
+class SourceTypeWeights(BaseModel):
+    """M3.E — ig_source_type 별 Social score multiplier.
+
+    Social weighted_engagement 계산: engagement_raw × influencer_weight × source_type_weight.
+    haul > hashtag > bollywood > profile 순서 (roadmap M3.E, "Bollywood=seed /
+    Haul=검증 / YouTube=설명" ver2 방향).
+    """
+    influencer_fixed: float = 1.0
+    hashtag_tracking: float = 1.2
+    hashtag_haul: float = 1.5
+    bollywood_decode: float = 1.1
+
+
 class YouTubeFactorWeights(BaseModel):
     video_count: float
     views: float
@@ -119,6 +142,7 @@ class ScoringConfig(BaseModel):
     lifecycle: LifecycleConfig
     influencer_weights: InfluencerWeights
     influencer_tier_thresholds: InfluencerTierThresholds
+    source_type_weights: SourceTypeWeights = SourceTypeWeights()
     youtube_factor_weights: YouTubeFactorWeights
     cultural_factor_weights: CulturalFactorWeights
     cultural_festival_boost: float
@@ -343,6 +367,7 @@ class Settings(BaseSettings):
     paths: Paths
     unknown_signals: UnknownSignalsConfig = UnknownSignalsConfig()
     logging: LoggingConfig = LoggingConfig()
+    normalization: NormalizationConfig = NormalizationConfig()
 
     pipeline: PipelineConfig
     scoring: ScoringConfig
