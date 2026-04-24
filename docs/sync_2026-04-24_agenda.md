@@ -42,7 +42,22 @@
 
 `collectify/youtube/null/{video_id}.mp4` — `null` 자리가 channel_id 였을 가능성. 경로 규약 확정 요청.
 
-### 1.5 Blob 경로 규약 (Azure Blob loader 개발용)
+### 1.5 `youtube_posting.view_count` 갱신 여부 확인 (2026-04-23 추가)
+
+spec §9 YouTube Score 공식:
+
+```
+view_growth = (이번 주 조회수 합산 - 지난 주 조회수 합산) / 지난 주
+youtube_raw = V × 0.3 + normalize(views) × 0.4 + normalize(view_growth) × 0.3
+```
+
+`view_growth` 계산은 분석 파이프라인이 score_history에 클러스터별 `youtube_views_total`을 매일 저장하는 방식으로 우리 스코프에서 구현 가능.
+
+단, 의미 있는 growth 값이 나오려면 **동일 영상의 view_count가 시간이 지나면서 갱신**되어야 함. 현재 `india_ai_fashion_youtube_posting` 테이블이 최초 수집 시점 스냅샷만 유지하는지, 아니면 주기적으로 재수집해 view_count를 업데이트하는지 확인 필요.
+
+→ 크롤러가 YT 영상 view_count를 주기 갱신하는지? 아니라면 주기 갱신 가능한지?
+
+### 1.6 Blob 경로 규약 (Azure Blob loader 개발용)
 
 spec §10 이후 우리 `src/loaders/blob_raw_loader.py` 를 구현할 예정. 아래 규약 확정 필요:
 
