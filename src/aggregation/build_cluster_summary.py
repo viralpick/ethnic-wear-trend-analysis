@@ -81,13 +81,24 @@ def _top_posts(
 
 
 def _top_influencers(items: list[EnrichedContentItem], limit: int) -> list[str]:
-    """TODO(§8.2): 현재 normalized 뷰에 account_handle 이 없다.
-
-    raw IG 포스트로부터 주입되도록 post→account 매핑을 build_cluster_summary 진입점에
-    넘기는 확장을 M3 에서 추가 예정. 현재는 빈 리스트.
-    """
-    _ = (items, limit)
-    return []
+    """engagement 상위 IG 계정 핸들 목록 (account_handle 있는 것만)."""
+    from contracts.common import ContentSource  # noqa: PLC0415
+    ig = [
+        i for i in items
+        if i.normalized.source == ContentSource.INSTAGRAM
+        and i.normalized.account_handle
+    ]
+    ig.sort(key=lambda i: -i.normalized.engagement_raw)
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in ig:
+        handle = item.normalized.account_handle
+        if handle not in seen:
+            seen.add(handle)
+            result.append(handle)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def make_drilldown(

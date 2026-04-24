@@ -183,12 +183,39 @@ def _parse_args() -> argparse.Namespace:
         help="pipeline_b 모드에서 URL basename 매핑용 이미지 디렉토리 (예: sample_data/image).",
     )
     parser.add_argument(
-        "--source", choices=["local", "tsv"], default="local",
-        help="raw source loader 선택. local=sample JSON, tsv=png_india_ai_fashion_*.tsv.",
+        "--blob-cache", type=Path, default=None,
+        help="pipeline_b + Azure Blob 모드: 다운로드 이미지 캐시 디렉토리. "
+             "지정 시 AZURE_STORAGE_* 환경변수 필요.",
+    )
+    parser.add_argument(
+        "--source", choices=["local", "tsv", "starrocks"], default="local",
+        help="raw source loader 선택. local=sample JSON, tsv=TSV 파일, starrocks=StarRocks 직접.",
     )
     parser.add_argument(
         "--tsv-dir", type=Path, default=None,
         help="--source tsv 일 때 TSV 디렉토리 (기본: settings.paths.sample_data).",
+    )
+    # StarRocks 로드 모드 옵션
+    parser.add_argument(
+        "--window-mode", choices=["count", "date"], default=None,
+        help="StarRocks 로드 모드. count=갯수 기준(LIMIT/OFFSET), date=기간 기준. "
+             "미지정 시 settings.pipeline.window_mode 사용.",
+    )
+    parser.add_argument(
+        "--page-size", type=int, default=None,
+        help="count 모드: 배치당 포스트 수 (기본: settings.pipeline.page_size).",
+    )
+    parser.add_argument(
+        "--page-index", type=int, default=None,
+        help="count 모드: 몇 번째 배치인지 직접 지정. 미지정 시 (target_date - collection_start).days.",
+    )
+    parser.add_argument(
+        "--window-days", type=int, default=None,
+        help="date 모드: target_date 기준 N일 이내 포스트 로드 (기본: settings.pipeline.window_days).",
+    )
+    parser.add_argument(
+        "--llm", choices=["fake", "azure-openai"], default="fake",
+        help="LLM 클라이언트 선택. azure-openai 는 AZURE_OPENAI_* 환경변수 필요.",
     )
     return parser.parse_args()
 
@@ -200,7 +227,10 @@ def _resolve_target_date(cli: str | None, settings_target: date | None) -> date:
 
 
 def _select_color_extractor(
-    choice: str, settings: Settings, image_root: Path | None
+    choice: str,
+    settings: Settings,
+    image_root: Path | None,
+    blob_cache: Path | None = None,
 ) -> ColorExtractor:
     """CLI flag 기반 ColorExtractor DI. pipeline_b 는 lazy import (vision extras 격리)."""
     if choice == "pipeline_b":
@@ -208,14 +238,56 @@ def _select_color_extractor(
         from vision.pipeline_b_adapter import PipelineBColorExtractor  # noqa: I001
         from vision.pipeline_b_extractor import load_models
         bundle = load_models()
-        return PipelineBColorExtractor(bundle, settings.vision, image_root=image_root)
+        blob_downloader = None
+        if blob_cache is not None:
+            # blob extras 미설치 환경에서는 ImportError — 즉시 실패가 맞음.
+            from loaders.blob_downloader import BlobDownloader  # noqa: I001
+            blob_downloader = BlobDownloader.from_env()
+        return PipelineBColorExtractor(
+            bundle, settings.vision,
+            image_root=image_root,
+            blob_downloader=blob_downloader,
+            blob_cache_dir=blob_cache,
+        )
     return FakeColorExtractor(cfg=settings.vlm)
 
 
+def _select_llm_client(choice: str, settings: Settings) -> LLMClient:
+    """CLI flag 기반 LLMClient DI. azure-openai 는 lazy import (openai 패키지 필요)."""
+    if choice == "azure-openai":
+        from attributes.azure_openai_llm_client import AzureOpenAILLMClient  # noqa: I001
+        return AzureOpenAILLMClient(seed=DEFAULT_LLM_SEED)
+    return FakeLLMClient(seed=DEFAULT_LLM_SEED)
+
+
 def _select_raw_loader(
-    choice: str, settings: Settings, tsv_dir: Path | None
+    choice: str,
+    settings: Settings,
+    tsv_dir: Path | None,
+    window_mode: str | None = None,
+    page_size: int | None = None,
+    page_index: int | None = None,
+    window_days: int | None = None,
+    target_date: date | None = None,
 ) -> RawLoader:
     """CLI flag 기반 RawLoader DI."""
+    if choice == "starrocks":
+        from loaders.starrocks_raw_loader import StarRocksRawLoader  # noqa: I001 — lazy (db extras)
+        mode = window_mode or settings.pipeline.window_mode
+        p_size = page_size or settings.pipeline.page_size
+        w_days = window_days or settings.pipeline.window_days
+        # page_index 직접 지정 시 collection_start 를 역산해서 loader 에 주입.
+        if page_index is not None and target_date is not None:
+            from datetime import timedelta
+            collection_start = target_date - timedelta(days=page_index)
+        else:
+            collection_start = settings.pipeline.collection_start_date
+        return StarRocksRawLoader.from_env(
+            window_mode=mode,
+            page_size=p_size,
+            window_days=w_days,
+            collection_start=collection_start,
+        )
     if choice == "tsv":
         return TsvRawLoader(tsv_dir or settings.paths.sample_data)
     return LocalSampleLoader(settings.paths.sample_data)
@@ -225,9 +297,18 @@ def main() -> None:
     args = _parse_args()
     settings = load_settings()
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
-    llm_client = FakeLLMClient(seed=DEFAULT_LLM_SEED)
-    color_extractor = _select_color_extractor(args.color_extractor, settings, args.image_root)
-    raw_loader = _select_raw_loader(args.source, settings, args.tsv_dir)
+    llm_client = _select_llm_client(args.llm, settings)
+    color_extractor = _select_color_extractor(
+        args.color_extractor, settings, args.image_root, blob_cache=args.blob_cache
+    )
+    raw_loader = _select_raw_loader(
+        args.source, settings, args.tsv_dir,
+        window_mode=args.window_mode,
+        page_size=args.page_size,
+        page_index=args.page_index,
+        window_days=args.window_days,
+        target_date=target,
+    )
     run_pipeline(settings, target, llm_client, color_extractor, raw_loader=raw_loader)
 
 
