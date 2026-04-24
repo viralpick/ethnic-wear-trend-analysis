@@ -15,9 +15,12 @@ Pipeline B 재설계 (LLM-centric) 에서 BBOX 는 Phase 2 LLM (`VisionLLMClient
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 from contracts.common import ColorFamily
 from contracts.vision import CanonicalOutfit, EthnicOutfit, GarmentAnalysis, OutfitMember
@@ -26,7 +29,12 @@ from vision.bbox_utils import normalized_xywh_to_pixel_xyxy
 from vision.color_space import SkinDropConfig, drop_skin_2layer
 from vision.outfit_dedup import dedup_post
 from vision.pipeline_b_extractor import SegBundle, run_segformer
-from vision.segformer_constants import SKIN_CLASS_IDS, WEAR_CLASS_IDS
+from vision.segformer_constants import (
+    DRESS_CLASS_IDS,
+    LOWER_CLASS_IDS,
+    SKIN_CLASS_IDS,
+    UPPER_CLASS_IDS,
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,38 @@ def drop_small_outfits(
     )
 
 
+def _select_wear_class_ids(rep: EthnicOutfit) -> frozenset[int]:
+    """B1: canonical representative 의 Gemini ethnic 판정으로 segformer class pool 결정.
+
+    규칙 (configs/garment_vocab.yaml 기반 매핑을 대체):
+      - dress_as_single=True + upper_is_ethnic=True  → DRESS_CLASS_IDS
+        (dress_as_single 시 upper_is_ethnic 을 dress 전체 ethnic 여부로 재활용)
+      - dress_as_single=True + upper_is_ethnic!=True → frozenset() (non-ethnic dress drop)
+      - 2-piece: upper_is_ethnic=True → UPPER, lower_is_ethnic=True → LOWER (union 가능)
+      - 모두 False/None → frozenset() (pool 제외, 라벨은 상위 canonical 에 보존)
+
+    None 은 보수적으로 False 취급 — Gemini 누락 시 pool 확장 방지. A3 pilot 100% fill
+    이지만 방어적. None 발생은 WARNING 으로 가시화 — 실패 숨김 금지 (CLAUDE.md #4).
+    """
+    if rep.dress_as_single:
+        if rep.upper_is_ethnic is None:
+            log.warning(
+                "canonical_ethnic_flag_missing dress_as_single=True upper_is_ethnic=None",
+            )
+        return DRESS_CLASS_IDS if rep.upper_is_ethnic else frozenset()
+    if rep.upper_is_ethnic is None or rep.lower_is_ethnic is None:
+        log.warning(
+            "canonical_ethnic_flag_missing upper=%s lower=%s — treated as False",
+            rep.upper_is_ethnic, rep.lower_is_ethnic,
+        )
+    ids: set[int] = set()
+    if rep.upper_is_ethnic:
+        ids.update(UPPER_CLASS_IDS)
+    if rep.lower_is_ethnic:
+        ids.update(LOWER_CLASS_IDS)
+    return frozenset(ids)
+
+
 def _build_skin_drop_config(cfg: VisionConfig) -> SkinDropConfig:
     """VisionConfig → SkinDropConfig 조립. settings(core) ↔ color_space(vision) 분리 유지용."""
     return SkinDropConfig(
@@ -79,10 +119,13 @@ def _extract_member_pixels(
     person_bbox: tuple[float, float, float, float],
     bundle: SegBundle,
     skin_drop_cfg: SkinDropConfig,
+    wear_class_ids: frozenset[int],
 ) -> tuple[np.ndarray, int, int]:
     """member 1개 → cleaned pixel (N, 3) + (primary_drop, secondary_drop) count.
 
     person_bbox 가 너무 작아 crop 이 MIN_CROP_PX 미만이면 empty 반환 (skip signal).
+    wear_class_ids 는 B1 ethnic-aware pool — `_select_wear_class_ids` 결과를 pool 당 1회
+    계산해 member 호출마다 재전달.
     """
     h, w = rgb.shape[:2]
     pixel_box = normalized_xywh_to_pixel_xyxy(person_bbox, h, w)
@@ -91,7 +134,7 @@ def _extract_member_pixels(
     x1, y1, x2, y2 = pixel_box
     crop_rgb = rgb[y1:y2, x1:x2]
     seg = run_segformer(bundle, crop_rgb)
-    garment_mask = np.isin(seg, list(WEAR_CLASS_IDS))
+    garment_mask = np.isin(seg, list(wear_class_ids))
     skin_mask = np.isin(seg, list(SKIN_CLASS_IDS))
     return drop_skin_2layer(crop_rgb, garment_mask, skin_mask, skin_drop_cfg)
 
@@ -102,7 +145,15 @@ def _pool_canonical(
     bundle: SegBundle,
     skin_drop_cfg: SkinDropConfig,
 ) -> CanonicalOutfitPixels | None:
-    """canonical.members 의 member 별 pixel 을 concat. empty pool → None."""
+    """canonical.members 의 member 별 pixel 을 concat. empty pool → None.
+
+    B1: wear_class_ids 는 canonical.representative 의 upper/lower_is_ethnic +
+    dress_as_single 로 pool 당 1회 결정. is_ethnic=False 라 pool 이 비면 palette 계산
+    대상에서 제외 (라벨 보존은 상위 CanonicalOutfit 에 이미 있음).
+    """
+    wear_class_ids = _select_wear_class_ids(canonical.representative)
+    if not wear_class_ids:
+        return None
     pooled: list[np.ndarray] = []
     per_image: dict[str, int] = {}
     primary_total = 0
@@ -112,7 +163,7 @@ def _pool_canonical(
         if rgb is None:
             continue
         cleaned, primary, secondary = _extract_member_pixels(
-            rgb, member.person_bbox, bundle, skin_drop_cfg,
+            rgb, member.person_bbox, bundle, skin_drop_cfg, wear_class_ids,
         )
         primary_total += primary
         secondary_total += secondary
@@ -141,7 +192,7 @@ def extract_canonical_pixels(
     cfg: VisionConfig,
     dedup_cfg: OutfitDedupConfig,
     family_map: dict[str, ColorFamily],
-) -> list[CanonicalOutfitPixels]:
+) -> list[tuple[CanonicalOutfit, CanonicalOutfitPixels | None]]:
     """post 1개 orchestrator — size drop → dedup → canonical 별 pixel pool.
 
     Args:
@@ -152,8 +203,10 @@ def extract_canonical_pixels(
       dedup_cfg, family_map: Phase 4.5 dedup_post 에 전달.
 
     Returns:
-      list[CanonicalOutfitPixels]. canonical_index asc 순. pooled_pixels 가 비는 canonical
-      은 결과에서 제외 (Phase 4 KMeans 가 빈 입력을 받지 않게).
+      list[(CanonicalOutfit, CanonicalOutfitPixels | None)]. `canonical_index` asc 순.
+      pool 이 None (pixels 비거나 non-ethnic) 인 canonical 도 **라벨 보존용으로 함께
+      반환** — B3 adapter 가 `EnrichedContentItem.canonicals` 에 태우기 위함. pool
+      None 은 palette 계산 skip signal (빈 입력을 KMeans 에 먹이지 않음).
     """
     frame_rgb_map = {img_id: rgb for img_id, rgb, _ in post_items}
     filtered_items = [
@@ -162,9 +215,8 @@ def extract_canonical_pixels(
     ]
     canonicals = dedup_post(filtered_items, dedup_cfg, family_map)
     skin_drop_cfg = _build_skin_drop_config(cfg)
-    out: list[CanonicalOutfitPixels] = []
+    out: list[tuple[CanonicalOutfit, CanonicalOutfitPixels | None]] = []
     for canonical in canonicals:
         result = _pool_canonical(canonical, frame_rgb_map, bundle, skin_drop_cfg)
-        if result is not None:
-            out.append(result)
+        out.append((canonical, result))
     return out

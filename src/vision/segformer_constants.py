@@ -52,3 +52,15 @@ WEAR_CLASS_IDS: frozenset[int] = frozenset(
 SKIN_CLASS_IDS: frozenset[int] = frozenset(
     {cid for cid, lbl in ATR_LABELS.items() if lbl in SKIN_LABELS}
 )
+
+# B1 (Color 3층 재설계) — canonical_extractor 가 Gemini upper/lower_is_ethnic +
+# dress_as_single 신호로 role 별 pool 을 조합해 쓰기 위한 sub-set. union == WEAR_CLASS_IDS.
+UPPER_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl == "upper-clothes"}
+)
+LOWER_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl in {"pants", "skirt"}}
+)
+DRESS_CLASS_IDS: frozenset[int] = frozenset(
+    {cid for cid, lbl in ATR_LABELS.items() if lbl == "dress"}
+)
