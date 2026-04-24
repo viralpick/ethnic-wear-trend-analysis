@@ -21,7 +21,7 @@ from ultralytics import YOLO
 from contracts.common import ColorFamily, ColorPaletteItem
 from settings import SceneFilterConfig, VisionConfig
 from vision.color_space import (
-    drop_skin_adaptive,
+    drop_skin_adaptive_spatial,
     extract_colors,
     hex_to_rgb,
 )
@@ -31,44 +31,15 @@ from vision.garment_instance import (
     aggregate_post_palette,
     classify_single_color,
 )
-from vision.scene_filter import FilterVerdict, NoopSceneFilter, SceneFilter
+from vision.scene_filter import FilterVerdict, NoopSceneFilter, PersonVerdict, SceneFilter
 
-# ATR 18-class segformer label 매핑 (동료 PoC 에서 인용).
-# spec §4.1 ① GarmentType (kurta_set/anarkali 등) 과 직접 매칭 X — ATR 은 서양 복식.
-# 이 모듈의 역할은 "의류 픽셀 vs 피부/배경 분리"만. garment_type 분류는 텍스트/LLM 담당.
-ATR_LABELS: dict[int, str] = {
-    0: "background",
-    1: "hat",
-    2: "hair",
-    3: "sunglasses",
-    4: "upper-clothes",
-    5: "skirt",
-    6: "pants",
-    7: "dress",
-    8: "belt",
-    9: "left-shoe",
-    10: "right-shoe",
-    11: "bag",
-    12: "skin-face",
-    13: "skin-face",
-    14: "skin-left-arm",
-    15: "skin-right-arm",
-    16: "skin-left-leg",
-    17: "skin-right-leg",
-}
-WEAR_KEEP: frozenset[str] = frozenset({
-    "upper-clothes", "pants", "skirt", "dress", "hat", "left-shoe", "right-shoe",
-})
-# ATR 의 피부 클래스 라벨 (bbox false positive 필터용). "진짜 사람" 검증에 사용 —
-# 동상/마네킹/제품샷은 skin class pixel 이 거의 0.
-SKIN_LABELS: frozenset[str] = frozenset({
-    "skin-face", "skin-left-arm", "skin-right-arm", "skin-left-leg", "skin-right-leg",
-})
-_WEAR_CLASS_IDS: frozenset[int] = frozenset(
-    {cid for cid, lbl in ATR_LABELS.items() if lbl in WEAR_KEEP}
-)
-_SKIN_CLASS_IDS: frozenset[int] = frozenset(
-    {cid for cid, lbl in ATR_LABELS.items() if lbl in SKIN_LABELS}
+# ATR segformer class id / wear / skin 상수는 `vision.segformer_constants` single source.
+# Phase 3 `canonical_extractor` 와 공유 — 이쪽에서 재정의하면 두 경로가 drift 할 위험.
+from vision.segformer_constants import (  # noqa: E402
+    ATR_LABELS,
+    SKIN_CLASS_IDS,
+    WEAR_CLASS_IDS,
+    WEAR_KEEP,
 )
 
 MIN_CROP_PX = 32  # bbox 짧은 변이 이 값 미만이면 crop drop. smoke overlay 에서도 재사용.
@@ -212,7 +183,7 @@ class _ExtractCtx:
 
 @dataclass(frozen=True)
 class FrameDropRecord:
-    """scene_filter 에 의해 drop 된 frame 기록 — reason + prompt scores.
+    """scene_filter Stage 1 에 의해 drop 된 frame 기록 — reason + prompt scores.
 
     HTML 에 bias 감사용으로 노출. frame_id 는 smoke 에서 원본 이미지 경로와 재매핑.
     """
@@ -221,11 +192,26 @@ class FrameDropRecord:
 
 
 @dataclass(frozen=True)
+class BBoxDropRecord:
+    """scene_filter Stage 2 에 의해 drop 된 person BBOX 기록 — reason + prompt scores.
+
+    stage=stage1_mix_needs_stage2 frame 에서만 발생. HTML bias 감사용.
+    """
+    frame_id: str
+    bbox_idx: int
+    verdict: PersonVerdict
+
+
+@dataclass(frozen=True)
 class ExtractStats:
-    """extract_instances 부가 통계 — diagnostics 생성에 필요한 frame 단위 집계."""
+    """extract_instances 부가 통계 — diagnostics 생성에 필요한 frame / bbox 단위 집계.
+
+    filtered_out: Stage 1 frame drop. bbox_filtered_out: Stage 2 BBOX drop.
+    """
     yolo_detected_persons: int
     fallback_triggered: bool
     filtered_out: list[FrameDropRecord]
+    bbox_filtered_out: list[BBoxDropRecord]
 
 
 def extract_instances(
@@ -233,8 +219,16 @@ def extract_instances(
 ) -> tuple[list[GarmentInstance], ExtractStats]:
     """frame × person_bbox × garment_class 단위 GarmentInstance + scene filter drop 집계.
 
-    `bundle.scene_filter.accept` 판정이 실패하면 frame 자체를 skip (YOLO+segformer 미호출 →
-    비용 절감). pass 인 frame 만 person detect → segformer 진행.
+    Stage 1 (`scene_filter.accept`) 실패하면 frame skip (YOLO+segformer 미호출). pass 면
+    stage 에 따라 BBOX 처리를 달리한다:
+      - stage1_pass / disabled → 모든 bbox 진행 (기존 동작)
+      - stage1_mix_needs_stage2 → YOLO detect 후 classify_persons 로 BBOX 재판정.
+        passed BBOX 만 segformer 진행, 나머지는 BBoxDropRecord 로 기록
+      - stage1_reject → frame drop (filtered_out 기록)
+
+    Stage 2 토글은 SceneFilterConfig.stage2_enabled 가 아닌 pipeline_b_extractor 호출부에서
+    강제할 수 있도록 cfg.scene_filter.stage2_enabled 체크. False 면 stage=mix 여도 bbox
+    전체 진행 (Stage 2 옵트아웃 경로).
 
     단일 iter_frames 순회 — `ImageFrameSource.iter_frames()` 는 매 호출마다 PIL 로 이미지를
     다시 열어 disk 재로딩 + YOLO 이중 추론 위험이 있어 diagnostics 가 별도 순회하지 않음.
@@ -248,6 +242,8 @@ def extract_instances(
     yolo_count = 0
     fallback = False
     filtered: list[FrameDropRecord] = []
+    bbox_filtered: list[BBoxDropRecord] = []
+    stage2_enabled = cfg.scene_filter.stage2_enabled
     for frame in source.iter_frames():
         verdict = bundle.scene_filter.accept(frame.rgb, frame.id)
         if not verdict.passed:
@@ -259,12 +255,30 @@ def extract_instances(
             fallback = True
             h, w = frame.rgb.shape[:2]
             boxes = [(0, 0, w, h)]
-        for bbox_idx, bbox in enumerate(boxes):
-            instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
+        # Stage 2 분기: mix signal + 토글 켜짐 + bbox 존재할 때만 per-bbox 판정.
+        # Edge case: YOLO 미탐으로 fallback bbox (전체 이미지) 가 주입된 경우에도 분기 탐.
+        # fallback bbox 는 per-person 의미가 퇴색되지만 stage2 의 stricter threshold 에서
+        # drop 될 가능성이 높아 "애매한 frame 은 보수적 drop" 이라는 안전 동작.
+        if verdict.stage == "stage1_mix_needs_stage2" and stage2_enabled and boxes:
+            person_verdicts = bundle.scene_filter.classify_persons(frame.rgb, boxes)
+            kept: list[tuple[int, tuple[int, int, int, int]]] = []
+            for idx, pv in enumerate(person_verdicts):
+                if pv.passed:
+                    kept.append((idx, pv.bbox))
+                else:
+                    bbox_filtered.append(BBoxDropRecord(
+                        frame_id=frame.id, bbox_idx=idx, verdict=pv,
+                    ))
+            for bbox_idx, bbox in kept:
+                instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
+        else:
+            for bbox_idx, bbox in enumerate(boxes):
+                instances.extend(_instances_from_bbox(frame, bbox_idx, bbox, ctx))
     stats = ExtractStats(
         yolo_detected_persons=yolo_count,
         fallback_triggered=fallback,
         filtered_out=filtered,
+        bbox_filtered_out=bbox_filtered,
     )
     return instances, stats
 
@@ -278,8 +292,8 @@ def _is_person_bbox(seg: np.ndarray, cfg: VisionConfig) -> bool:
     area = int(seg.size)
     if area == 0:
         return False
-    skin_count = int(np.isin(seg, tuple(_SKIN_CLASS_IDS)).sum())
-    garment_count = int(np.isin(seg, tuple(_WEAR_CLASS_IDS)).sum())
+    skin_count = int(np.isin(seg, tuple(SKIN_CLASS_IDS)).sum())
+    garment_count = int(np.isin(seg, tuple(WEAR_CLASS_IDS)).sum())
     skin_ratio = skin_count / area
     garment_ratio = garment_count / area
     if skin_ratio < cfg.min_skin_ratio_for_person:
@@ -309,15 +323,19 @@ def _instances_from_bbox(
     if not _is_person_bbox(seg, cfg):
         return []
     out: list[GarmentInstance] = []
+    skin_class_mask = np.isin(seg, list(SKIN_CLASS_IDS))
     for class_id, label in ATR_LABELS.items():
         if label not in WEAR_KEEP:
             continue
-        pixels = crop_rgb[seg == class_id]
-        if pixels.shape[0] < min_pixels:
+        garment_mask = seg == class_id
+        if int(garment_mask.sum()) < min_pixels:
             continue
-        cleaned, ratio, _kept = drop_skin_adaptive(
-            pixels, lab_min=ctx.lab_min, lab_max=ctx.lab_max,
+        cleaned, ratio, _kept = drop_skin_adaptive_spatial(
+            crop_rgb, garment_mask, skin_class_mask,
+            lab_min=ctx.lab_min, lab_max=ctx.lab_max,
             keep_threshold_pct=cfg.skin_drop_threshold_pct,
+            upper_ceiling_pct=cfg.skin_drop_upper_ceiling,
+            skin_dilate_iterations=cfg.skin_dilate_iterations,
         )
         if cleaned.shape[0] < min_pixels:
             continue
@@ -415,8 +433,10 @@ class ExtractionDiagnostics:
     fallback_triggered: bool
     post_total_garment_pixels: int
     garment_class_counts: dict[str, int]
-    # M4.I — scene filter 에 의해 drop 된 frame 들. 기본 비어있음 (Noop 사용 시).
+    # Scene filter Stage 1 drop (frame 단위) / Stage 2 drop (bbox 단위).
+    # Noop 사용 시 둘 다 빈 list.
     filtered_out_frames: list[FrameDropRecord]
+    filtered_out_bboxes: list[BBoxDropRecord]
 
 
 def extract_palette_with_diagnostics(
@@ -462,6 +482,7 @@ def extract_palette_with_diagnostics(
         post_total_garment_pixels=total,
         garment_class_counts=class_counts,
         filtered_out_frames=stats.filtered_out,
+        filtered_out_bboxes=stats.bbox_filtered_out,
     )
 
 
@@ -483,15 +504,19 @@ def extract_garment_pixels(
             continue
         crop_rgb = frame.rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop_rgb)
+        skin_class_mask = np.isin(seg, list(SKIN_CLASS_IDS))
         for class_id, label in ATR_LABELS.items():
             if label not in WEAR_KEEP:
                 continue
-            pixels = crop_rgb[seg == class_id]
-            if pixels.shape[0] < cfg.extract_colors.min_pixels:
+            garment_mask = seg == class_id
+            if int(garment_mask.sum()) < cfg.extract_colors.min_pixels:
                 continue
-            cleaned, _ratio, _kept = drop_skin_adaptive(
-                pixels, lab_min=lab_min, lab_max=lab_max,
+            cleaned, _ratio, _kept = drop_skin_adaptive_spatial(
+                crop_rgb, garment_mask, skin_class_mask,
+                lab_min=lab_min, lab_max=lab_max,
                 keep_threshold_pct=cfg.skin_drop_threshold_pct,
+                upper_ceiling_pct=cfg.skin_drop_upper_ceiling,
+                skin_dilate_iterations=cfg.skin_dilate_iterations,
             )
             if cleaned.shape[0] < cfg.extract_colors.min_pixels:
                 continue

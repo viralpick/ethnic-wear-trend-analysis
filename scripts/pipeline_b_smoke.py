@@ -43,6 +43,7 @@ from vision.garment_instance import GarmentInstance, compute_group_weight  # noq
 from vision.pipeline_b_extractor import (  # noqa: E402
     ATR_LABELS,
     MIN_CROP_PX,
+    SKIN_CLASS_IDS,
     WEAR_KEEP,
     SegBundle,
     detect_people,
@@ -100,26 +101,37 @@ def _blend(patch: np.ndarray, mask: np.ndarray, color: np.ndarray, alpha: float)
 def _split_kept_dropped(
     crop: np.ndarray,
     class_mask: np.ndarray,
+    skin_class_mask: np.ndarray,
     lab_min: np.ndarray,
     lab_max: np.ndarray,
     threshold: float,
+    upper_ceiling: float,
+    skin_dilate_iterations: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """class_mask 를 kept/dropped 로 분할. adaptive 규칙 반영."""
+    """class_mask 를 kept/dropped 로 분할. drop_skin_adaptive_spatial 의 3단 분기 mirror."""
     pixels = crop[class_mask]
     if pixels.shape[0] == 0:
         return class_mask, np.zeros_like(class_mask)
     lab = rgb_to_lab(pixels)
-    inside = np.all((lab >= lab_min) & (lab <= lab_max), axis=-1)
-    ratio = float(inside.sum()) / pixels.shape[0]
+    inside_flat = np.all((lab >= lab_min) & (lab <= lab_max), axis=-1)
+    ratio = float(inside_flat.sum()) / pixels.shape[0]
+    if ratio > upper_ceiling:
+        return np.zeros_like(class_mask), class_mask
     if ratio > threshold:
-        # adaptive: 전체 kept, dropped 없음
         return class_mask, np.zeros_like(class_mask)
-    ys, xs = np.where(class_mask)
-    kept_mask = np.zeros_like(class_mask)
-    dropped_mask = np.zeros_like(class_mask)
-    kept_mask[ys[~inside], xs[~inside]] = True
-    dropped_mask[ys[inside], xs[inside]] = True
-    return kept_mask, dropped_mask
+    inside_mask = np.zeros_like(class_mask)
+    inside_mask[class_mask] = inside_flat
+    if skin_dilate_iterations <= 0:
+        drop_mask = inside_mask  # 공간 방어 off → pixel-list drop.
+    elif not skin_class_mask.any():
+        drop_mask = np.zeros_like(class_mask)  # skin 부재 → drop 근거 없음.
+    else:
+        from scipy.ndimage import binary_dilation
+
+        skin_zone = binary_dilation(skin_class_mask, iterations=skin_dilate_iterations)
+        drop_mask = inside_mask & skin_zone
+    kept_mask = class_mask & ~drop_mask
+    return kept_mask, drop_mask
 
 
 def build_segformer_views(
@@ -140,6 +152,8 @@ def build_segformer_views(
     lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
     lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
     threshold = cfg.skin_drop_threshold_pct
+    upper_ceiling = cfg.skin_drop_upper_ceiling
+    dilate_iters = cfg.skin_dilate_iterations
     drop_color = np.array(_OVERLAY_DROPPED_COLOR, dtype=np.float32)
 
     for (x1, y1, x2, y2) in boxes:
@@ -149,6 +163,7 @@ def build_segformer_views(
             continue
         crop = rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop)
+        skin_class_mask = np.isin(seg, list(SKIN_CLASS_IDS))
         overlay_patch = overlay[y1c:y2c, x1c:x2c].copy()
         for class_id, label in ATR_LABELS.items():
             if label not in WEAR_KEEP:
@@ -158,7 +173,8 @@ def build_segformer_views(
                 continue
             class_color = np.array(_OVERLAY_COLORS.get(label, (0, 255, 0)), dtype=np.float32)
             kept_mask, dropped_mask = _split_kept_dropped(
-                crop, class_mask, lab_min, lab_max, threshold,
+                crop, class_mask, skin_class_mask,
+                lab_min, lab_max, threshold, upper_ceiling, dilate_iters,
             )
             _blend(overlay_patch, kept_mask, class_color, _OVERLAY_ALPHA)
             _blend(overlay_patch, dropped_mask, drop_color, _OVERLAY_DROPPED_ALPHA)
