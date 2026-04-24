@@ -5,10 +5,9 @@
     → _resolve_local_paths / _download_blob_paths (파일 시스템 / Azure Blob)
     → _load_images (path → (image_id, bytes, rgb))
     → VisionLLMClient.extract_garment(bytes, preset=llm_preset)
-    → extract_canonical_pixels(post_items, bundle, cfg, dedup_cfg, family_map)
-    → canonical 별 extract_dynamic_palette → rep 첫 non-empty 선택
-    → ΔE76 ≤ PRESET_MATCH_THRESHOLD 이면 preset name/family, 초과면 lab_to_family fallback
-    → ColorExtractionResult
+    → extract_canonical_pixels → list[(CanonicalOutfit, CanonicalOutfitPixels | None)]
+    → canonical 별 build_canonical_palette (pixels != None 에 한해) → palette 주입
+    → ColorExtractionResult(canonicals=[...], post_palette=[...])
 
 설계 결정 (project_phase5_adapter_design.md 참조):
   - `_load_images` 를 module-level 로 분리 — 테스트가 monkeypatch 로 Path/PIL 의존 없이 stub.
@@ -35,17 +34,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from contracts.common import ColorFamily, Silhouette
+from contracts.common import ColorFamily
 from contracts.normalized import NormalizedContentItem
 from contracts.vision import GarmentAnalysis
 from settings import OutfitDedupConfig, VisionConfig
 from utils.logging import get_logger
 from vision.canonical_extractor import extract_canonical_pixels
+from vision.canonical_palette import build_canonical_palette
 from vision.color_extractor import ColorExtractionResult
-from vision.color_family_preset import MatcherEntry, lab_to_family
-from vision.dynamic_palette import PaletteCluster, extract_dynamic_palette
+from vision.color_family_preset import MatcherEntry
 from vision.llm_client import VisionLLMClient
 from vision.pipeline_b_extractor import SegBundle
+from vision.post_palette import build_post_palette
 
 if TYPE_CHECKING:
     from loaders.blob_downloader import BlobDownloader
@@ -53,10 +53,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"})
-
-# ΔE76 preset 매칭 임계값 — 이하면 preset name+family, 초과면 lab_to_family fallback.
-# 근거: 3축 리뷰 advisor 권고 + 50-color preset 의 대략 spacing. Phase 5 smoke 후 튜닝.
-PRESET_MATCH_THRESHOLD: float = 15.0
 
 
 def _resolve_local_paths(
@@ -143,44 +139,6 @@ def _analyze_images(
     return post_items
 
 
-def _match_preset_or_family(
-    cluster: PaletteCluster, entries: list[MatcherEntry],
-) -> tuple[str, ColorFamily]:
-    """cluster.lab 과 가장 가까운 preset entry 선택 (ΔE76). threshold 초과 시 fallback."""
-    cL, ca, cb = cluster.lab
-    best: MatcherEntry | None = None
-    best_de = float("inf")
-    for entry in entries:
-        eL, ea, eb = entry.lab
-        de = ((cL - eL) ** 2 + (ca - ea) ** 2 + (cb - eb) ** 2) ** 0.5
-        if de < best_de:
-            best_de = de
-            best = entry
-    if best is not None and best_de <= PRESET_MATCH_THRESHOLD:
-        return best.name, best.family
-    name = f"pipeline_b_canonical_{cluster.hex.lstrip('#').lower()}"
-    return name, lab_to_family(cL, ca, cb)
-
-
-def _pick_top_cluster(
-    canonicals, dyn_cfg,
-) -> tuple[PaletteCluster, Silhouette | None] | None:
-    """rep.area_ratio desc 순으로 순회 — 첫 non-empty palette 의 top cluster 반환.
-
-    Returns:
-      (top PaletteCluster, representative.silhouette) 또는 None (전부 빈 pool).
-    """
-    sorted_canonicals = sorted(
-        canonicals,
-        key=lambda c: -c.representative.person_bbox_area_ratio,
-    )
-    for canonical in sorted_canonicals:
-        clusters = extract_dynamic_palette(canonical.pooled_pixels, dyn_cfg)
-        if clusters:
-            return clusters[0], canonical.representative.silhouette
-    return None
-
-
 class PipelineBColorExtractor:
     """Pipeline B (LLM BBOX → canonical pool → 동적 k palette) ColorExtractor.
 
@@ -235,24 +193,31 @@ class PipelineBColorExtractor:
         if not post_items:
             return ColorExtractionResult(source_post_id=item.source_post_id)
 
-        canonicals = extract_canonical_pixels(
+        pairs = extract_canonical_pixels(
             post_items, self._bundle, self._cfg,
             self._dedup_cfg, self._family_map,
         )
-        if not canonicals:
-            return ColorExtractionResult(source_post_id=item.source_post_id)
-
-        pick = _pick_top_cluster(canonicals, self._dyn_cfg)
-        if pick is None:
-            return ColorExtractionResult(source_post_id=item.source_post_id)
-        cluster, silhouette = pick
-        name, family = _match_preset_or_family(cluster, self._matcher_entries)
-        r, g, b = cluster.rgb
+        canonicals = [
+            self._attach_palette(canonical, pixels) for canonical, pixels in pairs
+        ]
         return ColorExtractionResult(
             source_post_id=item.source_post_id,
-            r=int(r), g=int(g), b=int(b),
-            name=name, family=family, silhouette=silhouette,
+            canonicals=canonicals,
+            post_palette=build_post_palette(canonicals),
         )
+
+    def _attach_palette(self, canonical, pixels):
+        """pixel pool 이 있으면 canonical palette 계산 후 model_copy, 없으면 원본 보존.
+
+        B3a: canonical 라벨은 pool 이 None 이어도 enriched.canonicals 로 전달 (label
+        preservation invariant, project_color_pipeline_redesign advisor 피드백).
+        """
+        if pixels is None:
+            return canonical
+        palette = build_canonical_palette(
+            pixels.pooled_pixels, self._dyn_cfg, self._matcher_entries,
+        )
+        return canonical.model_copy(update={"palette": palette})
 
     def _resolve_paths(self, item: NormalizedContentItem) -> list[Path]:
         """local → blob 순. 셋 다 실패 시 빈 리스트."""
@@ -266,4 +231,4 @@ class PipelineBColorExtractor:
         return []
 
 
-__all__ = ["PipelineBColorExtractor", "PRESET_MATCH_THRESHOLD"]
+__all__ = ["PipelineBColorExtractor"]

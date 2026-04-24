@@ -80,7 +80,7 @@ def test_prompt_version_drift_emits_warning(monkeypatch, tmp_path, caplog):
     cfg = VisionLLMConfig(
         provider="gemini",
         model_id="gemini-2.5-flash",
-        prompt_version="v0.1",  # 코드의 PROMPT_VERSION="v0.3" 와 drift
+        prompt_version="v0.1",  # 코드의 PROMPT_VERSION="v0.4" 와 drift
         cache_dir=tmp_path / "llm_cache",
     )
     with caplog.at_level(logging.WARNING, logger="vision.factory"):
@@ -95,7 +95,7 @@ def test_prompt_version_match_no_warning(monkeypatch, tmp_path, caplog):
     cfg = VisionLLMConfig(
         provider="gemini",
         model_id="gemini-2.5-flash",
-        prompt_version="v0.3",
+        prompt_version="v0.4",  # A3 bump 후 match 기준
         cache_dir=tmp_path / "llm_cache",
     )
     with caplog.at_level(logging.WARNING, logger="vision.factory"):

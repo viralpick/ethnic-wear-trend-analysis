@@ -43,27 +43,28 @@ def test_normalized_fixture_validates() -> None:
     assert item.engagement_raw == 59580
 
 
-def test_enriched_fixture_has_all_eight_attrs_and_cluster() -> None:
+def test_enriched_fixture_has_text_based_attrs_and_cluster() -> None:
     item = EnrichedContentItem.model_validate_json(
         (FIXTURE_DIR / "enriched.json").read_bytes()
     )
 
-    # 8 속성 + embellishment_intensity 전부 채워진 상태여야 한다.
+    # post-level text 기반 속성 + embellishment_intensity 가 채워진 상태여야 한다.
+    # color 는 Color 3층 재설계 (B3a, 2026-04-24) 로 post-level 에서 제거 — post_palette.
+    # silhouette 는 B3d (2026-04-24) 로 제거 — canonicals[*].representative.silhouette.
     assert item.garment_type == GarmentType.KURTA_SET
     assert item.fabric is not None
     assert item.technique is not None
     assert item.embellishment_intensity is not None
-    assert item.color is not None
-    assert item.silhouette is not None
     assert item.occasion is not None
     assert item.styling_combo is not None
     assert item.brand is not None
 
     assert item.trend_cluster_key == "kurta_set__chikankari__cotton"
 
-    # classification_method_per_attribute 가 rule/llm/vlm 을 섞어 채운다.
+    # classification_method_per_attribute 는 rule/llm 을 섞는다 (vlm 은 B3d 이후 canonical
+    # 레이어로 이동 — post-level dict 에는 안 들어옴).
     methods = set(item.classification_method_per_attribute.values())
-    assert {m.value for m in methods} == {"rule", "llm", "vlm"}
+    assert {m.value for m in methods} == {"rule", "llm"}
 
 
 def test_trend_cluster_summary_fixture_bootstrap() -> None:

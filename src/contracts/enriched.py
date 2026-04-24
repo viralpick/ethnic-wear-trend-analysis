@@ -10,35 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from contracts.common import (
     BrandTier,
     ClassificationMethod,
-    ColorFamily,
     EmbellishmentIntensity,
     Fabric,
     GarmentType,
     Occasion,
-    Silhouette,
+    PaletteCluster,
     StylingCombo,
     Technique,
 )
 from contracts.normalized import NormalizedContentItem
-
-
-class ColorInfo(BaseModel):
-    """
-    purpose: 포스트 1건에서 VLM 이 추출한 대표 색상 (spec §4.1 ④)
-    stage: enriched
-    ownership: analysis-owned
-    stability: negotiable (VLM 프롬프트 확정 — 4/24)
-    """
-    model_config = ConfigDict(frozen=True)
-
-    r: int
-    g: int
-    b: int
-    r_pct: float | None = None
-    g_pct: float | None = None
-    b_pct: float | None = None
-    name: str | None = None
-    family: ColorFamily | None = None
+from contracts.vision import CanonicalOutfit
 
 
 class BrandInfo(BaseModel):
@@ -65,24 +46,34 @@ class EnrichedContentItem(BaseModel):
 
     normalized: NormalizedContentItem
 
-    # spec §4.1 의 8개 속성 + embellishment_intensity 보조 플래그. 전부 Optional.
+    # spec §4.1 의 속성 중 text 기반으로 채워지는 단일값만 post-level 유지.
+    # Color 3층 재설계 (2026-04-24) 로 color 단일값은 post_palette 로 이동.
+    # B3d (2026-04-24) 로 silhouette 단일값 제거 — vision 기반이므로
+    # canonicals[*].representative.silhouette 로만 접근 (feedback_post_level_single_value).
     garment_type: GarmentType | None = None
     fabric: Fabric | None = None
     technique: Technique | None = None
     embellishment_intensity: EmbellishmentIntensity | None = None
-    color: ColorInfo | None = None
-    silhouette: Silhouette | None = None
     occasion: Occasion | None = None
     styling_combo: StylingCombo | None = None
     brand: BrandInfo | None = None
+
+    # post-level palette (2026-04-24 신설) — canonicals[*].palette 들을 ΔE76 greedy merge.
+    # multi-outfit 전제, max 3 cluster. B3 build_palette 에서 채움.
+    post_palette: list[PaletteCluster] = Field(default_factory=list, max_length=3)
+
+    # post 안의 outfit dedup 결과. B3 adapter 가 canonical_extractor 결과를 그대로 적재.
+    # canonical 단위 palette / silhouette / garment type 은 여기 CanonicalOutfit 내부에서만
+    # 유지 (post-level 단일값 금지 — multi-outfit 가정, feedback_post_level_single_value).
+    canonicals: list[CanonicalOutfit] = Field(default_factory=list)
 
     # spec §5 — garment_type × technique × fabric 조합. 부분 매칭 시 "unknown" placeholder.
     # 전부 null 이면 "unclassified".
     trend_cluster_key: str | None = None
 
     # 속성명 → 추출 방법. 값이 None 인 속성은 키가 없음 (partial map).
-    # 키 예시: "garment_type", "technique", "color", "silhouette", "occasion",
-    #        "styling_combo", "brand", "embellishment_intensity", "fabric"
+    # 키 예시: "garment_type", "technique", "occasion", "styling_combo", "brand",
+    #        "embellishment_intensity", "fabric". silhouette 은 B3d 에서 제거.
     classification_method_per_attribute: dict[str, ClassificationMethod] = Field(
         default_factory=dict
     )

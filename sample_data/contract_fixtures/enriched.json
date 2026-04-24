@@ -21,17 +21,6 @@
   "fabric": "cotton",
   "technique": "chikankari",
   "embellishment_intensity": "everyday",
-  "color": {
-    "r": 248,
-    "g": 244,
-    "b": 235,
-    "r_pct": 0.97,
-    "g_pct": 0.96,
-    "b_pct": 0.92,
-    "name": "ivory chikan",
-    "family": "white_on_white"
-  },
-  "silhouette": "straight",
   "occasion": "office",
   "styling_combo": "with_palazzo",
   "brand": {
@@ -44,8 +33,6 @@
     "fabric": "rule",
     "technique": "rule",
     "embellishment_intensity": "llm",
-    "color": "vlm",
-    "silhouette": "vlm",
     "occasion": "rule",
     "styling_combo": "rule",
     "brand": "llm"

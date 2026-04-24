@@ -30,7 +30,7 @@ from attributes.extract_text_attributes_llm import (
 from attributes.unknown_signal_tracker import run_tracker
 from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster
 from contracts.common import ContentSource
-from contracts.enriched import ColorInfo, EnrichedContentItem
+from contracts.enriched import EnrichedContentItem
 from exporters.write_json_output import write_enriched
 from loaders.raw_loader import LocalSampleLoader, RawDailyBatch, RawLoader
 from loaders.tsv_raw_loader import TsvRawLoader
@@ -81,12 +81,14 @@ def _case1_targets(
 def _case2_targets(
     enriched: list[EnrichedContentItem], cap_per_cluster: int
 ) -> list[EnrichedContentItem]:
-    """Case2: cluster 당 IG top-engagement 중 color 가 아직 없는 포스트 (spec §7.2)."""
+    """Case2: cluster 당 IG top-engagement 포스트 (spec §7.2).
+
+    Color 3층 재설계 (2026-04-24) 로 post-level ColorInfo 제거, "color 아직 없는" 필터
+    탈락. B3 에서 post_palette 채우기 루틴으로 재배선 예정.
+    """
     by_cluster: dict[str, list[EnrichedContentItem]] = {}
     for item in enriched:
         if item.normalized.source != ContentSource.INSTAGRAM:
-            continue
-        if item.color is not None:
             continue
         if not item.trend_cluster_key or item.trend_cluster_key == UNCLASSIFIED:
             continue
@@ -103,25 +105,24 @@ def _apply_extraction_result(
     enriched: list[EnrichedContentItem],
     results: list[ColorExtractionResult],
 ) -> list[EnrichedContentItem]:
-    """extraction 결과로 enriched 를 동결 상태 그대로 re-build (frozen Pydantic)."""
+    """extraction 결과로 enriched 를 동결 상태 그대로 re-build (frozen Pydantic).
+
+    Color 3층 재설계 B3a/B3b/B3d (2026-04-24): canonicals + post_palette 반영. post-level
+    silhouette 단일값은 제거됨 — canonical silhouette 은 result.canonicals 복사로 자연 전달.
+    """
     by_id = {r.source_post_id: r for r in results}
     updated: list[EnrichedContentItem] = []
     for item in enriched:
         result = by_id.get(item.normalized.source_post_id)
-        if result is None:
+        if result is None or not result.canonicals:
+            # 빈 결과는 기존 item (이전 Case 결과 포함) 를 덮지 않음.
+            # Case1 / Case2 2-pass 간 의도치 않은 wipe 방어.
             updated.append(item)
             continue
-        color = item.color
-        has_rgb = result.r is not None and result.g is not None and result.b is not None
-        if color is None and has_rgb:
-            color = ColorInfo(
-                r=result.r, g=result.g, b=result.b,
-                name=result.name, family=result.family,
-            )
-        silhouette = item.silhouette or result.silhouette
-        updated.append(
-            item.model_copy(update={"color": color, "silhouette": silhouette})
-        )
+        updated.append(item.model_copy(update={
+            "canonicals": list(result.canonicals),
+            "post_palette": list(result.post_palette),
+        }))
     return updated
 
 
