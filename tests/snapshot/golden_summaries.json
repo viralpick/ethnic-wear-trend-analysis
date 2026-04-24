@@ -34,7 +34,7 @@
     },
     "post_count_total": 1,
     "post_count_today": 1,
-    "avg_engagement_rate": 165582.0,
+    "avg_engagement_rate": 110388.0,
     "total_video_views": 0
   },
   {
@@ -42,9 +42,9 @@
     "cluster_key": "kurta_dress__floral_print__rayon",
     "display_name": "kurta dress / floral print / rayon",
     "date": "2026-04-21",
-    "score": 42.512591948400186,
+    "score": 45.32666594195021,
     "score_breakdown": {
-      "social": 22.51259194840019,
+      "social": 25.32666594195021,
       "youtube": 0.0,
       "cultural": 0.0,
       "momentum": 20.0
@@ -74,7 +74,7 @@
     },
     "post_count_total": 1,
     "post_count_today": 1,
-    "avg_engagement_rate": 93192.0,
+    "avg_engagement_rate": 69894.0,
     "total_video_views": 0
   },
   {
@@ -82,9 +82,9 @@
     "cluster_key": "anarkali__geometric_print__rayon",
     "display_name": "anarkali / geometric print / rayon",
     "date": "2026-04-21",
-    "score": 34.07254411711418,
+    "score": 34.99827879842012,
     "score_breakdown": {
-      "social": 7.405877450447513,
+      "social": 8.331612131753452,
       "youtube": 0.0,
       "cultural": 6.666666666666668,
       "momentum": 20.0
@@ -112,7 +112,7 @@
     },
     "post_count_total": 1,
     "post_count_today": 1,
-    "avg_engagement_rate": 30657.000000000004,
+    "avg_engagement_rate": 22992.750000000004,
     "total_video_views": 0
   },
   {
@@ -120,9 +120,9 @@
     "cluster_key": "ethnic_shirt__mirror_work__polyester_blend",
     "display_name": "ethnic shirt / mirror work / polyester blend",
     "date": "2026-04-21",
-    "score": 30.22333345411941,
+    "score": 31.501250135884334,
     "score_breakdown": {
-      "social": 10.223333454119409,
+      "social": 11.501250135884336,
       "youtube": 0.0,
       "cultural": 0.0,
       "momentum": 20.0
@@ -148,7 +148,7 @@
     },
     "post_count_total": 1,
     "post_count_today": 1,
-    "avg_engagement_rate": 42320.0,
+    "avg_engagement_rate": 31740.0,
     "total_video_views": 0
   },
   {
@@ -189,6 +189,42 @@
   },
   {
     "schema_version": "0.1.0",
+    "cluster_key": "co_ord__block_print__linen",
+    "display_name": "co ord / block print / linen",
+    "date": "2026-04-21",
+    "score": 25.496597456245244,
+    "score_breakdown": {
+      "social": 5.496597456245244,
+      "youtube": 0.0,
+      "cultural": 0.0,
+      "momentum": 20.0
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {},
+      "styling_distribution": {},
+      "top_posts": [
+        "ig_rule_solvable_2"
+      ],
+      "top_videos": [],
+      "top_influencers": [
+        "@_linenstudio.in"
+      ]
+    },
+    "post_count_total": 1,
+    "post_count_today": 1,
+    "avg_engagement_rate": 15168.96,
+    "total_video_views": 0
+  },
+  {
+    "schema_version": "0.1.0",
     "cluster_key": "kurta_dress__gota_patti__cotton",
     "display_name": "kurta dress / gota patti / cotton",
     "date": "2026-04-21",
@@ -225,48 +261,12 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "co_ord__block_print__linen",
-    "display_name": "co ord / block print / linen",
-    "date": "2026-04-21",
-    "score": 24.58049788020437,
-    "score_breakdown": {
-      "social": 4.58049788020437,
-      "youtube": 0.0,
-      "cultural": 0.0,
-      "momentum": 20.0
-    },
-    "daily_direction": "flat",
-    "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
-    "weekly_change_pct": 0.0,
-    "lifecycle_stage": "early",
-    "data_maturity": "bootstrap",
-    "drilldown": {
-      "color_palette": [],
-      "silhouette_distribution": {},
-      "occasion_distribution": {},
-      "styling_distribution": {},
-      "top_posts": [
-        "ig_rule_solvable_2"
-      ],
-      "top_videos": [],
-      "top_influencers": [
-        "@_linenstudio.in"
-      ]
-    },
-    "post_count_total": 1,
-    "post_count_today": 1,
-    "avg_engagement_rate": 18961.2,
-    "total_video_views": 0
-  },
-  {
-    "schema_version": "0.1.0",
     "cluster_key": "tunic__chikankari__georgette",
     "display_name": "tunic / chikankari / georgette",
     "date": "2026-04-21",
-    "score": 21.100119578215022,
+    "score": 21.320143493858026,
     "score_breakdown": {
-      "social": 1.1001195782150233,
+      "social": 1.320143493858028,
       "youtube": 0.0,
       "cultural": 0.0,
       "momentum": 20.0
@@ -292,7 +292,7 @@
     },
     "post_count_total": 1,
     "post_count_today": 1,
-    "avg_engagement_rate": 4554.0,
+    "avg_engagement_rate": 3643.2,
     "total_video_views": 0
   },
   {
@@ -300,9 +300,9 @@
     "cluster_key": "kurta_set__digital_print__chanderi",
     "display_name": "kurta set / digital print / chanderi",
     "date": "2026-04-21",
-    "score": 20.18262854658115,
+    "score": 20.273942819871724,
     "score_breakdown": {
-      "social": 0.18262854658115013,
+      "social": 0.2739428198717252,
       "youtube": 0.0,
       "cultural": 0.0,
       "momentum": 20.0
@@ -336,9 +336,9 @@
     "cluster_key": "co_ord__lace_cutwork__chanderi",
     "display_name": "co ord / lace cutwork / chanderi",
     "date": "2026-04-21",
-    "score": 20.062615501684967,
+    "score": 20.09392325252745,
     "score_breakdown": {
-      "social": 0.06261550168496575,
+      "social": 0.09392325252744863,
       "youtube": 0.0,
       "cultural": 0.0,
       "momentum": 20.0
