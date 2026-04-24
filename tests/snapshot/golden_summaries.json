@@ -18,20 +18,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 131,
-          "g": 13,
-          "b": 226,
-          "hex_display": "#830DE2",
-          "name": "cluster_0_830de2",
-          "family": "neutral",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "high_low": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {
         "office": 1.0
       },
@@ -68,20 +56,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 46,
-          "g": 224,
-          "b": 1,
-          "hex_display": "#2EE001",
-          "name": "cluster_0_2ee001",
-          "family": "jewel",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "straight": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {
         "weekend": 1.0
       },
@@ -120,20 +96,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 12,
-          "g": 55,
-          "b": 187,
-          "hex_display": "#0C37BB",
-          "name": "cluster_0_0c37bb",
-          "family": "jewel",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "angrakha": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {
         "festive_lite": 1.0
       },
@@ -170,20 +134,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 173,
-          "g": 155,
-          "b": 251,
-          "hex_display": "#AD9BFB",
-          "name": "cluster_0_ad9bfb",
-          "family": "neutral",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "empire": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {},
       "styling_distribution": {},
       "top_posts": [
@@ -290,20 +242,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 89,
-          "g": 185,
-          "b": 149,
-          "hex_display": "#59B995",
-          "name": "cluster_0_59b995",
-          "family": "pastel",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "high_low": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {},
       "styling_distribution": {},
       "top_posts": [
@@ -338,20 +278,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 46,
-          "g": 83,
-          "b": 138,
-          "hex_display": "#2E538A",
-          "name": "cluster_0_2e538a",
-          "family": "bright",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "kaftan": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {},
       "styling_distribution": {},
       "top_posts": [
@@ -386,20 +314,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 101,
-          "g": 214,
-          "b": 166,
-          "hex_display": "#65D6A6",
-          "name": "cluster_0_65d6a6",
-          "family": "white_on_white",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "empire": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {},
       "styling_distribution": {},
       "top_posts": [
@@ -434,20 +350,8 @@
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
     "drilldown": {
-      "color_palette": [
-        {
-          "r": 74,
-          "g": 132,
-          "b": 173,
-          "hex_display": "#4A84AD",
-          "name": "cluster_0_4a84ad",
-          "family": "earth",
-          "pct": 1.0
-        }
-      ],
-      "silhouette_distribution": {
-        "boxy": 1.0
-      },
+      "color_palette": [],
+      "silhouette_distribution": {},
       "occasion_distribution": {},
       "styling_distribution": {},
       "top_posts": [
