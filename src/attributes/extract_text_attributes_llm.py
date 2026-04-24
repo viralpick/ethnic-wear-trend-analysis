@@ -92,12 +92,20 @@ def apply_llm_extraction(
     states: list[AttributeExtractionState],
     llm_client: LLMClient,
 ) -> None:
-    """garment_type 이나 technique 중 하나라도 None 인 state 만 LLM 에 태운다.
+    """LLM 이 채울 수 있는 속성 중 하나라도 None 인 state 를 LLM 에 태운다.
 
+    LLM 대상: garment_type, technique, fabric, occasion, styling_combo, embellishment_intensity.
     In-place 로 state 를 업데이트한다. stage 2a 에서 잡힌 값은 절대 덮어쓰지 않는다.
     retry 없음, validation 실패 시 해당 post 결과는 버리고 계속 진행.
     """
-    candidates = [s for s in states if s.garment_type is None or s.technique is None]
+    candidates = [
+        s for s in states
+        if s.garment_type is None
+        or s.technique is None
+        or s.occasion is None
+        or s.styling_combo is None
+        or s.embellishment_intensity is None
+    ]
     if not candidates:
         return
 

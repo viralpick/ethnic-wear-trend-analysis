@@ -11,11 +11,11 @@ from pydantic import BaseModel, ConfigDict
 
 from contracts.common import (
     CONTRACT_VERSION,
-    ColorPaletteItem,
     DataMaturity,
     Direction,
     DistributionMap,
     LifecycleStage,
+    PaletteCluster,
 )
 
 
@@ -43,7 +43,7 @@ class DrilldownPayload(BaseModel):
     """
     model_config = ConfigDict(frozen=True)
 
-    color_palette: list[ColorPaletteItem]
+    color_palette: list[PaletteCluster]
     silhouette_distribution: DistributionMap
     occasion_distribution: DistributionMap
     styling_distribution: DistributionMap

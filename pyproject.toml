@@ -16,6 +16,8 @@ dependencies = [
     # `vision` extras 로 격리 — color 담당 아닌 사람이 건너뛰어야 할 건 그쪽.
     "numpy>=1.26",
     "scikit-learn>=1.4",
+    "pymysql>=1.1.2",
+    "openai>=2.32.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,8 @@ vision = [
     "ultralytics>=8.3",
     "pillow>=10.0",
     "opencv-python>=4.8",
+    "google-genai>=1.73.1",
+    "json-repair>=0.30",
 ]
 # Azure Blob Storage loader — posting.tsv 의 image_paths 다운로드용.
 # `[color]` 담당자만 설치. `.env` 에서 AZURE_STORAGE_CONNECTION_STRING 읽기.

@@ -25,7 +25,7 @@ class AttributeMapping:
 # --------------------------------------------------------------------------- #
 GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
     GarmentType.KURTA_SET: AttributeMapping(
-        hashtags=("kurtaset", "kurtasets", "kurtiset", "kurtapalazzoset", "kurtasetsonline"),
+        hashtags=("kurtaset", "kurtasets", "kurtiset", "kurtapalazzoset", "kurtasetsonline", "kurtastyle"),
         keywords=("kurta set", "kurta palazzo set", "kurta pant set", "3 piece set"),
     ),
     GarmentType.ANARKALI: AttributeMapping(
@@ -45,7 +45,7 @@ GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
         keywords=("saree", "sari", "ready to wear saree"),
     ),
     GarmentType.STRAIGHT_KURTA: AttributeMapping(
-        hashtags=("straightkurta", "straightcut"),
+        hashtags=("straightkurta", "straightkurti", "straightcut"),
         keywords=("straight kurta", "straight cut"),
     ),
     GarmentType.TUNIC: AttributeMapping(
@@ -53,12 +53,20 @@ GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
         keywords=("kurti", "tunic"),
     ),
     GarmentType.FUSION_TOP: AttributeMapping(
-        hashtags=("fusiontop", "croptop", "peplumtop"),
+        hashtags=("fusiontop", "croptop", "peplumtop", "fusionwear", "peplumkurta"),
         keywords=("fusion top", "peplum", "crop top"),
     ),
     GarmentType.ETHNIC_SHIRT: AttributeMapping(
         hashtags=("ethnicshirt", "indianshirt", "bandcollarshirt"),
         keywords=("ethnic shirt", "band collar"),
+    ),
+    GarmentType.A_LINE_KURTA: AttributeMapping(
+        hashtags=("alinekurta", "alinekurti"),
+        keywords=("a-line kurta", "a line kurta"),
+    ),
+    GarmentType.ETHNIC_DRESS: AttributeMapping(
+        hashtags=("indowesterndress",),
+        keywords=("indo western dress", "tiered dress", "shirt dress ethnic"),
     ),
 }
 
@@ -71,11 +79,12 @@ TECHNIQUE_MAPPINGS: dict[Technique, AttributeMapping] = {
         hashtags=(
             "chikankari", "chikan", "chikanwork", "lucknowi", "lucknowichikankari",
             "chikankarisuit", "chikankarikurta", "chikankaricollection",
+            "chickenkurta",
         ),
         keywords=("chikankari", "chikan", "lucknowi"),
     ),
     Technique.BLOCK_PRINT: AttributeMapping(
-        hashtags=("blockprint", "handblockprint", "jaipuriprint", "ajrakh", "bagru", "handblock"),
+        hashtags=("blockprint", "handblockprint", "jaipuriprint", "ajrakh", "bagru", "handblock", "blockprintkurta"),
         keywords=("block print", "hand block", "ajrakh", "bagru", "jaipur print"),
     ),
     Technique.SOLID: AttributeMapping(
@@ -132,7 +141,7 @@ FABRIC_MAPPINGS: dict[Fabric, AttributeMapping] = {
     Fabric.COTTON: AttributeMapping(
         hashtags=(
             "cotton", "cottonkurta", "cottonsuit", "purecotton", "mulmul", "cambric",
-            "cottonkurtaset", "summercotton",
+            "cottonkurtaset", "summercotton", "mulmulkurta",
         ),
         keywords=("cotton", "mulmul", "muslin", "cambric"),
     ),
@@ -157,7 +166,7 @@ FABRIC_MAPPINGS: dict[Fabric, AttributeMapping] = {
         keywords=("georgette",),
     ),
     Fabric.KHADI: AttributeMapping(
-        hashtags=("khadi", "khadicotton", "handspun"),
+        hashtags=("khadi", "khadicotton", "handspun", "khadikurta"),
         keywords=("khadi", "handspun"),
     ),
 }
@@ -171,27 +180,58 @@ OCCASION_MAPPINGS: dict[Occasion, AttributeMapping] = {
         hashtags=(
             "officewear", "officekurta", "workwear", "workwearethnic",
             "indianofficewear", "officelook", "corporateethnic", "indowesternoffice",
+            "officestyle", "worklook", "workoutfit", "businesscasual",
         ),
         keywords=(
             "office", "workwear", "work wear", "corporate",
-            "desk to dinner", "professional", "9 to 5",
+            "desk to dinner", "professional", "9 to 5", "business casual",
         ),
     ),
     Occasion.CASUAL: AttributeMapping(
-        hashtags=("casualethnic", "everydayethnic", "dailywear", "casualwear"),
-        keywords=("casual", "everyday", "daily wear", "easy wear"),
+        hashtags=(
+            "casualethnic", "everydayethnic", "dailywear", "casualwear",
+            "casuallook", "indowestern", "casualootd", "relaxedlook",
+            "homewear", "lounge",
+        ),
+        keywords=("casual", "everyday", "daily wear", "easy wear", "indo western"),
     ),
     Occasion.CAMPUS: AttributeMapping(
-        hashtags=("collegewear", "campuslook", "collegefashion"),
-        keywords=("college", "campus", "university"),
+        hashtags=(
+            "collegewear", "campuslook", "collegefashion",
+            "studentfashion", "collegegirl", "campusstyle",
+        ),
+        keywords=("college", "campus", "university", "student"),
     ),
     Occasion.WEEKEND: AttributeMapping(
-        hashtags=("weekendlook", "brunch", "weekendoutfit", "sundaylook"),
-        keywords=("weekend", "brunch", "outing", "day out"),
+        hashtags=(
+            "weekendlook", "brunch", "weekendoutfit", "sundaylook",
+            "partywear", "partyoutfit", "eveningwear", "nightout",
+            "datenight", "sundowner", "cocktailparty",
+        ),
+        keywords=("weekend", "brunch", "outing", "day out", "party", "evening wear", "date night"),
     ),
     Occasion.FESTIVE_LITE: AttributeMapping(
-        hashtags=("festivevibes", "pujalook", "festivelook", "akshayatritiya"),
-        keywords=("festive", "puja", "small function", "get together", "akshaya tritiya"),
+        hashtags=(
+            "festivevibes", "pujalook", "festivelook", "akshayatritiya",
+            "indianwedding", "wedding", "weddingguest", "weddingseason",
+            "lehengacholi", "indianweddingdress", "designerlehenga",
+            "bridalwear", "bridallook", "mehendi", "mehendicerumony",
+            "sangeet", "haldi", "reception", "engagement",
+            "navratri", "diwali", "eid", "durgapuja", "ganeshchaturthi",
+            "festivewear", "functionwear", "familyfunction",
+        ),
+        keywords=(
+            "festive", "puja", "small function", "get together", "akshaya tritiya",
+            "wedding", "mehendi", "sangeet", "haldi", "reception", "engagement",
+            "navratri", "diwali", "eid", "festival", "function",
+        ),
+    ),
+    Occasion.TRAVEL: AttributeMapping(
+        hashtags=(
+            "travelootd", "travelstyle", "travelwear", "vacationoutfit",
+            "holidaylook", "traveldiaries", "tripoutfit",
+        ),
+        keywords=("travel", "trip", "vacation", "holiday", "sightseeing"),
     ),
 }
 

@@ -18,11 +18,18 @@ venv/
 
 # Pipeline outputs
 outputs/
+# Vision LLM 응답 캐시 (Phase 2). outputs/ 이미 제외되지만 명시 — BE 연동 시
+# AzureBlobCache 로 이관 예정, 그 전까진 로컬 전용.
+outputs/llm_cache/
 
 # Secrets / local config overrides
 .env
 .env.local
 configs/local.override.yaml
+
+# Roadmap 은 memory 로 이관됐고 docs/roadmap.md 는 절대 경로 symlink (로컬 전용).
+# 다른 머신에서는 memory 디렉토리 자체가 없으므로 깨진 symlink 가 된다 — git 관리 X.
+docs/roadmap.md
 
 # IDE
 .idea/
@@ -31,6 +38,11 @@ configs/local.override.yaml
 
 # Claude Code per-project 로컬 권한 (per-user). 팀 공유 hook 은 .claude/settings.json 으로.
 .claude/settings.local.json
+# Claude Code /loop runtime lock — 세션별 생성, 공유 불필요
+.claude/scheduled_tasks.lock
+
+# Serena MCP 로컬 캐시 (심볼 인덱스). 로컬 전용, 팀 공유 X.
+.serena/
 
 # OS
 .DS_Store

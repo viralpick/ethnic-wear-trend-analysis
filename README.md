@@ -53,7 +53,7 @@ src/
   settings.py              # pydantic-settings → configs/local.yaml
   contracts/               # Pydantic 입출력 계약
     raw.py                 # RawInstagramPost, RawYouTubeVideo (크롤러 출력 shape)
-    enriched.py            # EnrichedContentItem + ColorInfo
+    enriched.py            # EnrichedContentItem + post_palette (PaletteCluster)
     output.py              # TrendClusterSummary + ColorPaletteItem
   loaders/
     sample_loader.py       # JSON 파일 로드 + Pydantic 검증

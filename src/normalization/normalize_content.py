@@ -31,6 +31,9 @@ def normalize_instagram_post(post: RawInstagramPost) -> NormalizedContentItem:
         image_urls=list(post.image_urls),
         post_date=post.post_date,
         engagement_raw=engagement,
+        account_followers=post.account_followers,
+        ig_source_type=post.source_type.value,
+        account_handle=post.account_handle,
     )
 
 

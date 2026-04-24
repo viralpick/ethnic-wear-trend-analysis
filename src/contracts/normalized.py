@@ -40,3 +40,8 @@ class NormalizedContentItem(BaseModel):
     # 간단한 가중 인게이지먼트 신호 (후속 단계 프리-랭킹용). 정확한 social score 는 §9.2 공식을
     # raw 에서 재계산한다 — 여기 값은 "hint" 일 뿐.
     engagement_raw: int
+
+    # IG 전용 scoring 입력 — YT 는 None / 0 (§9.2 Social / Cultural 계산에 직접 사용).
+    account_followers: int = 0
+    ig_source_type: str | None = None   # InstagramSourceType.value 문자열, YT 는 None
+    account_handle: str | None = None   # new_account_ratio 추적 + top_influencers 표시용

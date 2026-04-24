@@ -43,6 +43,7 @@ from vision.garment_instance import GarmentInstance, compute_group_weight  # noq
 from vision.pipeline_b_extractor import (  # noqa: E402
     ATR_LABELS,
     MIN_CROP_PX,
+    SKIN_CLASS_IDS,
     WEAR_KEEP,
     SegBundle,
     detect_people,
@@ -100,26 +101,37 @@ def _blend(patch: np.ndarray, mask: np.ndarray, color: np.ndarray, alpha: float)
 def _split_kept_dropped(
     crop: np.ndarray,
     class_mask: np.ndarray,
+    skin_class_mask: np.ndarray,
     lab_min: np.ndarray,
     lab_max: np.ndarray,
     threshold: float,
+    upper_ceiling: float,
+    skin_dilate_iterations: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """class_mask 를 kept/dropped 로 분할. adaptive 규칙 반영."""
+    """class_mask 를 kept/dropped 로 분할. drop_skin_adaptive_spatial 의 3단 분기 mirror."""
     pixels = crop[class_mask]
     if pixels.shape[0] == 0:
         return class_mask, np.zeros_like(class_mask)
     lab = rgb_to_lab(pixels)
-    inside = np.all((lab >= lab_min) & (lab <= lab_max), axis=-1)
-    ratio = float(inside.sum()) / pixels.shape[0]
+    inside_flat = np.all((lab >= lab_min) & (lab <= lab_max), axis=-1)
+    ratio = float(inside_flat.sum()) / pixels.shape[0]
+    if ratio > upper_ceiling:
+        return np.zeros_like(class_mask), class_mask
     if ratio > threshold:
-        # adaptive: 전체 kept, dropped 없음
         return class_mask, np.zeros_like(class_mask)
-    ys, xs = np.where(class_mask)
-    kept_mask = np.zeros_like(class_mask)
-    dropped_mask = np.zeros_like(class_mask)
-    kept_mask[ys[~inside], xs[~inside]] = True
-    dropped_mask[ys[inside], xs[inside]] = True
-    return kept_mask, dropped_mask
+    inside_mask = np.zeros_like(class_mask)
+    inside_mask[class_mask] = inside_flat
+    if skin_dilate_iterations <= 0:
+        drop_mask = inside_mask  # 공간 방어 off → pixel-list drop.
+    elif not skin_class_mask.any():
+        drop_mask = np.zeros_like(class_mask)  # skin 부재 → drop 근거 없음.
+    else:
+        from scipy.ndimage import binary_dilation
+
+        skin_zone = binary_dilation(skin_class_mask, iterations=skin_dilate_iterations)
+        drop_mask = inside_mask & skin_zone
+    kept_mask = class_mask & ~drop_mask
+    return kept_mask, drop_mask
 
 
 def build_segformer_views(
@@ -140,6 +152,8 @@ def build_segformer_views(
     lab_min = np.asarray(cfg.skin_lab_box.min, dtype=np.float32)
     lab_max = np.asarray(cfg.skin_lab_box.max, dtype=np.float32)
     threshold = cfg.skin_drop_threshold_pct
+    upper_ceiling = cfg.skin_drop_upper_ceiling
+    dilate_iters = cfg.skin_dilate_iterations
     drop_color = np.array(_OVERLAY_DROPPED_COLOR, dtype=np.float32)
 
     for (x1, y1, x2, y2) in boxes:
@@ -149,6 +163,7 @@ def build_segformer_views(
             continue
         crop = rgb[y1c:y2c, x1c:x2c]
         seg = run_segformer(bundle, crop)
+        skin_class_mask = np.isin(seg, list(SKIN_CLASS_IDS))
         overlay_patch = overlay[y1c:y2c, x1c:x2c].copy()
         for class_id, label in ATR_LABELS.items():
             if label not in WEAR_KEEP:
@@ -158,7 +173,8 @@ def build_segformer_views(
                 continue
             class_color = np.array(_OVERLAY_COLORS.get(label, (0, 255, 0)), dtype=np.float32)
             kept_mask, dropped_mask = _split_kept_dropped(
-                crop, class_mask, lab_min, lab_max, threshold,
+                crop, class_mask, skin_class_mask,
+                lab_min, lab_max, threshold, upper_ceiling, dilate_iters,
             )
             _blend(overlay_patch, kept_mask, class_color, _OVERLAY_ALPHA)
             _blend(overlay_patch, dropped_mask, drop_color, _OVERLAY_DROPPED_ALPHA)
@@ -358,8 +374,61 @@ def _duplicate_groups_html(groups: list[dict]) -> str:
     return "".join(blocks)
 
 
+def _filtered_out_post_badge(filtered_out: list[dict], original_count: int) -> str:
+    """post row 에 drop 된 frame 개수 + 사유 요약 badge. 없으면 빈 문자열."""
+    if not filtered_out:
+        return ""
+    by_reason: dict[str, int] = {}
+    for f in filtered_out:
+        by_reason[f["reason"]] = by_reason.get(f["reason"], 0) + 1
+    label = ", ".join(f"{r}×{n}" for r, n in by_reason.items())
+    return (
+        f'<div style="background:#fde0dc;padding:3px 6px;border-radius:3px;'
+        f'font-size:10px;margin-top:3px" title="원본 {original_count} frame 중 filter drop">'
+        f'🚫 {len(filtered_out)}/{original_count} dropped<br>'
+        f'<span style="color:#555">{label}</span></div>'
+    )
+
+
+def _filtered_out_global_html(results: list[dict], html_dir: Path) -> str:
+    """상단 <details> 접힘 섹션 — scene_filter drop 된 frame 전체 목록 (reason 별 groupby)."""
+    by_reason: dict[str, list[dict]] = {}
+    for r in results:
+        for f in r.get("filtered_out", []):
+            by_reason.setdefault(f["reason"], []).append({
+                **f, "post_ulid": r["post_ulid"],
+            })
+    total = sum(len(v) for v in by_reason.values())
+    if total == 0:
+        return ""
+    groups_html: list[str] = []
+    for reason, items in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+        thumbs = "".join(
+            f'<div style="display:inline-block;margin:2px;text-align:center;font-size:10px">'
+            f'<img src="{_relpath(Path(f["image_path"]), html_dir)}" '
+            f'style="width:90px;height:90px;object-fit:cover;border:1px solid #ddd"><br>'
+            f'<code style="color:#888">{f["post_ulid"][:12]}…</code>'
+            f'</div>'
+            for f in items if f.get("image_path")
+        )
+        groups_html.append(
+            f'<details style="margin:6px 0">'
+            f'<summary style="cursor:pointer;font-weight:bold;padding:4px;'
+            f'background:#fde0dc;border-radius:3px">'
+            f'{reason} — {len(items)} frames</summary>'
+            f'<div style="padding:6px">{thumbs}</div></details>'
+        )
+    return (
+        f'<details style="margin:12px 0;border:1px solid #d44;border-radius:4px;padding:6px">'
+        f'<summary style="cursor:pointer;font-weight:bold;color:#a00">'
+        f'🚫 Filtered-out frames (scene_filter drop): {total} frames</summary>'
+        f'<div style="padding:6px">{"".join(groups_html)}</div>'
+        f'</details>'
+    )
+
+
 def _render_html(results: list[dict], output_path: Path) -> None:
-    """post 당: ULID+quality / carousel / overlay (kept+dropped) / post + frame palette."""
+    """post 당: ULID+quality / views / instances+groups / palette."""
     rows: list[str] = []
     legend = " ".join(
         f'<span style="background:rgb{_OVERLAY_COLORS[lbl]};'
@@ -374,6 +443,10 @@ def _render_html(results: list[dict], output_path: Path) -> None:
         views_cell = _views_cell_html(r, output_path.parent)
         chips_html = _chip_bar(r["palette"])
         badge_html = _quality_badge_html(r["quality"])
+        drop_badge = _filtered_out_post_badge(
+            r.get("filtered_out", []),
+            r.get("original_image_count", len(r["image_paths"])),
+        )
         frame_palettes_html = _frame_palettes_html(r.get("frame_palettes", []))
         groups_html = _duplicate_groups_html(r.get("duplicate_groups", []))
         palette_cell = (
@@ -384,11 +457,13 @@ def _render_html(results: list[dict], output_path: Path) -> None:
         )
         rows.append(
             f"<tr><td style='vertical-align:top;padding:8px'><code>{r['post_ulid']}</code>"
-            f"<br><small>{len(r['image_paths'])} imgs</small>{badge_html}</td>"
+            f"<br><small>{len(r['image_paths'])} imgs</small>"
+            f"{badge_html}{drop_badge}</td>"
             f"<td style='padding:8px;vertical-align:top'>{views_cell}</td>"
             f"<td style='padding:8px;vertical-align:top;max-width:360px'>{groups_html}</td>"
             f"<td style='padding:8px;vertical-align:top'>{palette_cell}</td></tr>"
         )
+    global_drop_section = _filtered_out_global_html(results, output_path.parent)
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Pipeline B Smoke</title>
 <style>
@@ -422,6 +497,7 @@ Instances = (frame × person × garment_class) 단위 독립 palette.
 Groups = 같은 garment_class + top-1 chip ΔE &lt; threshold 인 instance 묶음.
 weight = 1 + log(count) — sub-linear.
 </p>
+{global_drop_section}
 <table><thead><tr><th>post ULID + quality</th>
 <th>views (carousel / overlay / cloth)</th>
 <th>instances + groups</th><th>palette</th></tr></thead>
@@ -457,14 +533,23 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
     print(f"[smoke] image_root={image_root} posts={len(grouped)} images={total_imgs}")
 
     print("[smoke] loading YOLO + segformer (cached after first run)")
-    bundle = load_models()
-    print(f"[smoke] device={bundle.device}")
+    bundle = load_models(scene_filter_cfg=settings.vision.scene_filter)
+    print(
+        f"[smoke] device={bundle.device} "
+        f"scene_filter={'CLIP' if settings.vision.scene_filter.enabled else 'Noop'}"
+    )
 
     results: list[dict] = []
     for post_ulid, paths in grouped.items():
+        # 먼저 diagnostics 를 돌려 scene_filter drop frame 집합 확보. overlay/cloth 는
+        # pass 한 frame 만 생성 (drop frame 은 의미 없는 overlay 생성 비용 회피).
+        source = ImageFrameSource(paths)
+        diag = extract_palette_with_diagnostics(source, bundle, settings.vision)
+        filtered_stems = {rec.frame_id for rec in diag.filtered_out_frames}
+        kept_paths = [p for p in paths if p.stem not in filtered_stems]
         overlay_paths: list[Path] = []
         cloth_paths: list[Path] = []
-        for p in paths:
+        for p in kept_paths:
             overlay_path = masks_dir / f"{p.stem}_overlay.png"
             cloth_path = masks_dir / f"{p.stem}_cloth.png"
             save_views_png(
@@ -472,8 +557,6 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             )
             overlay_paths.append(overlay_path)
             cloth_paths.append(cloth_path)
-        source = ImageFrameSource(paths)
-        diag = extract_palette_with_diagnostics(source, bundle, settings.vision)
         quality = PostQuality(
             skin_leak_count=count_skin_leaks(diag.palette),
             chip_similarity_warning=count_chip_similarity(diag.palette),
@@ -500,15 +583,31 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
             }
             for group in diag.duplicate_groups
         ]
+        # scene_filter drop — frame_id 로 원본 image path 를 재매핑해 HTML thumbnail 에 사용.
+        by_stem = {p.stem: p for p in paths}
+        filtered_out_json = [
+            {
+                "frame_id": rec.frame_id,
+                "reason": rec.verdict.reason,
+                "scene_scores": rec.verdict.scene_scores,
+                "gender_scores": rec.verdict.gender_scores,
+                "age_scores": rec.verdict.age_scores,
+                "image_path": str(by_stem[rec.frame_id])
+                if rec.frame_id in by_stem else None,
+            }
+            for rec in diag.filtered_out_frames
+        ]
         results.append({
             "post_ulid": post_ulid,
-            "image_paths": [str(p) for p in paths],
+            "image_paths": [str(p) for p in kept_paths],
             "overlay_paths": [str(p) for p in overlay_paths],
             "cloth_paths": [str(p) for p in cloth_paths],
+            "original_image_count": len(paths),
             "palette": [item.model_dump(mode="json") for item in diag.palette],
             "frame_palettes": frame_palettes_json,
             "duplicate_groups": duplicate_groups_json,
             "instances": [_instance_to_json(inst) for inst in diag.instances],
+            "filtered_out": filtered_out_json,
             "quality": {
                 "level": quality.level,
                 "skin_leak_count": quality.skin_leak_count,
@@ -519,9 +618,12 @@ def run_smoke(image_root: Path, output_dir: Path) -> dict:
                 "garment_class_counts": quality.garment_class_counts,
             },
         })
+        drop_n = len(filtered_out_json)
+        drop_tag = f" ({drop_n} filtered)" if drop_n else ""
         print(
             f"[smoke] {post_ulid}: {len(paths)} imgs → {len(diag.palette)} chips "
             f"(frame_palettes={len(diag.frame_palettes)}) {quality.badge} {quality.level}"
+            f"{drop_tag}"
         )
 
     (output_dir / "palette.json").write_text(

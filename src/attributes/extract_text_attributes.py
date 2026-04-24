@@ -30,7 +30,7 @@ from contracts.common import (
     StylingCombo,
     Technique,
 )
-from contracts.enriched import BrandInfo, ColorInfo, EnrichedContentItem
+from contracts.enriched import BrandInfo, EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
 
 T = TypeVar("T")
@@ -38,14 +38,17 @@ T = TypeVar("T")
 
 @dataclass
 class AttributeExtractionState:
-    """stages 2a/2b 중간 상태. 마지막에 to_enriched() 로 frozen EnrichedContentItem 생성."""
+    """stages 2a/2b 중간 상태. 마지막에 to_enriched() 로 frozen EnrichedContentItem 생성.
+
+    silhouette 은 B3d (2026-04-24) 에서 post-level 단일값이 제거되어 이 상태에서도 빠진다.
+    canonical 단위 silhouette 은 `EnrichedContentItem.canonicals[*].representative.silhouette`
+    (vision path, feedback_post_level_single_value).
+    """
     normalized: NormalizedContentItem
     garment_type: GarmentType | None = None
     fabric: Fabric | None = None
     technique: Technique | None = None
     embellishment_intensity: EmbellishmentIntensity | None = None
-    color: ColorInfo | None = None
-    silhouette: None = None  # VLM 영역 (spec §7). 이 스켈레톤에서 채우지 않는다.
     occasion: Occasion | None = None
     styling_combo: StylingCombo | None = None
     brand: BrandInfo | None = None
@@ -58,8 +61,6 @@ class AttributeExtractionState:
             fabric=self.fabric,
             technique=self.technique,
             embellishment_intensity=self.embellishment_intensity,
-            color=self.color,
-            silhouette=None,
             occasion=self.occasion,
             styling_combo=self.styling_combo,
             brand=self.brand,

@@ -23,6 +23,12 @@ pipeline:
   collection_start_date: 2026-04-21
   # 실행 시각 기준 날짜. None 이면 run_daily_pipeline 이 today 를 쓴다.
   target_date: null
+  # StarRocks 로드 모드: count(갯수 기준, 현재 POC) | date(기간 기준, 향후 운영)
+  window_mode: count
+  # count 모드: 배치당 포스트 수 (posting_at 오름차순 정렬 후 LIMIT/OFFSET)
+  page_size: 200
+  # date 모드: target_date 기준 N일 이내 포스트 로드
+  window_days: 30
 
 scoring:
   # spec §9.1 — 4개 팩터 가중치 합 = 100. 4/24 싱크 주요 튜닝 대상.
@@ -77,6 +83,7 @@ scoring:
       window_end: 2026-05-11
       tags:
         - "#akshayatritiya"
+        - "#akshayatritiya2026"
         - "#goldethnic"
 
   # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 + new_account_ratio × 0.3.
@@ -85,6 +92,7 @@ scoring:
     hashtag_velocity: 0.3
     new_account_ratio: 0.3
   momentum_window_days: 7
+  new_account_window_days: 90  # 이 기간 내 미등장 계정을 new로 간주
 
   # spec — data_maturity 판정 일수.
   data_maturity:
@@ -100,11 +108,48 @@ vlm:
   # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드).
   case1_daily_cap: 150
 
+# --------------------------------------------------------------------------- #
+# Vision LLM (Phase 2) — GeminiVisionLLMClient + LocalJSONCache 설정.
+# Phase 0 파일럿 (2026-04-23, 20 post A/B) 에서 gemini-2.5-flash 채택.
+#   - BBOX 정확도 gpt-5-mini 대비 tighter (압승 판정)
+#   - garment_type 약간 우위
+#   - per-call 비용 $0.0009 vs $0.0026 (3배 저렴)
+# 자세한 경위: memory project_phase0_gemini_adopted.md
+# --------------------------------------------------------------------------- #
+vision_llm:
+  # provider: gemini | azure-openai. 향후 `--vision-llm` CLI 플래그로 swap.
+  provider: gemini
+  model_id: gemini-2.5-flash
+  # 프롬프트 수정 시 반드시 bump — src/vision/prompts.py::PROMPT_VERSION 과 일치해야 함.
+  # v0.4 (Color 3층 재설계 Phase A3): upper_is_ethnic / lower_is_ethnic 필드 추가 +
+  # color_preset_picks_top3 "1~3 동적 pick" 로 완화. cache key 에 prompt_version 포함이라
+  # bump 시 v0.3 cache 자동 무효화.
+  prompt_version: v0.4
+  # LocalJSONCache 저장 루트. outputs/ 하위 (gitignore 대상).
+  cache_dir: outputs/llm_cache
+
+# --------------------------------------------------------------------------- #
+# Phase 4.5 — Intra-post outfit dedup (Pipeline B M3.A Step D).
+# 같은 post 내 (IG carousel / 필터된 frames) 서로 다른 image 에서 LLM 이 뽑은 outfit
+# 들을 similarity 가중합 ≥ threshold 면 canonical 1개로 병합. BBOX 집합 union 으로 묶어
+# Phase 3 crop 입력에 전달. 우선순위 근거: memory project_phase0_gemini_adopted.md
+#   color_preset → color_family → garment_type → technique
+# silhouette / fabric 은 dedup 가중치 0 (참고용), 현재 schema 에는 등장 안 함.
+# --------------------------------------------------------------------------- #
+outfit_dedup:
+  color_preset_weight: 0.40
+  color_family_weight: 0.25
+  garment_type_weight: 0.25
+  technique_weight: 0.10
+  threshold: 0.60
+  # 같은 image 2-outfit 은 보통 다른 사람이라 merge 금지 — 안전 가드 기본 False.
+  same_image_merge: false
+  preset_path: outputs/color_preset/color_preset.json
+
 palette:
-  # spec §4.1 ④ + §5.4 — drill-down palette chip. post-level ColorInfo 리스트를 LAB KMeans
-  # 로 top_k cluster 로 aggregate (vision/color_space.extract_colors 와 같은 알고리즘이지만
-  # frame-level 이 아닌 post-level aggregation — Step B).
-  # frame-level (pixel sample) aggregation 은 Step C 의 pipeline_b_extractor 에서 별도.
+  # Color 3층 재설계 (2026-04-24): post-level ColorInfo 폐기. top_k 는 B3 에서 cluster
+  # palette merge (post_palette greedy merge, max 5) 로 재배선 예정. A2 기간 동안 이
+  # 설정은 참고값으로만 유지, make_drilldown 이 빈 color_palette=[] 반환.
   top_k: 5
 
 export:
@@ -120,25 +165,85 @@ export:
 #   - extract_colors.min_pixels: class 별 최소 pixel. 낮추면 noise, 높이면 small garment drop
 # --------------------------------------------------------------------------- #
 vision:
+  # 2026-04-23 `scripts/collect_skin_lab.py` — 200 post (hashtag 100 + profile 100) 의 유효
+  # 120 post, 5.2M skin pixel 기반 percentile 실측. Box C (L p5-p95 / a,b p2.5-p97.5).
+  # 이전 [40,10,15]→[80,25,35] 는 deep skin / 음영 skin 을 놓치던 상태 — 확장.
+  # L 하단 5%tile=16.1 이하는 segformer mis-seg 가능성 커서 제외.
+  #
+  # 2026-04-23 재조정: L 상한 79.8 → 72.0 으로 하향.
+  # 사유: 밝은 옷 (특히 거의 흰색) 의 음영 pixel (L 72~80) 이 LAB 상 skin box 안으로 들어와
+  # 옷색이 drop 되는 관찰. 72.0 ≈ L p85 근사 (mean 53.39 + 1.04*std 18.85) — fair skin
+  # 얼굴 (L 80+) 은 어차피 face class mask 로 잡혀 garment 추출 대상 밖이라 영향 제한적.
   skin_lab_box:
-    min: [40.0, 10.0, 15.0]
-    max: [80.0, 25.0, 35.0]
+    min: [16.1, 0.0, -2.6]
+    max: [72.0, 29.6, 43.7]
   extract_colors:
     k: 5
     min_pixels: 150
+  # Phase 4 동적 k palette (roadmap §80). canonical outfit pool → k=5 KMeans →
+  # ΔE76 greedy merge → share drop. 최종 k ∈ {0..5} (단/2/3/4/5색 옷 자연 대응).
+  dynamic_palette:
+    initial_k: 5
+    merge_deltae76_threshold: 10.0   # 지각상 가까운 pair greedy merge 기준
+    min_cluster_share: 0.05          # share < 5% 는 noise 로 drop
+    min_pixels: 150                  # pool 이 이보다 작으면 KMeans 의미 없음 → []
   # 거울 셀카 등 YOLOv8n 이 못 잡는 mirror/occlusion 케이스 방어. true 면 YOLO 0 bbox 일 때
   # 전체 이미지를 segformer 에 태워 의류/피부/배경 분리로 진행.
   fallback_full_image_on_no_person: true
-  # drop_skin_adaptive threshold — class pixel 의 이 비율 이상이 skin LAB box 안이면
-  # 옷 자체가 skin-tone (베이지/탄) 판정, 원본 pixel 전체 유지. 미만이면 edge noise 제거.
-  # 0.5 — 50% 이상이면 "진짜 skin-tone 의류" 로 확실할 때만 보존. 그 이하는 drop.
-  # smoke 131 post 실측 후 0.3 → 0.5 상향 (0.3 은 adaptive 너무 자주 발동).
+  # drop_skin_adaptive 의 하/상 임계. 3단 분기:
+  # - ratio > upper_ceiling (0.97): segment 통째 drop. 팔/다리가 upper-clothes/pants 로 mis-seg
+  #   된 케이스 (segment 가 순수 skin) 방어. box C 기준 진짜 베이지 kurta 도 97%+ 찍기 어려움.
+  # - ratio > threshold (0.5): skin-tone 옷 판정, 전체 보존 (베이지 kurta 보호).
+  # - 그 이하: edge noise (목/손목 leak) 로 box 안 pixel 만 drop.
   skin_drop_threshold_pct: 0.5
+  skin_drop_upper_ceiling: 0.97
+  # spatial-aware drop. segformer skin class mask 를 N px dilate 한 "skin 인접 zone" 과
+  # LAB-box-안 pixel 의 교집합 만 drop. 옷 내부 패턴(쉬폰/베이지 자수/흰옷 음영) 보존,
+  # 목/손목 경계 leak 만 제거. 0 이면 비활성 (pixel-list 분기와 동일). crop scale 이 보통
+  # 짧은 변 ~512 이라 4 px margin 기본. 음영이 계속 날아가면 2 로 내려 margin 좁힘.
+  skin_dilate_iterations: 4
   # phase 3 — (frame × person × garment_class) instance 기반 palette 설정.
   instance:
     single_color_max_delta_e: 8.0   # instance 내 chip 간 ΔE 미만이면 단색 판정
     duplicate_max_delta_e: 15.0     # instance 간 top-1 ΔE 미만이면 같은 옷
     weight_formula: log             # log(1+count) | linear | sqrt
+  # M3.A Step D Phase 1 (2026-04-24 재설계) — CLIP zero-shot 2-stage pre-filter.
+  # enabled: false 이면 NoopSceneFilter — 모든 frame pass. true 면 CLIP ViT-B/32 로드.
+  # Stage 1 (image-level): scene + woman/adult softmax threshold 판정. argmax 완화.
+  # Stage 2 (per-BBOX): man/child mix signal 감지 시만 YOLO BBOX 별 CLIP 재판정.
+  scene_filter:
+    enabled: true
+    model_id: openai/clip-vit-base-patch32
+    scene_prompts:
+      - a fashion photo of a person wearing clothing
+      - a photo of a statue or mannequin
+      - a photo of a landscape or outdoor scenery
+    scene_pass_index: 0
+    gender_prompts:
+      - a photo of a woman
+      - a photo of a man
+    female_index: 0
+    male_index: 1
+    age_prompts:
+      - a photo of a young child
+      - a photo of a teenager or adult
+    child_index: 0
+    adult_index: 1
+    # scene pass prompt softmax (argmax 조건 X). 0.20 = fashion 신호가 20% 이상만 있으면 살림.
+    scene_min_pass_score: 0.20
+    # Stage 1 argmax 완화 (Phase 1): 여성이 있어도 남성 비중이 더 크면 argmax 가 man 쪽이라
+    # 기존 기준은 drop. softmax threshold 로 바꿔 여성 30% / 성인 30% 이상만 있으면 pass.
+    stage1_female_min: 0.30
+    stage1_adult_min: 0.30
+    # Stage 2 trigger: man 또는 child signal 이 이 값 이상이면 per-BBOX CLIP 재판정.
+    stage2_mix_threshold: 0.30
+    # Stage 2 BBOX 단일 인물 판정 — stage1 보다 높게 (BBOX 당 1명 전제).
+    stage2_female_min: 0.50
+    stage2_adult_min: 0.50
+    stage2_enabled: true
+    # Stage 2 BBOX crop 짧은 변 최소 (CLIP embedding noise 방어). 80px 미만 → too_small drop.
+    min_person_bbox_side_px: 80
+
   # bbox-level 오탐 필터. 동상/마네킹/옷 없는 제품샷에서 의류 추출 방지.
   # - min_skin_ratio_for_person: crop 내 segformer skin class pixel 비율 최소값.
   #   미만이면 drop (동상=skin 없음). 0.005 = 0.5%.
