@@ -439,6 +439,10 @@ def _render_outfit(
     lower = outfit.get("lower_garment_type")
     single = outfit.get("dress_as_single")
     silhouette = outfit.get("silhouette")
+    # v0.4 신규 — upper/lower_is_ethnic 독립 판정. null 가능 (Gemini 미채움 또는
+    # garment_type 이 null 일 때). dress_as_single=True 면 lower_is_ethnic=null 강제.
+    upper_eth = outfit.get("upper_is_ethnic")
+    lower_eth = outfit.get("lower_is_ethnic")
     picks = outfit.get("color_preset_picks_top3") or []
     chips = "".join(_color_chip(p, hex_by_name) for p in picks)
     bbox_btn = ""
@@ -455,14 +459,27 @@ def _render_outfit(
         f'<div class="sil">silhouette=<b>{silhouette}</b></div>'
         if silhouette is not None else ""
     )
+    upper_badge = _ethnic_badge(upper_eth)
+    lower_badge = _ethnic_badge(lower_eth)
+    picks_label = f"picks={len(picks)}"
     return (
         '<div class="outfit">'
         f'<div class="bbox">{bbox_btn} bbox=[{bbox_txt}] area={ratio}</div>'
-        f'<div class="gt">upper={upper} · lower={lower} · single={single}</div>'
+        f'<div class="gt">upper={upper} {upper_badge} · '
+        f'lower={lower} {lower_badge} · single={single}</div>'
         f'{silhouette_html}'
-        f'<div class="chips">{chips}</div>'
+        f'<div class="chips"><span class="picks-label">{picks_label}</span>{chips}</div>'
         '</div>'
     )
+
+
+def _ethnic_badge(value: bool | None) -> str:
+    """upper_is_ethnic / lower_is_ethnic 값을 시각화. null / missing 은 회색."""
+    if value is True:
+        return '<span class="eth-badge yes">ethnic</span>'
+    if value is False:
+        return '<span class="eth-badge no">western</span>'
+    return '<span class="eth-badge na">n/a</span>'
 
 
 def _color_chip(name: str, hex_by_name: dict[str, str]) -> str:
@@ -491,17 +508,45 @@ def _render_summary(models: list[str], results: dict[str, list[PilotResult]]) ->
             if r.parsed is not None and r.parsed.get("is_india_ethnic_wear")
         )
         flipped = raw_true - filtered_true
+        # v0.4 신규 지표 — outfit 단위 aggregation.
+        outfits_flat = [
+            o
+            for r in rs
+            if r.parsed is not None
+            for o in (r.parsed.get("outfits") or [])
+            if isinstance(o, dict)
+        ]
+        total_outfits = len(outfits_flat)
+        pick_dist = {1: 0, 2: 0, 3: 0, 0: 0}
+        upper_fill = lower_fill = 0
+        for o in outfits_flat:
+            picks = o.get("color_preset_picks_top3") or []
+            k = len(picks) if len(picks) in (0, 1, 2, 3) else 3
+            pick_dist[k] = pick_dist.get(k, 0) + 1
+            if o.get("upper_is_ethnic") is not None:
+                upper_fill += 1
+            if o.get("lower_is_ethnic") is not None:
+                lower_fill += 1
+        pick_txt = f"{pick_dist[1]}/{pick_dist[2]}/{pick_dist[3]}"
+        if pick_dist[0]:
+            pick_txt += f" (+{pick_dist[0]} empty)"
+        fill_txt = (
+            f"up {upper_fill}/{total_outfits} · "
+            f"lo {lower_fill}/{total_outfits}"
+        ) if total_outfits else "—"
         rows.append(
             f'<tr><td>{m}</td><td>{parsed_ok}/{len(rs)}</td>'
             f'<td>{total_latency:.1f}s</td><td>{total_prompt}</td>'
             f'<td>{total_out}</td>'
-            f'<td>{raw_true}</td><td>{filtered_true}</td><td>{flipped}</td></tr>'
+            f'<td>{raw_true}</td><td>{filtered_true}</td><td>{flipped}</td>'
+            f'<td>{pick_txt}</td><td>{fill_txt}</td></tr>'
         )
     return (
         '<table class="summary">'
         '<thead><tr><th>model</th><th>parsed</th><th>total latency</th>'
         '<th>prompt tokens</th><th>completion tokens</th>'
-        '<th>raw_true</th><th>filtered_true</th><th>flipped</th></tr></thead>'
+        '<th>raw_true</th><th>filtered_true</th><th>flipped</th>'
+        '<th>picks 1/2/3</th><th>is_ethnic fill</th></tr></thead>'
         '<tbody>' + "".join(rows) + '</tbody></table>'
     )
 
@@ -538,9 +583,14 @@ h1 {{ font-size: 18px; }}
 .bbox {{ font-family: monospace; font-size: 11px; color: #666; }}
 .gt {{ font-size: 12px; margin: 2px 0; }}
 .sil {{ font-size: 12px; margin: 2px 0; color: #2c3e50; }}
-.chips {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }}
+.chips {{ display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px; }}
+.picks-label {{ font-family: monospace; font-size: 11px; color: #666; margin-right: 4px; }}
 .chip {{ display: inline-flex; align-items: center; gap: 4px; background: #fff; border: 1px solid #ccc; border-radius: 12px; padding: 2px 8px; font-size: 11px; }}
 .swatch {{ width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); }}
+.eth-badge {{ display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: bold; margin-left: 2px; }}
+.eth-badge.yes {{ background: #d4edda; color: #155724; }}
+.eth-badge.no {{ background: #fde2e4; color: #6e2c2c; }}
+.eth-badge.na {{ background: #ececec; color: #666; }}
 .na {{ color: #999; font-style: italic; }}
 .err {{ color: #c00; font-size: 11px; }}
 .raw {{ background: #f5f5f5; padding: 4px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; }}

@@ -17,7 +17,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # v2 에서 스키마가 깨지는 변경을 넣을 때만 bump. POC 기간엔 0.1.x 유지.
 CONTRACT_VERSION: str = "0.1.0"
@@ -220,3 +220,23 @@ class ColorPaletteItem(BaseModel):
     name: str
     family: ColorFamily
     pct: float
+
+
+class PaletteCluster(BaseModel):
+    """
+    purpose: 3층 palette (canonical / post / cluster) 의 한 칸. contracts 경계용
+    pydantic — numpy-free. rgb/lab 내부 CV 값은 src/vision/dynamic_palette.py 의
+    dataclass 에만 보존.
+    stage: output
+    ownership: analysis-owned
+    stability: evolving (Color 파이프라인 3층 재설계, 2026-04-24)
+
+    share: 같은 레벨 내 합 = 1.0 (canonical/post/cluster 모두).
+    family: dynamic_palette 가 pixel 기반이라 family 미매핑 가능 (B 단계 adapter 에서
+        color_preset_picks_top3 / LAB rule fallback 으로 채움).
+    """
+    model_config = ConfigDict(frozen=True)
+
+    hex: str
+    share: float = Field(ge=0.0, le=1.0)
+    family: ColorFamily | None = None

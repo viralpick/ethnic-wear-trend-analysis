@@ -121,7 +121,10 @@ vision_llm:
   provider: gemini
   model_id: gemini-2.5-flash
   # 프롬프트 수정 시 반드시 bump — src/vision/prompts.py::PROMPT_VERSION 과 일치해야 함.
-  prompt_version: v0.3
+  # v0.4 (Color 3층 재설계 Phase A3): upper_is_ethnic / lower_is_ethnic 필드 추가 +
+  # color_preset_picks_top3 "1~3 동적 pick" 로 완화. cache key 에 prompt_version 포함이라
+  # bump 시 v0.3 cache 자동 무효화.
+  prompt_version: v0.4
   # LocalJSONCache 저장 루트. outputs/ 하위 (gitignore 대상).
   cache_dir: outputs/llm_cache
 
@@ -144,10 +147,9 @@ outfit_dedup:
   preset_path: outputs/color_preset/color_preset.json
 
 palette:
-  # spec §4.1 ④ + §5.4 — drill-down palette chip. post-level ColorInfo 리스트를 LAB KMeans
-  # 로 top_k cluster 로 aggregate (vision/color_space.extract_colors 와 같은 알고리즘이지만
-  # frame-level 이 아닌 post-level aggregation — Step B).
-  # frame-level (pixel sample) aggregation 은 Step C 의 pipeline_b_extractor 에서 별도.
+  # Color 3층 재설계 (2026-04-24): post-level ColorInfo 폐기. top_k 는 B3 에서 cluster
+  # palette merge (post_palette greedy merge, max 5) 로 재배선 예정. A2 기간 동안 이
+  # 설정은 참고값으로만 유지, make_drilldown 이 빈 color_palette=[] 반환.
   top_k: 5
 
 export:

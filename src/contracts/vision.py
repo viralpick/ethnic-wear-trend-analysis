@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from contracts.common import Silhouette
+from contracts.common import PaletteCluster, Silhouette
 
 
 class EthnicOutfit(BaseModel):
@@ -44,14 +44,27 @@ class EthnicOutfit(BaseModel):
         default=None,
         description="single lowercase word (kurta/saree/anarkali/sherwani 등)",
     )
+    upper_is_ethnic: bool | None = Field(
+        default=None,
+        description="upper_garment_type 가 인도 ethnic wear 계열인지 Gemini 가 직접 판정. "
+        "B1 canonical_extractor 가 segformer upper class pool 에 포함할지 결정. "
+        "dress_as_single=True 면 dress 취급 (upper 슬롯 재활용).",
+    )
     lower_garment_type: str | None = Field(
         default=None,
         description="single lowercase word (palazzo/churidar/salwar 등). "
         "dress_as_single=True 면 None.",
     )
+    lower_is_ethnic: bool | None = Field(
+        default=None,
+        description="lower_garment_type 가 인도 ethnic wear 계열인지 Gemini 가 직접 판정. "
+        "B1 canonical_extractor 가 segformer lower class pool 에 포함할지 결정. "
+        "dress_as_single=True 면 None.",
+    )
     dress_as_single: bool = Field(
         default=False,
-        description="saree drape / lehenga-choli-as-single / ethnic_dress 여부.",
+        description="saree drape / lehenga-choli-as-single / ethnic_dress 여부. "
+        "True 면 upper_is_ethnic 을 dress ethnic 여부로 재활용.",
     )
     silhouette: Silhouette | None = Field(
         default=None,
@@ -133,4 +146,11 @@ class CanonicalOutfit(BaseModel):
     members: list[OutfitMember] = Field(
         min_length=1,
         description="병합된 원본 outfit 들의 trace. 최소 1 (자기 자신).",
+    )
+    palette: list[PaletteCluster] = Field(
+        default_factory=list,
+        max_length=3,
+        description="canonical 단위 pixel 기반 palette (B2 에서 계산). "
+        "B1 segformer class 분기 → KMeans → ΔE76 greedy merge → max 3. "
+        "Gemini color_preset_picks_top3 는 여기 포함 안 됨 (dedup 전용).",
     )

@@ -11,12 +11,19 @@ Phase 0 에서 v0.1 확정 (scripts/pilot_llm_bbox.py). 이후 수정 이력:
          기준이 요구하나 Phase 2 contract 최소화 시 누락되었던 drift 복구). closed
          vocabulary 아닌 single lowercase word — 상위 계층에서 normalize. 실측은 Phase 5
          full smoke (131 post) 로 대체, 20-post 재파일럿 생략.
+  v0.4 — 2026-04-24, Color 3층 재설계 Phase A3. `upper_is_ethnic` / `lower_is_ethnic`
+         필드 추가 (EthnicOutfit 에 A2 에서 contract 확장됨). B1 canonical_extractor 가
+         segformer upper/lower/dress class pool 에 포함할지를 Gemini 직접 판정으로 결정
+         (configs/garment_vocab.yaml 폐기). dress_as_single=True 일 때 upper_is_ethnic 을
+         dress 전체 ethnic 여부로 재활용, lower_is_ethnic=null. 또한
+         `color_preset_picks_top3` 를 강제 top-3 에서 "1~3 동적 pick, DO NOT pad"
+         으로 완화 — 단/2톤 의류 정확 표현 목적.
 """
 from __future__ import annotations
 
 from contracts.common import Silhouette
 
-PROMPT_VERSION = "v0.3"
+PROMPT_VERSION = "v0.4"
 
 _SILHOUETTE_ENUM = [s.value for s in Silhouette]
 
@@ -51,6 +58,23 @@ SYSTEM_PROMPT = (
     "(e.g. \"kurta\", \"saree\", \"anarkali\", \"sherwani\", \"palazzo\", \"churidar\"). "
     "NO slash, NO OR, NO parentheses, NO multiple values. "
     "If unsure, pick the best single guess or null.\n"
+    "- upper_is_ethnic: judge INDEPENDENTLY whether upper_garment_type belongs to the "
+    "Indian ethnic/traditional family (kurta, kurti, anarkali, saree blouse/choli, "
+    "sherwani, angrakha, ethnic tunic, kurta-style dress, etc.). Western tops like "
+    "T-shirt, crop top, blouse, shirt, tank top, hoodie → false. Null only if "
+    "upper_garment_type is null.\n"
+    "- lower_is_ethnic: judge INDEPENDENTLY whether lower_garment_type belongs to the "
+    "Indian ethnic/traditional family (palazzo, churidar, salwar, sharara, dhoti, "
+    "lehenga skirt, ghagra, ethnic pyjama, dupatta-as-lower, etc.). Western bottoms "
+    "like jeans, leggings, shorts, mini skirt, pencil skirt, yoga pants → false. "
+    "Null only if lower_garment_type is null.\n"
+    "- If dress_as_single=true: upper_is_ethnic represents the ENTIRE dress's ethnic "
+    "status (saree drape, lehenga choli as single, ethnic dress → true; western "
+    "bodycon/evening dress → false). lower_is_ethnic MUST be null.\n"
+    "- Indo-fusion inclusion: is_india_ethnic_wear=true if upper_is_ethnic=true OR "
+    "lower_is_ethnic=true (one traditional silhouette is enough). "
+    "is_india_ethnic_wear=false only if both are false/null AND no traditional drape "
+    "is present. Pattern/print alone does NOT make a garment ethnic — silhouette rules.\n"
     f"- silhouette MUST be exactly one of {_SILHOUETTE_ENUM} or null. "
     "Apply to the DOMINANT visible garment of the outfit "
     "(upper if two-piece, whole drape if single). "
@@ -61,8 +85,10 @@ SYSTEM_PROMPT = (
     "angrakha = wrap-front with tie; empire = high waistline.\n"
     "- Each color pick must be chosen from the provided color_preset \"name\" list "
     "(e.g. \"pool_00\", \"saffron\"), NOT free-form hex.\n"
-    "- Pick top-3 preset colors that dominate the ethnic-wear region of each outfit "
-    "(skin excluded).\n"
+    "- color_preset_picks_top3: pick 1 to 3 preset colors that dominate the ethnic-wear "
+    "region of each outfit (skin excluded). Use fewer picks when the garment is "
+    "genuinely single-tone (1 pick) or two-tone (2 picks). DO NOT pad the list to 3 "
+    "by adding minor/negligible colors.\n"
     "- fabric MUST be a SINGLE lowercase word describing the DOMINANT visible material "
     "(e.g. \"cotton\", \"linen\", \"silk\", \"chiffon\", \"georgette\", \"rayon\", "
     "\"khadi\", \"chanderi\", \"organza\", \"velvet\", \"net\", \"satin\"). "
@@ -84,12 +110,14 @@ SYSTEM_PROMPT = (
     "      \"person_bbox\": [x, y, w, h],\n"
     "      \"person_bbox_area_ratio\": float,\n"
     "      \"upper_garment_type\": string | null,\n"
+    "      \"upper_is_ethnic\": bool | null,\n"
     "      \"lower_garment_type\": string | null,\n"
+    "      \"lower_is_ethnic\": bool | null,\n"
     "      \"dress_as_single\": bool,\n"
     "      \"silhouette\": string | null,\n"
     "      \"fabric\": string | null,\n"
     "      \"technique\": string | null,\n"
-    "      \"color_preset_picks_top3\": [\"name\", \"name\", \"name\"]\n"
+    "      \"color_preset_picks_top3\": [\"name\", ...]  // 1 to 3 entries, do not pad\n"
     "    }\n"
     "  ]\n"
     "}"
