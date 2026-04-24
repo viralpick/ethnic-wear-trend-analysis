@@ -15,11 +15,11 @@
 2. **scoring.normalization_method 동결** — `minmax_same_run` 외 방식은 `configs/local.yaml`
    의 override 가 아니면 `apply_normalization` dispatcher 에서 `ValueError`. z-score, log,
    percentile, softmax 등 **코드에 추가 금지**. raw counts → same-run minmax → weight 가
-   유일한 재현 경로 (spec mandate).
+   유일한 재현 경로 (원칙: 재현성).
 
 3. **persistence / framework 금지** — DB persistence / ORM / service layer / DI 컨테이너 /
    스케줄러 / 메시지 큐 consumer 금지. 입력은 raw 파일/DB reader, 출력은 enriched JSON +
-   summaries JSON + 선택적 BE poster. spec §3/§10 batch 전제.
+   summaries JSON + 선택적 BE poster. batch 전제.
 
 4. **실패 숨김 금지** — retry 루프 / 묵시적 fallback 으로 에러 삼킴 금지. **timeout 가드**
    만 허용. LLM/VLM 은 `seed=42` / `temperature=0` 결정론. `FakeLLMClient` / `FakeVLMClient`
@@ -28,7 +28,7 @@
 
 5. **스코어 재현성** — raw counts + 공식만으로 재현 가능한 스코어만 생성. ML ranker /
    heuristic re-rank / 학습 기반 가중치 금지. 각 `score_*.compute(ctx, cfg) -> float` 는
-   pure raw 반환, 정규화는 orchestrator 1회. spec §9 가 canonical.
+   pure raw 반환, 정규화는 orchestrator 1회. 재현성이 canonical.
 
 ## 작업 패턴
 
@@ -37,10 +37,15 @@
 - 구현 완료 시 자동 테스트 → 수동 체크 → memory 갱신 순서
 - vision extras 동작이 바뀌면 `scripts/pipeline_b_smoke.py` 로 mini (6 posts) + full
   (131 posts) smoke 해서 HTML 비교
+- **spec.md 자동 참조 금지** (2026-04-24 정책) — 구현 방향은 `memory/roadmap.md` +
+  project memory + user 직접 지시 우선. `docs/spec.md` 는 참고사항이며 코드 구현을
+  spec 에 맞추지 않음. spec 개정이 필요하면 user 승인 후 사후 반영.
+  (feedback_spec_not_canonical.md)
 
 ## 주요 파일 지도
 
-- `docs/spec.md` — canonical spec. 이 문서와 코드 충돌 시 spec 우선. 변경은 user 동의
+- `memory/roadmap.md` + `memory/project_*.md` — 현재 작업 방향의 canonical source
+- `docs/spec.md` — 참고사항 (자동 참조 금지). 코드와 충돌 시 자동 조정 금지, user 에게 확인
 - `docs/roadmap.md` — M1~M4 milestone + 영구 비스코프 + 우선순위 매트릭스
 - `docs/sync_2026-04-24_agenda.md` — 4/24 싱크 agenda (크롤러/BE/DW 팀 결정 기록)
 - `configs/local.yaml` — 모든 magic number 가 여기. 코드에 하드코드 금지

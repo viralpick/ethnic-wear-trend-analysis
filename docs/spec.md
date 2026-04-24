@@ -346,21 +346,55 @@ gota_patti         = 고타파티. 금/은색 리본 장식. 라이트 버전만
 
 ### ④ color — "무슨 색이냐"
 
-추출 방법: **텍스트로는 잘 안 잡힘.** 캡션에 "pastel mint"라고 쓰는 경우는 드묾. 대부분 이미지를 봐야 알 수 있는 속성. → **Instagram 이미지 + IG Reel + YouTube 영상에서 Pipeline B로 추출.** IG 정적 이미지가 1차, Reel/YouTube는 VideoFrameSource로 대표 프레임 샘플링 후 동일 로직 적용 (중간 우선순위 — VideoFrameSource 구현 후).
+추출 방법: 텍스트로는 잘 안 잡힘 (캡션에 "pastel mint"라고 쓰는 경우 드묾). Instagram 이미지 + IG Reel + YouTube 영상에서 Pipeline B 로 추출. IG 정적 이미지가 1차, Reel / YouTube 는 VideoFrameSource 로 대표 프레임 샘플링 후 동일 로직 적용 (중간 우선순위 — VideoFrameSource 구현 후).
 
-**RGB값으로 추출 → 유사 범위 클러스터링 → 대표값을 HEX 변환하여 대시보드에 색상 칩 표시.**
+**3층 palette 구조**
 
-이유: 같은 색 옷도 조명/각도에 따라 HEX가 달라짐. RGB 퍼센티지로 분포를 잡고 밀집 구간을 트렌딩 컬러로 판별하는 방식이 더 정확함.
+color 는 "canonical outfit / post / trend cluster" 세 레벨 모두에서 palette (PaletteCluster list) 로 표현된다. 과거 (~2026-04-23) "post 당 대표색 1" 구조는 멀티톤 의류 (saree base+drape, layered kurta 등) 에서 dark neutral 로 수렴하는 버그 (pool_02 수렴 진단, 2026-04-24) 때문에 폐기.
 
-추출 결과 저장 형식:
+각 레벨 palette 최대 크기:
+
+| 레벨             | max 색상 | 계산 방법                                           |
+|------------------|----------|----------------------------------------------------|
+| canonical outfit | 3        | segformer ethnic pool → KMeans → ΔE76 greedy merge |
+| post             | 3        | canonical palette 들을 ΔE76 greedy merge           |
+| trend cluster    | 5        | post palette 들을 ΔE76 greedy merge                |
+
+**Gemini (VLM) 의 역할과 한계**
+
+VLM 은 이미지 1장에서 50-color preset 중 1~3개 `color_preset_picks_top3` 를 semantic highlight 로 pick 한다. 이 pick 의 **유일한 용도는 post 내 canonical dedup 의 비교 키** (같은 post 안의 outfit 들이 같은 garment 인지 판단).
+
+canonical / post / cluster palette 의 RGB 값은 **오직 픽셀 증거** (segformer ethnic 영역 pool → KMeans → ΔE76 greedy merge) 로 계산한다. Gemini pick 은 palette 의 RGB 값에 섞이지 않으며, 어떤 merge 에도 참여하지 않는다 (LLM 환각이 palette 에 오염되는 것을 방지).
+
+**segmentation pool — ethnic 영역만**
+
+canonical 당 pool 은 그 outfit 에서 ethnic 으로 판정된 class 만 union.
+- `upper_is_ethnic=True` → segformer upper class pool 포함
+- `lower_is_ethnic=True` → segformer lower class pool 포함
+- `dress_as_single=True` + `upper_is_ethnic=True` → segformer dress class pool 포함 (upper 슬롯 재활용)
+- non-ethnic part (jeans, western_pants 등) 는 pool 에서 제외하되 라벨 자체는 보존 (upper=kurta / lower=jeans 형태로 "western matched" 흔적 추적)
+
+is_ethnic 판정은 Gemini vision LLM 이 `EthnicOutfit.upper_is_ethnic` / `lower_is_ethnic` 필드로 직접 수행 (prompts v0.4+). 이전 `configs/garment_vocab.yaml` + `src/attributes/ethnic_vocab.py` 기반 로컬 vocab 매핑은 B1 에서 폐기.
+
+**저장 형식 — PaletteCluster**
 
 ```json
-{ "r": 184, "g": 212, "b": 195, "r_pct": 0.72, "g_pct": 0.83, "b_pct": 0.76, "name": "sage mint", "family": "pastel" }
+{ "hex": "#B8D4C3", "share": 0.32, "family": "pastel" }
 ```
 
-대시보드 표시 시 RGB 대표값 → HEX 변환 (예: rgb(184,212,195) → #B8D4C3)
+- hex: KMeans centroid 의 "#RRGGBB" 문자열 (대시보드 칩 표시용)
+- share: 이 cluster 의 pixel 비중 (0~1, 같은 레벨 palette 내 share 합 = 1.0)
+- family: 50-color preset 매핑 경유로 결정, 아래 family vocab 중 하나
 
-VLM 프롬프트로 RGB 직접 추출이 잘 안 될 경우 Plan B: 이미지에서 의류 영역 크롭 → 픽셀 샘플링으로 dominant color 추출 (OpenCV 등 전통 CV 방식). 4/24 1차 싱크에서 VLM 결과를 보고 방식 확정.
+PaletteCluster 는 canonical / post / cluster 세 레벨 모두 동일 구조. 세 레벨 모두 share (%) 를 포함한다.
+
+**저장 형식 — Gemini pick**
+
+`color_preset_picks_top3` 는 50-color preset 이름 array (1~3). 비중 / 순위 없음. 이 pick 은 canonical dedup 비교 키로만 사용되고, palette 계산 / merge 에는 참여하지 않음.
+
+```json
+"color_preset_picks_top3": ["pool_13", "self_maroon_red"]
+```
 
 color_family 분류 (색상 계열):
 
@@ -374,6 +408,8 @@ bright             = 터머릭옐로우, 퓨시아 등 강렬한 색
 dual_tone          = 투톤/컬러블록 (두 가지 색 조합)
 multicolor         = 멀티컬러 프린트
 ```
+
+post / cluster 레벨 family 는 "palette 의 dominant cluster family" 로 계산 (참고용).
 
 ### ⑤ silhouette — "옷의 형태/실루엣이 뭐냐"
 
@@ -518,7 +554,7 @@ display_name(화면에 보이는 트렌드명)은 클러스터 키에서 자동 
 예를 들어 "Chikankari Cotton Kurta Set" 클러스터 안에 포스트가 80개 있으면:
 
 ```
-color_palette: (VLM으로 추출한 대표 이미지들의 RGB 클러스터링 → HEX 변환)
+color_palette: (cluster 속 post palette 들을 ΔE76 greedy merge → 최대 5색. §4.1 ④ 3층 palette 참조)
   [#B8D4C3] sage      32%
   [#FFFFFF] white     28%
   [#E8D5C4] peach     18%
@@ -814,20 +850,24 @@ Output JSON only.
 
 YouTube 영상에서도 컬러 추출함. VideoFrameSource로 대표 프레임 샘플링 후 Pipeline B와 동일 로직 적용. IG Reel 지원과 함께 구현 (VideoFrameSource 공용).
 
-### 7.3 VLM 컬러 추출 프롬프트
+### 7.3 VLM 컬러 pick 프롬프트
+
+VLM 은 RGB 값을 직접 반환하지 않는다 (과거 초안의 `{ "r": 184, "g": 212, ... }` 구조 폐기, 2026-04-24). VLM 의 역할은 **50-color preset 중 1~3개 pick** 뿐이고, 이 pick 은 canonical dedup 비교 키로만 쓰인다. RGB 값은 Pipeline B 의 segformer + KMeans 가 담당 (§4.1 ④ 3층 palette 참조).
+
+프롬프트 (요지):
 
 ```
-Extract the dominant garment color from this image.
-Output JSON:
-{
-  "r": 184, "g": 212, "b": 195,
-  "name": "sage mint",
-  "family": "pastel"
-}
-
-family must be one of:
-pastel, earth, neutral, white_on_white, jewel, bright, dual_tone, multicolor
+For each person bbox in the image, return:
+- upper_garment_type, lower_garment_type, dress_as_single
+- silhouette, fabric, technique
+- color_preset_picks_top3: array of 1~3 preset names from the 50-color preset
+  - solid color garment → 1 pick
+  - two-tone garment → 2 picks
+  - multicolor garment → 3 picks
+  - do not pad to 3 unnecessarily
 ```
+
+family 는 별도 추출하지 않음. Pipeline B palette 의 `family` 필드는 preset 매핑 경유로 계산한다.
 
 ### 7.4 VLM으로 안 하는 것 — 이건 PoC 범위
 
@@ -880,17 +920,28 @@ pastel, earth, neutral, white_on_white, jewel, bright, dual_tone, multicolor
   "styling_combo": "string | null — 스타일링 조합",
   "brand_mentioned": "string | null — 언급된 브랜드명",
 
-  // === VLM 처리 후 입력 (Section 7, Instagram 대표 이미지만) ===
-  "vlm_processed": "boolean — VLM 처리 여부",
-  "color_r": "number | null — R값 (0~255)",
-  "color_g": "number | null — G값",
-  "color_b": "number | null — B값",
-  "color_r_pct": "number | null — R 퍼센티지 (0~1)",
-  "color_g_pct": "number | null — G 퍼센티지",
-  "color_b_pct": "number | null — B 퍼센티지",
-  "color_name": "string | null — 색상명. 예: 'sage mint'",
-  "color_family": "string | null — 색상 계열. 예: 'pastel'",
-  "silhouette_visual": "string | null — VLM이 판별한 실루엣",
+  // === VLM / Pipeline B 처리 후 입력 (Section 7, §4.1 ④ 3층 palette) ===
+  // post 는 multi-outfit 을 가정 (한 장에 2명, 캐러셀에 여러 의상 등). 단일
+  // silhouette / color 를 post-level 에 두지 않고 canonical 단위로 이동.
+  "vlm_processed": "boolean — Pipeline B 처리 여부",
+  "canonicals": [
+    {
+      "canonical_index": "number — post 내 canonical 순번 (0부터)",
+      "upper_garment_type": "string | null",
+      "lower_garment_type": "string | null",
+      "dress_as_single": "boolean",
+      "silhouette": "string | null — Silhouette enum (canonical 단위)",
+      "fabric": "string | null",
+      "technique": "string | null",
+      "color_preset_picks_top3": ["string — 50-color preset 이름 1~3개, canonical dedup 전용"],
+      "palette": [
+        { "hex": "#B8D4C3", "share": 0.32, "family": "pastel" }
+      ]
+    }
+  ],
+  "post_palette": [
+    { "hex": "#B8D4C3", "share": 0.32, "family": "pastel" }
+  ],
 
   // === 클러스터링 결과 (Section 5) ===
   "trend_cluster_key": "string | null — 배정된 클러스터 키. 예: 'kurta_set__chikankari__cotton'",
