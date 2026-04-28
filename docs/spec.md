@@ -500,6 +500,24 @@ co_ord_set     = 코디 세트로 상하의 세트 착용
 
 ## 5. 트렌드 정의 및 클러스터링 — 수집된 포스트를 어떻게 "트렌드"로 묶는지
 
+> ⚠️ **Canonical: [`docs/pipeline_spec.md`](pipeline_spec.md) §1.1 (Representative) + §2.4 (item ↔ representative 매칭) + §4 (화면 데이터 12 항목)**.
+> 본 §5 의 1:1 매칭 모델은 **2026-04-27 phase 에서 다대다 + multiplier 모델로 교체**. 아래 원문은 attribute 정의 (G × T × F 조합) 의 historical context 참조용으로만 보존. 실 구현은 pipeline_spec.md 우선.
+
+**핵심 차이 요약**:
+
+| 항목 | 본 §5 (옛 v0) | pipeline_spec.md (canonical) |
+|---|---|---|
+| 클러스터 단위 | 1 post → 1 primary cluster (1:1) | 1 item (post/video) → **다수 representative** (cross-product) |
+| 매칭 가중 | "가장 specific" 1개만 | **multiplier 1/2.5/5x** (N=일치 결정 필드 수) — `pipeline_spec §2.4` |
+| 부분 매칭 | "임시 배정" | distribution share 기반 cross-product |
+| 키 구조 | `g__t__f` 3-tuple (단일) | 동일 `g__t__f` 이지만 representative 쪽 → `representative_id = blake2b(key, 8)` BIGINT 신규 |
+| Drill-down 분포 | post 단일값 카운트 | **distribution map** (text 가중 6/3 + vision contribution log scale, `pipeline_spec §2.1, §2.2`) |
+| color_palette 형식 | `{r, g, b, name, family, pct}` | `{hex, share, family}` (PaletteCluster) — `pipeline_spec §2.3` |
+| 활성 클러스터 수 조정 정책 (§5.3) | fabric 제거 / technique 그룹화 | **현 phase 미적용** (cross-product 후 sparse 적재 정책으로 대체, `pipeline_spec §5.2`) |
+
+<details>
+<summary>옛 §5 본문 (v0, 참조용 보존)</summary>
+
 이 섹션이 전체 시스템의 구조를 결정함. "트렌드 1개"가 뭔지를 정의하지 않으면 스코어링도, 대시보드도 만들 수 없음.
 
 ### 5.1 트렌드 클러스터 키 — "트렌드 1개 = garment_type × technique × fabric"
@@ -523,62 +541,37 @@ straight_kurta__thread_embroidery__linen_blend → "Embroidered Linen Straight K
 
 display_name(화면에 보이는 트렌드명)은 클러스터 키에서 자동 생성.
 
-### 5.2 각 포스트를 어떤 클러스터에 넣는지 — 배정 규칙
+### 5.2 각 포스트를 어떤 클러스터에 넣는지 — 배정 규칙 (옛 1:1 모델)
 
 ```
 1. 각 포스트는 1개의 primary cluster에만 배정한다 (1:1).
 
 2. 한 포스트가 여러 클러스터에 해당할 수 있으면 → 가장 구체적인(specific) 것을 선택.
-   예: 캡션에 "chikankari cotton kurta set"이라고 돼 있으면
-   kurta_set__chikankari__cotton에 배정. "#ethnicwear" 같은 generic은 무시.
 
 3. 3개 속성(garment_type, technique, fabric) 중 일부만 추출됐으면 → 부분 매칭.
-   예: garment_type=kurta_set만 잡히고 technique, fabric이 null이면
-   → kurta_set으로 시작하는 클러스터 중 가장 포스트가 많은 곳에 임시 배정.
 
 4. 3개 전부 null이면 → "unclassified" 버킷으로 분류.
-   이 포스트들은 VLM 처리 후보 (Section 7 참조).
 ```
 
-### 5.3 활성 클러스터 수가 너무 적거나 많으면 — 4/24에 조정
+### 5.3 활성 클러스터 수가 너무 적거나 많으면 — 옛 정책
 
-- **5개 미만**이면: 3개 속성 중 fabric을 키에서 빼고 garment_type × technique만으로 키를 구성. fabric은 drill-down의 속성 분포로만 보여줌.
-- **30개 이상**이면: technique을 상위 그룹으로 묶음. 예: block_print + ethnic_motif → "printed".
+- **5개 미만**이면: fabric 키에서 제외, garment_type × technique만으로 키 구성.
+- **30개 이상**이면: technique을 상위 그룹으로 묶음.
 
-이 조정은 4/24 1차 싱크에서 실제 데이터를 보고 결정.
+(현 phase 는 sparse 적재 정책으로 대체, pipeline_spec.md §5.2 참조)
 
-### 5.4 Level 2 속성 분포 — Drill-Down 화면에서 보여주는 것
+### 5.4 Level 2 속성 분포 — Drill-Down 화면
 
-클러스터 내에서 하위 트렌드를 더 쪼개는 게 아님. 대신, **해당 클러스터에 속한 포스트들의 속성 분포를 시각화**함.
-
-예를 들어 "Chikankari Cotton Kurta Set" 클러스터 안에 포스트가 80개 있으면:
+클러스터 내 포스트들의 속성 분포 시각화. 옛 형식 예시 (color_palette 형식과 distribution 계산법은 pipeline_spec.md §2.1~§2.3 가 canonical):
 
 ```
-color_palette: (cluster 속 post palette 들을 ΔE76 greedy merge → 최대 5색. §4.1 ④ 3층 palette 참조)
-  [#B8D4C3] sage      32%
-  [#FFFFFF] white     28%
-  [#E8D5C4] peach     18%
-  [#C9B8A7] sand      12%
-  [#D4B8C3] mauve     10%
-
-silhouette: (텍스트+VLM 혼합)
-  straight   55%
-  a_line     35%
-  other      10%
-
-occasion: (텍스트에서 추출)
-  office     70%
-  casual     20%
-  campus     10%
-
-styling: (텍스트+VLM 혼합)
-  with_palazzo    45%
-  with_pants      30%
-  standalone      15%
-  other           10%
+color_palette: 최대 5색
+silhouette / occasion / styling: distribution map (% 합 = 1.0)
 ```
 
-이 분포가 카테고리 매니저에게 **"디자인 브리프의 입력값"** 역할을 함.
+이 분포가 카테고리 매니저에게 **"디자인 브리프의 입력값"** 역할.
+
+</details>
 
 ---
 
@@ -888,113 +881,111 @@ family 는 별도 추출하지 않음. Pipeline B palette 의 `family` 필드는
 
 ## 8. 데이터 스키마 — DB에 어떤 구조로 저장하는지
 
-### 8.1 포스트 테이블 — 수집된 각 포스트 1건의 레코드
+> ⚠️ **§8.1 / §8.2 Canonical: [`docs/pipeline_spec.md`](pipeline_spec.md) §1 (4-tier 데이터 계층) + §5 (DB 적재 단위)**.
+> 본 §8 의 v0 스키마 (단일 post 테이블 + daily 클러스터 테이블) 는 **2026-04-27 phase 에서 4-tier (Representative / Item / CanonicalGroup / CanonicalObject) + weekly representative 로 전면 교체**. §8.3 (Unknown 속성 테이블) 은 pipeline_spec 무관이라 그대로 유효.
+
+**핵심 차이 요약**:
+
+| 항목 | 본 §8 (옛 v0) | pipeline_spec.md (canonical) |
+|---|---|---|
+| 테이블 수 | 2 (post + cluster) | **4** (item + canonical_group + canonical_object + representative_weekly) — `pipeline_spec §5.1` |
+| post PK | `post_id` 단일 | `(source, source_post_id, computed_at)` composite + DUPLICATE KEY append-only — `pipeline_spec §5.1, §5.3` |
+| post attribute | 단일값 (`garment_type`, `fabric`, ...) | **distribution** (`garment_type_dist` 등 % map) — `pipeline_spec §1.2, §2.1` |
+| cluster 적재 cadence | daily (`date` 컬럼, `daily_direction`, `daily_change_pct`) | **weekly only** (`week_start_date`, `weekly_direction`) — `pipeline_spec §3.2, §3.4` |
+| 매칭 모델 | post → 1 cluster (`trend_cluster_key` 단일) | item → **다수 representative** (cross-product + multiplier 1/2.5/5) — `pipeline_spec §2.4` |
+| representative PK | `cluster_key` string | `representative_id = blake2b(key, 8)` BIGINT surrogate + `representative_key` 사람용 — `pipeline_spec §1.1` |
+| color_palette 형식 | `{r, g, b, hex_display, name, family, pct}` | `{hex, share, family}` (PaletteCluster, B3a 에서 r/g/b/name drop) — `pipeline_spec §2.3` |
+| representative 신규 컬럼 | — | `factor_contribution` (IG/YT 비율) + `total_item_contribution` + `trajectory` (12주) + `evidence_ig/yt_post_ids` (top-K=4) + `schema_version` + `computed_at` — `pipeline_spec §1.1` |
+| representative `garment/fabric/technique_distribution` | distribution % map | **항상 NULL** (representative 단위 단일값이라 redundant, DDL column 만 보존) — `pipeline_spec §1.1` |
+| evidence | `top_posts: [post_id]` 단일 배열 | `evidence_ig_post_ids` + `evidence_yt_video_ids` 분리 (각 top-K=4, 부족 시 padding 없이 적게 적재) — `pipeline_spec §1.1` |
+| canonical (post 내 outfit) | post sub-document `canonicals[]` | **별도 테이블** `canonical_group` + `canonical_object` (item 1:N group 1:N object) — `pipeline_spec §1.3, §1.4` |
+| canonical_object.media_ref | post 내 image_urls 참조 | **Azure Blob full path raw URL** (SAS 제외) 또는 YT video_id ULID — `pipeline_spec §1.4` |
+
+<details>
+<summary>옛 §8.1 / §8.2 본문 (v0, 참조용 보존)</summary>
+
+### 8.1 포스트 테이블 — 옛 v0 단일 post 테이블
 
 ```json
 {
-  // === 수집 시 자동 입력 ===
-  "post_id": "string — 포스트 고유 ID",
+  "post_id": "string",
   "source": "instagram | youtube",
-  "source_type": "influencer_fixed | hashtag_tracking | bollywood_decode | youtube_channel
-                  — 어떤 수집 소스에서 왔는지. A/B/C/D 구분용",
-  "account_handle": "string — 계정명",
-  "account_followers": "number — 팔로워 수 (수집 시점 스냅샷)",
-  "influencer_tier": "mega | macro | mid | micro
-                      — 팔로워 수 기반 자동 분류. mega=1M+, macro=100K~1M, mid=10K~100K, micro=<10K",
-
-  "image_urls": ["string — 포스트 이미지 URL 목록"],
-  "caption_text": "string — 캡션 전문",
-  "hashtags": ["string — 해시태그 목록"],
+  "source_type": "influencer_fixed | hashtag_tracking | bollywood_decode | youtube_channel",
+  "account_handle": "string",
+  "account_followers": "number",
+  "influencer_tier": "mega | macro | mid | micro",
+  "image_urls": ["string"],
+  "caption_text": "string",
+  "hashtags": ["string"],
   "likes": "number",
   "comments_count": "number",
-  "saves": "number | null — 인스타 저장 수. 수집 안 되면 null",
-  "post_date": "datetime — 포스트 게시일",
-  "collected_at": "datetime — 우리가 수집한 시점",
-
-  // === 텍스트 속성 추출 후 입력 (Section 6) ===
-  "garment_type": "string | null — 의류 종류. 허용값은 Section 4.1 ① 참조",
-  "fabric": "string | null — 소재",
-  "technique": "string | null — 기법/장식",
-  "embellishment_intensity": "everyday | festive_lite | heavy | null — 장식 강도",
-  "occasion": "string | null — 착용 맥락",
-  "styling_combo": "string | null — 스타일링 조합",
-  "brand_mentioned": "string | null — 언급된 브랜드명",
-
-  // === VLM / Pipeline B 처리 후 입력 (Section 7, §4.1 ④ 3층 palette) ===
-  // post 는 multi-outfit 을 가정 (한 장에 2명, 캐러셀에 여러 의상 등). 단일
-  // silhouette / color 를 post-level 에 두지 않고 canonical 단위로 이동.
-  "vlm_processed": "boolean — Pipeline B 처리 여부",
+  "saves": "number | null",
+  "post_date": "datetime",
+  "collected_at": "datetime",
+  "garment_type": "string | null",
+  "fabric": "string | null",
+  "technique": "string | null",
+  "embellishment_intensity": "everyday | festive_lite | heavy | null",
+  "occasion": "string | null",
+  "styling_combo": "string | null",
+  "brand_mentioned": "string | null",
+  "vlm_processed": "boolean",
   "canonicals": [
     {
-      "canonical_index": "number — post 내 canonical 순번 (0부터)",
+      "canonical_index": "number",
       "upper_garment_type": "string | null",
       "lower_garment_type": "string | null",
       "dress_as_single": "boolean",
-      "silhouette": "string | null — Silhouette enum (canonical 단위)",
+      "silhouette": "string | null",
       "fabric": "string | null",
       "technique": "string | null",
-      "color_preset_picks_top3": ["string — 50-color preset 이름 1~3개, canonical dedup 전용"],
-      "palette": [
-        { "hex": "#B8D4C3", "share": 0.32, "family": "pastel" }
-      ]
+      "color_preset_picks_top3": ["string"],
+      "palette": [{"hex": "#B8D4C3", "share": 0.32, "family": "pastel"}]
     }
   ],
-  "post_palette": [
-    { "hex": "#B8D4C3", "share": 0.32, "family": "pastel" }
-  ],
-
-  // === 클러스터링 결과 (Section 5) ===
-  "trend_cluster_key": "string | null — 배정된 클러스터 키. 예: 'kurta_set__chikankari__cotton'",
-  "classification_method": "rule | llm | vlm | null — 이 포스트의 속성을 어떤 방법으로 추출했는지"
+  "post_palette": [{"hex": "#B8D4C3", "share": 0.32, "family": "pastel"}],
+  "trend_cluster_key": "string | null",
+  "classification_method": "rule | llm | vlm | null"
 }
 ```
 
-YouTube 영상은 위와 동일한 구조에 추가 필드: video_title, description, tags (배열), view_count, thumbnail_url. caption_text 대신 title+description을 합쳐서 텍스트 분석에 사용.
+YouTube 영상은 위와 동일한 구조에 추가 필드 (video_title, description, tags, view_count, thumbnail_url).
+**현 phase 는 본 단일 테이블 대신 item / canonical_group / canonical_object 3 테이블로 분리** — 자세한 컬럼 정의는 `pipeline_spec.md §1.2, §1.3, §1.4`.
 
-### 8.2 트렌드 클러스터 테이블 — 매일 산출되는 트렌드 단위 레코드
-
-매일 파이프라인이 돌면 각 클러스터별로 그날의 스코어와 상태가 계산됨. 이 테이블이 스코어보드 화면의 데이터 소스.
+### 8.2 트렌드 클러스터 테이블 — 옛 v0 daily cluster 테이블
 
 ```json
 {
-  // === 클러스터 식별 ===
-  "cluster_key": "kurta_set__chikankari__cotton — 클러스터 고유 키",
-  "display_name": "Chikankari Cotton Kurta Set — 화면에 보이는 트렌드명",
-  "date": "date — 이 레코드가 산출된 날짜",
-
-  // === 스코어 (Section 9에서 산출) ===
-  "score": "number 0~100 — 종합 스코어",
-  "score_social": "number — Social 팩터 점수 (40점 만점)",
-  "score_youtube": "number — YouTube 팩터 점수 (25점 만점)",
-  "score_cultural": "number — Cultural Fit 점수 (15점 만점)",
-  "score_momentum": "number — Momentum 점수 (20점 만점)",
-
-  // === 방향성 ===
-  "daily_direction": "up | down | flat — 전일 대비",
-  "weekly_direction": "up | down | flat — 전주 대비",
-  "daily_change_pct": "number — 전일 대비 변화율(%)",
-  "weekly_change_pct": "number — 전주 대비 변화율(%)",
-  "lifecycle_stage": "early | growth | maturity | decline — 라이프사이클 단계",
-
-  // === 속성 분포 (Drill-Down 화면용) ===
-  "color_palette": [
-    { "r": 184, "g": 212, "b": 195, "hex_display": "#B8D4C3", "name": "sage", "family": "pastel", "pct": 0.32 }
-    // RGB 클러스터링 대표값 → HEX 변환하여 hex_display에 저장
-  ],
-  "silhouette_distribution": { "straight": 0.55, "a_line": 0.35, "other": 0.10 },
-  "occasion_distribution": { "office": 0.70, "casual": 0.20, "campus": 0.10 },
-  "styling_distribution": { "with_palazzo": 0.45, "with_pants": 0.30 },
-
-  // === 근거 데이터 (Drill-Down 화면용) ===
-  "top_posts": ["post_id — 인게이지먼트 상위 포스트 ID 목록"],
-  "top_influencers": ["account_handle — 이 트렌드에 참여한 주요 인플루언서"],
-  "post_count_total": "number — 이 클러스터 누적 포스트 수",
-  "post_count_today": "number — 오늘 추가된 포스트 수",
-  "avg_engagement_rate": "number — 평균 인게이지먼트율",
-  "top_videos": ["video_id — 관련 유튜브 영상 ID 목록"],
-  "total_video_views": "number — 관련 영상 총 조회수"
+  "cluster_key": "kurta_set__chikankari__cotton",
+  "display_name": "Chikankari Cotton Kurta Set",
+  "date": "date",
+  "score": "number 0~100",
+  "score_social": "number",
+  "score_youtube": "number",
+  "score_cultural": "number",
+  "score_momentum": "number",
+  "daily_direction": "up | down | flat",
+  "weekly_direction": "up | down | flat",
+  "daily_change_pct": "number",
+  "weekly_change_pct": "number",
+  "lifecycle_stage": "early | growth | maturity | decline",
+  "color_palette": [{"r": 184, "g": 212, "b": 195, "hex_display": "#B8D4C3", "name": "sage", "family": "pastel", "pct": 0.32}],
+  "silhouette_distribution": {"straight": 0.55, "a_line": 0.35, "other": 0.10},
+  "occasion_distribution": {"office": 0.70, "casual": 0.20, "campus": 0.10},
+  "styling_distribution": {"with_palazzo": 0.45, "with_pants": 0.30},
+  "top_posts": ["post_id"],
+  "top_influencers": ["account_handle"],
+  "post_count_total": "number",
+  "post_count_today": "number",
+  "avg_engagement_rate": "number",
+  "top_videos": ["video_id"],
+  "total_video_views": "number"
 }
 ```
+
+**현 phase 는 본 daily 테이블 대신 `representative_weekly` 단일 테이블 + `_latest` view 로 전면 교체**. daily 적재 / `daily_direction` / `daily_change_pct` 필드는 폐기. 자세한 컬럼 정의는 `pipeline_spec.md §1.1, §5.1`.
+
+</details>
 
 ### 8.3 Unknown 속성 테이블 — 매핑에 없는 새 시그널 자동 감지용
 
@@ -1024,113 +1015,76 @@ YouTube 영상은 위와 동일한 구조에 추가 필드: video_title, descrip
 | Cultural Fit | 15 | 인도 축제+볼리우드 맥락. 다른 트렌드 도구가 못 하는 차별화 포인트. |
 | Momentum | 20 | "지금 급상승 중인 것"을 스코어보드 상위에 띄우기 위해 높게 잡음. 데모에서 "어제 없다가 오늘 갑자기 뜬 트렌드"가 보이면 wow moment. |
 
-### 9.2 계산식
+### 9.2 계산식 / 9.3 방향성 / 9.4 라이프사이클
 
-이건 초안. 4/24 1차 싱크에서 실제 데이터를 넣어보고 캘리브레이션할 것. 하지만 **초안이라도 있어야 개발자가 파이프라인을 짤 수 있으므로** 아래 그대로 1차 구현.
+> ⚠️ **Canonical: [`docs/pipeline_spec.md`](pipeline_spec.md) §3.4 (direction / lifecycle weekly) + §3.5 (score 공식 weekly)**.
+> 본 §9.2~§9.4 의 daily 기준은 **2026-04-27 phase 에서 weekly 단위로 전면 치환**. §9.1 가중치 (Social 40 / YouTube 25 / Cultural 15 / Momentum 20) 와 §9.5 축제 캘린더는 그대로 유효.
+
+**핵심 차이 요약**:
+
+| 항목 | 본 §9.2~§9.4 (옛 daily) | pipeline_spec.md (canonical, weekly) |
+|---|---|---|
+| 적재 cadence | 매일 실행, daily score | **weekly 만 실행** (월요일 IST 기준 주간 합산) — `pipeline_spec §3.2` |
+| YouTube score | `V × 0.3 + views × 0.4 + view_growth × 0.3` | **`V × 0.3 + views × 0.7`** (view_growth 제외, 크롤링 미대응) — `pipeline_spec §3.5` |
+| Direction | `daily_direction` + `weekly_direction` 둘 다 산출 | **`weekly_direction` 만** (±5% 임계, ±5% 미만 flat) — `pipeline_spec §3.4` |
+| Trajectory | spec.md 미정의 | **최근 12주 score 시계열** (부족분=0 패딩) — `pipeline_spec §3.4` |
+| Lifecycle 기준 | "3일 연속 상승/하락" daily | **"3주 연속 상승/하락"** weekly + "주간 변동 ±5% 이내" — `pipeline_spec §3.4` |
+| Momentum 지표 | "오늘 vs 7일 일평균" daily | **"이번 주 vs 지난 주"** weekly (정의 동일, window 만 변경) — `pipeline_spec §3.5` |
+
+<details>
+<summary>옛 §9.2~§9.4 본문 (daily 기준, 참조용 보존)</summary>
+
+### 9.2 계산식 (옛 daily 공식)
 
 ```
 === 매일 실행. 각 클러스터별로 당일 스코어 산출 ===
 
-1. Social Score (40점 만점)
+1. Social Score (40점)
+  influencer_weight: mega=3.0 / macro=2.0 / mid=1.5 / micro=1.0
+  weighted_engagement = (likes + comments×2 + saves×3) × influencer_weight
+  cluster_social_raw = 모든 포스트의 weighted_engagement 합산
+  social_score = (cluster_social_raw / max) × 40
 
-  먼저 인플루언서 가중치를 정의:
-    mega(1M+ 팔로워) = 3.0배
-    macro(100K~1M)   = 2.0배
-    mid(10K~100K)    = 1.5배
-    micro(<10K)      = 1.0배
-
-  해당 클러스터에 속한 당일 포스트 각각에 대해:
-    weighted_engagement = (likes + comments×2 + saves×3) × influencer_weight
-    (saves가 null이면 0으로 처리)
-
-  해당 클러스터의 당일 총합:
-    cluster_social_raw = 모든 포스트의 weighted_engagement 합산
-
-  정규화 (0~1 범위로):
-    social_normalized = cluster_social_raw / 전체 클러스터 중 최대 cluster_social_raw
-
-  최종:
-    social_score = social_normalized × 40
-
-2. YouTube Score (25점 만점)
-
-  V = 해당 클러스터에 배정된 영상 수 (최근 7일간)
-  views = 해당 영상들의 총 조회수
-  view_growth = (이번 주 조회수 합산 - 지난 주 조회수 합산) / 지난 주
-                (지난 주가 0이면 growth = 1.0으로 처리)
-
+2. YouTube Score (25점) — 옛 공식, view_growth 포함
+  V = 최근 7일 영상 수
+  view_growth = (이번 주 조회수 - 지난 주) / 지난 주
   youtube_raw = V × 0.3 + normalize(views) × 0.4 + normalize(view_growth) × 0.3
   youtube_score = normalize(youtube_raw) × 25
 
-3. Cultural Fit Score (15점 만점)
-
-  축제 매칭:
-    수집 기간 중 해당하는 축제: Akshaya Tritiya (4/26~27)
-    현재 날짜가 축제 ±2주 이내이면,
-    해당 축제 관련 키워드(#akshayatritiya, #goldethnic 등) 포함 포스트에 1.5배 부스트
-
-  볼리우드 출현:
-    볼리우드 디코딩 계정(C 섹터)에서 해당 클러스터에 속하는 포스트가 1건 이상 있으면
-    +0.3 보너스
-
-  cultural_raw = (festival_match_score × 0.6) + (bollywood_presence × 0.4)
+3. Cultural Fit Score (15점)
+  festival_match: Akshaya Tritiya ±2주 내 #akshayatritiya 포함 시 ×1.5
+  bollywood_presence: bollywood_decode 1건 이상 시 +0.3
+  cultural_raw = festival × 0.6 + bollywood × 0.4
   cultural_score = normalize(cultural_raw) × 15
 
-4. Momentum Score (20점 만점)
-
-  이 팩터가 "급상승 트렌드"를 잡는 핵심.
-
-  post_growth = (오늘 해당 클러스터 포스트 수 - 최근 7일 일평균) / 7일 일평균
-  hashtag_velocity = 이 클러스터 관련 해시태그들의 주간 포스트 수 증가율
-  new_account_ratio = 이번 주 처음 이 클러스터에 포스트한 계정 수 / 전체 계정 수
-                      (새로운 사람들이 몰려오는지를 측정)
-
+4. Momentum Score (20점)
+  post_growth = (오늘 - 7일 일평균) / 7일 일평균
+  hashtag_velocity = 주간 포스트 수 증가율
+  new_account_ratio = 이번 주 first-seen 계정 수 / 전체
   momentum_raw = post_growth × 0.4 + hashtag_velocity × 0.3 + new_account_ratio × 0.3
   momentum_score = normalize(momentum_raw) × 20
 
-5. 종합
-  Total Score = social + youtube + cultural + momentum (0~100점)
+5. Total = social + youtube + cultural + momentum (0~100)
 ```
 
-### 9.3 방향성 지표 — ▲▼→ 판정 기준
+### 9.3 방향성 지표 — 옛 daily/weekly 양쪽 산출
 
 ```
-일별:
-  daily_change_pct = (오늘 Total Score - 어제 Total Score) / 어제 Total Score × 100
-  +5% 이상이면 → up (▲)
-  -5% 이하이면 → down (▼)
-  그 사이면 → flat (→)
-
-주차별:
-  weekly_change_pct = (이번 주 일평균 Score - 지난 주 일평균 Score) / 지난 주 일평균 × 100
-  동일 기준 적용
+daily_change_pct = (오늘 Score - 어제 Score) / 어제 Score × 100
+weekly_change_pct = (이번 주 일평균 - 지난 주 일평균) / 지난 주 일평균 × 100
+±5% 임계로 up / flat / down
 ```
 
-### 9.4 라이프사이클 태깅 — Early/Growth/Maturity/Decline 판정
-
-아래 임계값은 초안. 실제 데이터를 보고 4/24에 캘리브레이션.
+### 9.4 라이프사이클 — 옛 daily 기준
 
 ```
-Early (막 시작):
-  - 스코어 30 미만
-  - 이 클러스터에 포스트한 고유 계정 수 < 10
-  - 해시태그 볼륨 낮음
-
-Growth (급성장):
-  - 스코어 30~65 구간이거나, 스코어가 3일 연속 상승
-  - mega 또는 macro 인플루언서 1명 이상이 이 트렌드에 참여
-  - 포스트 수 주간 증가율 +20% 이상
-
-Maturity (정점/안정):
-  - 스코어 65 이상
-  - 일별 변동이 ±5% 이내 (큰 변화 없이 높은 수준 유지)
-  - mega 인플루언서 다수 참여
-
-Decline (하락):
-  - 스코어가 3일 연속 하락
-  - 해시태그 볼륨 감소
-  - 인게이지먼트율 하락
+Early:    score < 30 + 고유 계정 < 10 + hashtag volume 낮음
+Growth:   score 30~65 또는 3일 연속 상승 + mega/macro 1+ + 주간 +20%+
+Maturity: score ≥ 65 + 일별 변동 ±5% 이내 + mega 다수
+Decline:  3일 연속 하락 + hashtag 감소 + engagement 하락
 ```
+
+</details>
 
 ### 9.5 축제 캘린더 — Cultural Fit 스코어링에 사용
 
@@ -1150,9 +1104,52 @@ Akshaya Tritiya: 4/26~27
 
 ---
 
-## 10. Daily 파이프라인 — 매일 뭐가 어떤 순서로 돌아가는지
+## 10. 파이프라인 실행 순서 — REDIRECT
 
-### 10.1 매일 자동 실행
+> ⚠️ **REDIRECT**: 이 절은 v0 시점의 daily cadence + outdated 매칭(`trend_cluster_key`) 표현을 포함하므로 무효.
+> 현재 canonical 은 [`docs/pipeline_spec.md`](pipeline_spec.md) 의 §3 (weekly cadence) + §2.4 (다대다 매칭 + multiplier) + §6 (Object palette / VLM).
+
+### 10.0 변경 요약 (v0 → 현재)
+
+| 항목 | spec v0 (아래) | 현재 (pipeline_spec.md) |
+| --- | --- | --- |
+| 실행 주기 | daily | **weekly** (월요일 일괄, §3 / §3.5) |
+| 매칭 단위 | post → 단일 `trend_cluster_key` | **item ↔ representative 다대다** (§2.4, multiplier 1/2.5/5x) |
+| 스코어 산출 | 일별 (§9.2 — 폐기됨) | weekly (§3.5, social/youtube/cultural/momentum) |
+| direction | 전일/전주 대비 ▲▼→ | 주간 ratio (§3.4) |
+| Lifecycle | 일별 갱신 | **3주 연속** 룰 (§3.4) |
+| VLM 보강 | "선택적" optional | **canonical path 기본 경로** (§6.5 Object palette, M3.A 완료) |
+| YouTube cadence | 주 2~3회 별도 step | weekly 통합, factor 가중치 25 (§3.5) |
+
+### 10.1 현재 weekly 파이프라인 단계 (요약)
+
+상세는 pipeline_spec.md §3 / §6 / §7 참조.
+
+```
+Step 1: 수집 (크롤러 레포)
+  └── Instagram + YouTube raw → png DB / Azure Blob
+
+Step 2: enrichment
+  ├── 텍스트 속성 (Section 6.2 매핑 + LLM fallback)
+  ├── Vision: Phase 1 SceneFilter → Phase 2 Gemini outfit 추출 → Phase 3 canonical_extractor
+  │   → Phase 4 dynamic palette → Phase 5 adapter swap (β-hybrid)
+  └── enriched JSON 적재
+
+Step 3: 매칭 + multiplier (pipeline_spec §2.4)
+  └── item × representative 다대다 cross-product, N=일치 결정 필드 수 → 1/2.5/5x
+
+Step 4: weekly 스코어링 (pipeline_spec §3.5)
+  ├── factor raw → max-normalize → weight (40/25/15/20)
+  └── weekly_change_pct, lifecycle 3주 연속 룰 (§3.4)
+
+Step 5: 적재 (pipeline_spec §5)
+  └── StarRocks DUPLICATE KEY append-only + _latest view (4 base table)
+```
+
+<details>
+<summary>📜 v0 본문 (참조용, 무효)</summary>
+
+### v0 §10.1 매일 자동 실행
 
 아래 5단계가 매일 순차적으로 실행. 각 단계는 이전 단계가 완료된 후 시작. 실행 시각은 기술팀 인프라에 맞춤 (새벽 권장).
 
@@ -1184,7 +1181,7 @@ Step 5: 결과 저장 → 대시보드 갱신
   └── 스코어보드와 drill-down 화면이 최신 데이터로 업데이트됨
 ```
 
-### 10.2 주 2~3회 실행 (화/목/토)
+### v0 §10.2 주 2~3회 실행 (화/목/토)
 
 ```
 Step 6: YouTube 수집
@@ -1192,6 +1189,8 @@ Step 6: YouTube 수집
   ├── 영상 제목+설명+태그로 텍스트 속성 추출 (룰 기반 + LLM)
   └── trend_cluster_key 배정 → 다음날 일별 스코어링에 반영됨
 ```
+
+</details>
 
 ---
 
