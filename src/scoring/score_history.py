@@ -4,14 +4,16 @@
 포맷:
   {cluster_key: {"YYYY-MM-DD": {
     "score": float,
-    "post_count": int,
+    "post_count": float,                # Phase γ: int → float (β2/β4 share-weighted 정합)
     "youtube_views_total": float,
     "hashtag_counts": {tag: int},
     "accounts": [str],
   }, ...}}
 
-backward compat: 구버전 float 값("YYYY-MM-DD": 40.0) 및 score/post_count 만 있는
-구버전 dict 도 읽을 수 있음 (없는 필드는 기본값으로 처리).
+backward compat:
+- 구버전 float 값("YYYY-MM-DD": 40.0) 및 score/post_count 만 있는 구버전 dict 도 읽기.
+- post_count 가 int 로 저장된 기존 파일 → `_read_count` 의 `float()` cast 로 자연 호환
+  (Phase γ 마이그 read-cast 정책).
 """
 from __future__ import annotations
 
@@ -28,10 +30,11 @@ def _read_score(entry: object) -> float | None:
     return float(entry)  # backward compat (구버전 float 포맷)
 
 
-def _read_count(entry: object) -> int:
+def _read_count(entry: object) -> float:
+    """Phase γ: post_count 를 float 로 반환. 기존 int json 도 float() cast 로 자연 호환."""
     if isinstance(entry, dict):
-        return entry.get("post_count", 0)
-    return 0
+        return float(entry.get("post_count", 0))
+    return 0.0
 
 
 def _read_youtube_views(entry: object) -> float:
@@ -69,14 +72,18 @@ class ScoreHistory:
     def get_weekly_baseline(self, cluster_key: str, target_date: date) -> float | None:
         return self.get_score(cluster_key, target_date - timedelta(days=7))
 
-    def get_total_post_count(self, cluster_key: str) -> int:
-        """히스토리 전체 날짜의 post_count 합 (오늘은 아직 미포함)."""
-        return sum(_read_count(v) for v in self._data.get(cluster_key, {}).values())
+    def get_total_post_count(self, cluster_key: str) -> float:
+        """Phase γ: 히스토리 전체 날짜의 post_count 합 (float). 오늘은 아직 미포함."""
+        return sum(
+            (_read_count(v) for v in self._data.get(cluster_key, {}).values()),
+            0.0,
+        )
 
     def get_post_count_history(
         self, cluster_key: str, target_date: date, days: int
-    ) -> list[int]:
-        """target_date 이전 days 일간 post_count 목록 (없는 날 = 0, index 0 = 어제)."""
+    ) -> list[float]:
+        """Phase γ: target_date 이전 days 일간 post_count 목록 (float). 없는 날 = 0.0,
+        index 0 = 어제."""
         bucket = self._data.get(cluster_key, {})
         return [
             _read_count(bucket.get((target_date - timedelta(days=i)).isoformat()))
@@ -141,7 +148,7 @@ class ScoreHistory:
         cluster_key: str,
         target_date: date,
         score: float,
-        post_count: int,
+        post_count: float,
         youtube_views_total: float = 0.0,
         hashtag_counts: dict[str, int] | None = None,
         accounts: list[str] | None = None,

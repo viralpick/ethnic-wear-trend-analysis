@@ -195,11 +195,13 @@ def _build_contexts(
     cfg: ScoringConfig,
     history: ScoreHistory,
 ) -> list[ClusterScoringContext]:
-    """share-weighted enriched fan-out → ClusterScoringContext (Phase β2 + β4, spec §2.4).
+    """share-weighted enriched fan-out → ClusterScoringContext (Phase β2 + β4 + γ, spec §2.4).
 
     accounts 는 fan-out cluster 마다 등장 (β4: cluster 안 item share>0 인 IG account).
     같은 account 가 multi-cluster 에 등장하는 건 정상 (cluster 별 trend 시그널 분리).
-    post_count_total 은 history int + round(share-sum) — γ 에서 history schema 마이그 후 float.
+    post_count_total = history float + a.post_count_today 직접 합 (Phase γ: round 제거 →
+    분자/분모 단위 정합. β1 effective_item_count_today ↔ history.get_total_post_count
+    모두 float 단위).
 
     grouped 의 모든 cluster key 는 zero-aggregate 라도 context 를 받음 — partial cluster
     (e.g. `kurta_set__unknown__cotton`, `unclassified`) 가 score_and_export 의
@@ -237,7 +239,7 @@ def _build_contexts(
                 momentum_new_account_ratio=history.get_new_account_ratio(
                     key, target_date, cfg.new_account_window_days, accounts
                 ),
-                post_count_total=history.get_total_post_count(key) + round(a.post_count_today),
+                post_count_total=history.get_total_post_count(key) + a.post_count_today,
                 post_count_today=a.post_count_today,
                 avg_engagement_rate=(
                     a.social_weighted_engagement + a.youtube_views_total
@@ -280,13 +282,13 @@ def _decide_clusters(
             daily_change_pct=daily_change,
             weekly_change_pct=weekly_change,
             lifecycle_stage=classify_lifecycle(
-                total, ctx.post_count_total, "flat", settings.scoring.lifecycle
+                total, int(ctx.post_count_total), "flat", settings.scoring.lifecycle
             ),
             data_maturity=maturity,
             display_name=_display_name(ctx.cluster_key),
-            post_count_total=ctx.post_count_total,
-            # Phase β2: ctx.post_count_today float → ClusterDecision int round.
-            # summary path 형변경은 β3 (drilldown share-vote) 에서 float 노출.
+            # Phase γ: ctx.post_count_total float → ClusterDecision int round (presentation
+            # 시점 단일 round; ClusterDecision 은 contract output 호환 int 유지).
+            post_count_total=round(ctx.post_count_total),
             post_count_today=round(ctx.post_count_today),
             avg_engagement_rate=ctx.avg_engagement_rate,
             total_video_views=int(ctx.youtube_views_total),
@@ -343,19 +345,19 @@ def score_and_export(
             i.normalized.account_handle for i in ig_items
             if i.normalized.account_handle
         ]
-        # Phase β2: ctx.post_count_today 가 float (share-weighted) 이라 history int
-        # schema 와 단위 mismatch — round 로 보존. γ 에서 history schema float 마이그.
-        post_count_int = round(ctx.post_count_today) if ctx else 0
+        # Phase γ: history schema float 마이그 후 share-weighted post_count 직접 적재.
+        # ctx 가 None 인 경우 (sink-only 등) 0.0 fallback.
+        post_count_float = ctx.post_count_today if ctx else 0.0
         history.update(
             summary.cluster_key, target_date, summary.score,
-            post_count=post_count_int,
+            post_count=post_count_float,
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
             hashtag_counts=hashtag_counts,
             accounts=accounts,
         )
         weekly_history.update_weekly(
             summary.cluster_key, target_date, summary.score,
-            post_count=post_count_int,
+            post_count=post_count_float,
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
             hashtag_counts=hashtag_counts,
             accounts=accounts,

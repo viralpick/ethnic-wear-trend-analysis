@@ -41,7 +41,7 @@ class ClusterScoringContext(BaseModel):
     momentum_new_account_ratio: float     # 0~1.
 
     # --- 라이프사이클 / 방향성 / maturity 판정용 ---
-    post_count_total: int                 # 누적 (직전일까지 + 오늘). Phase γ TODO: history schema 마이그 후 float
+    post_count_total: float               # Phase γ: history schema 마이그 후 float (β2 mixed precision round 제거)
     post_count_today: float               # Phase β2: share-weighted fan-out 으로 fractional
     avg_engagement_rate: float
     # 전일 / 지난 주 같은 비교 기준은 orchestrator 가 별도 dict 로 넘긴다.
