@@ -321,6 +321,7 @@ class PipelineBColorExtractor:
         blob_cache_dir: Path | None = None,
         scene_filter: SceneFilter | None = None,
         hybrid_cfg: HybridPaletteConfig | None = None,
+        max_workers: int = 1,
     ) -> None:
         self._bundle = bundle
         self._cfg = cfg
@@ -337,11 +338,22 @@ class PipelineBColorExtractor:
         # canonical path 전용 SceneFilter — bundle.scene_filter 는 legacy
         # extract_instances 경로에서만 사용. 디폴트 NoopSceneFilter 면 v2 게이트 우회.
         self._scene_filter: SceneFilter = scene_filter or NoopSceneFilter()
+        self._max_workers = max(1, max_workers)
 
     def extract_visual(
         self, items: list[NormalizedContentItem]
     ) -> list[ColorExtractionResult]:
-        return [self._extract_one(item) for item in items]
+        if self._max_workers <= 1 or len(items) <= 1:
+            return [self._extract_one(item) for item in items]
+        # 공유 자원 thread-safety:
+        # - PyTorch model.forward (segformer/CLIP/YOLO): inference 모드에서 thread-safe
+        # - GeminiVisionLLMClient: google-genai SDK thread-safe
+        # - LocalJSONCache: tmp.replace atomic — 동시 put 안전 (last-wins)
+        # - BlobDownloader: Azure SDK thread-safe per-client
+        # IO-bound 단계 (blob 다운로드 + Gemini 호출) 가 dominant 라 8~16 workers 권장.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            return list(executor.map(self._extract_one, items))
 
     def _extract_one(self, item: NormalizedContentItem) -> ColorExtractionResult:
         image_paths, video_paths = self._resolve_paths(item)
