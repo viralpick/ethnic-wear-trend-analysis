@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from aggregation.build_cluster_summary import group_by_cluster
 from contracts.common import (
     ClassificationMethod,
@@ -72,7 +74,7 @@ def _enriched(
 
 
 def test_n3_single_distribution_registers_in_one_cluster() -> None:
-    """G/T/F 모두 단일값 → cross-product 1 cluster, share=1.0 → 1 cluster grouping."""
+    """G/T/F 모두 단일값 → cross-product 1 cluster, share=1.0 → 1 cluster grouping (β4 tuple)."""
     item = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
@@ -80,13 +82,16 @@ def test_n3_single_distribution_registers_in_one_cluster() -> None:
     )
     grouped = group_by_cluster([item])
     assert set(grouped.keys()) == {"kurta_set__chikankari__cotton"}
-    assert grouped["kurta_set__chikankari__cotton"] == [item]
+    entries = grouped["kurta_set__chikankari__cotton"]
+    assert len(entries) == 1
+    pair_item, pair_share = entries[0]
+    assert pair_item is item
+    assert pair_share == pytest.approx(1.0)  # N=3 multiplier_ratio
 
 
 def test_n_lt_3_item_registers_in_partial_cluster() -> None:
     """technique 누락 (N=2) → partial(g) 활성화 후 multiplier_ratio=0.5 share 로
-    placeholder (`unknown`) cluster 에 등록. mass=0.5 결과는 _accumulate_share_weighted
-    pinning 영역.
+    placeholder (`unknown`) cluster 에 (item, 0.5) 등록 (β4 tuple).
     """
     item = _enriched(
         "p1",
@@ -95,7 +100,11 @@ def test_n_lt_3_item_registers_in_partial_cluster() -> None:
     )
     grouped = group_by_cluster([item])
     assert set(grouped.keys()) == {"kurta_set__unknown__cotton"}
-    assert grouped["kurta_set__unknown__cotton"] == [item]
+    entries = grouped["kurta_set__unknown__cotton"]
+    assert len(entries) == 1
+    pair_item, pair_share = entries[0]
+    assert pair_item is item
+    assert pair_share == pytest.approx(0.5)  # N=2 multiplier_ratio
 
 
 def test_n_zero_item_registers_in_no_cluster() -> None:
@@ -110,7 +119,7 @@ def test_n_zero_item_registers_in_no_cluster() -> None:
 
 
 def test_two_different_n3_items_split_into_two_clusters() -> None:
-    """다른 G/T/F 두 item → 두 cluster 분리. mass preservation (각 1.0)."""
+    """다른 G/T/F 두 item → 두 cluster 분리. mass preservation (각 share=1.0, β4 tuple)."""
     item_a = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
@@ -126,8 +135,8 @@ def test_two_different_n3_items_split_into_two_clusters() -> None:
         "kurta_set__chikankari__cotton",
         "casual_saree__block_print__chanderi",
     }
-    assert grouped["kurta_set__chikankari__cotton"] == [item_a]
-    assert grouped["casual_saree__block_print__chanderi"] == [item_b]
+    assert grouped["kurta_set__chikankari__cotton"] == [(item_a, pytest.approx(1.0))]
+    assert grouped["casual_saree__block_print__chanderi"] == [(item_b, pytest.approx(1.0))]
 
 
 def test_winner_contract_key_is_not_read() -> None:
@@ -147,7 +156,7 @@ def test_winner_contract_key_is_not_read() -> None:
 
 
 def test_same_cluster_two_items_aggregated() -> None:
-    """동일 G/T/F 두 item → 같은 cluster 의 list 에 두 item 등록 (사후 vote 위해 보존)."""
+    """동일 G/T/F 두 item → 같은 cluster 의 list 에 두 (item, share) 등록 (β4 tuple)."""
     item_a = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
@@ -160,7 +169,9 @@ def test_same_cluster_two_items_aggregated() -> None:
     )
     grouped = group_by_cluster([item_a, item_b])
     assert list(grouped.keys()) == ["kurta_set__chikankari__cotton"]
-    assert grouped["kurta_set__chikankari__cotton"] == [item_a, item_b]
+    entries = grouped["kurta_set__chikankari__cotton"]
+    assert [pair[0] for pair in entries] == [item_a, item_b]
+    assert all(pair[1] == pytest.approx(1.0) for pair in entries)
 
 
 def test_empty_input_returns_empty_dict() -> None:

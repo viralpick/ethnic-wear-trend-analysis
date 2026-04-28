@@ -1,13 +1,14 @@
-"""Phase B3c cluster_palette pinning — one-post-one-vote 병합.
+"""Phase B3c + β4 cluster_palette pinning — share-weighted 병합.
 
 post_palette 와 같은 ΔE76 greedy merge + small-share drop + top N cap 패턴을
-cluster 레벨에서 재사용. 차이는 두 가지:
-1. 입력이 `list[list[PaletteCluster]]` (post 들의 post_palette).
-2. weight 은 cluster.share 그대로 (옵션 A — post 간 동등, advisor 합의).
+cluster 레벨에서 재사용. 차이는 세 가지:
+1. 입력이 `list[tuple[list[PaletteCluster], float]]` (post_palette + per-post weight).
+2. weight = cluster.share × post_weight (β4 — post_weight 는 cluster 안 item share).
+3. β4 이전 옵션 A 동작 (post 간 동등 = post_weight=1.0) 도 그대로 표현 가능.
 
 post_palette 는 area_ratio × within-share 를 곱해 canonical 물리 질량을 반영했지만,
-cluster 는 "얼마나 많은 post 에서 이 색이 나왔나" 를 다수결로 본다 — 스코어 도메인과
-분리된 pixel 증거 기반 누적.
+cluster 는 "얼마나 많은 post 에서 이 색이 나왔나" 를 share-weighted 다수결로 본다 —
+스코어 도메인과 분리된 pixel 증거 기반 누적.
 """
 from __future__ import annotations
 
@@ -32,6 +33,11 @@ def _pc(hex_: str, share: float, family: ColorFamily | None = ColorFamily.JEWEL)
     return PaletteCluster(hex=hex_, share=share, family=family)
 
 
+def _eq_weight(posts: list[list[PaletteCluster]]) -> list[tuple[list[PaletteCluster], float]]:
+    """β4 이전 동작 (post 간 동등) — post_weight 1.0 으로 wrap."""
+    return [(p, 1.0) for p in posts]
+
+
 # --------------------------------------------------------------------------- #
 # constants pinned (accidental threshold drift 차단)
 # --------------------------------------------------------------------------- #
@@ -54,7 +60,7 @@ def test_empty_posts_returns_empty() -> None:
 
 def test_all_post_palettes_empty_returns_empty() -> None:
     # 여러 post 가 있어도 post_palette 가 전부 비면 flatten 결과 0.
-    assert build_cluster_palette([[], [], []]) == []
+    assert build_cluster_palette(_eq_weight([[], [], []])) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -69,7 +75,7 @@ def test_single_post_pass_through() -> None:
         _pc("#0000CC", 0.3, ColorFamily.JEWEL),
         _pc("#00AA00", 0.1, ColorFamily.EARTH),
     ]]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     assert len(result) == 3
     assert sum(c.share for c in result) == pytest.approx(1.0, abs=1e-6)
     # weight desc 정렬
@@ -88,7 +94,7 @@ def test_two_posts_same_hex_merge_share_sum() -> None:
         [_pc("#AABBCC", 0.4, ColorFamily.PASTEL), _pc("#CC0000", 0.6, ColorFamily.JEWEL)],
         [_pc("#AABBCC", 0.4, ColorFamily.PASTEL), _pc("#00AA00", 0.6, ColorFamily.EARTH)],
     ]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     # 3 개의 distinct 색 (merged pastel + red + green). sum=1.0 재정규화.
     assert len(result) == 3
     assert sum(c.share for c in result) == pytest.approx(1.0, abs=1e-6)
@@ -109,7 +115,7 @@ def test_far_colors_do_not_merge() -> None:
         [_pc("#0000CC", 1.0, ColorFamily.JEWEL)],
         [_pc("#00AA00", 1.0, ColorFamily.EARTH)],
     ]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     assert len(result) == 3
     assert sum(c.share for c in result) == pytest.approx(1.0, abs=1e-6)
     # 세 post 전부 share 1.0 (one-post-one-vote) → 균등 1/3
@@ -131,7 +137,7 @@ def test_caps_at_max_clusters() -> None:
         [_pc("#AA00AA", 1.0)],
         [_pc("#00AAAA", 1.0)],
     ]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     assert len(result) == MAX_CLUSTER_PALETTE_CLUSTERS
     assert sum(c.share for c in result) == pytest.approx(1.0, abs=1e-6)
 
@@ -151,7 +157,7 @@ def test_small_share_dropped_before_cap() -> None:
         # drop 을 이미 걸어서 여기 오는 건 >=0.05.
         [_pc("#00AA00", 0.02)],
     ]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     assert len(result) == 2
     assert sum(c.share for c in result) == pytest.approx(1.0, abs=1e-6)
     # 1.0 / 2.0 = 0.5 각각
@@ -169,7 +175,7 @@ def test_family_tiebreak_by_enum_order_on_equal_weight() -> None:
         [_pc("#AABBCC", 0.5, ColorFamily.JEWEL), _pc("#CC0000", 0.5)],
         [_pc("#AABBCC", 0.5, ColorFamily.PASTEL), _pc("#0000CC", 0.5)],
     ]
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     # pastel hex merge → 1 cluster; red/blue 별개 → 총 3.
     assert len(result) == 3
     # merge 된 pastel cluster (weight 0.5+0.5=1.0, 나머지 0.5 씩) 가 최상위.
@@ -208,7 +214,7 @@ def test_family_tiebreak_by_enum_order_on_equal_weight() -> None:
     ids=["single", "all_merge", "drop", "cap"],
 )
 def test_sum_equals_one_invariant(posts: list[list[PaletteCluster]]) -> None:
-    result = build_cluster_palette(posts)
+    result = build_cluster_palette(_eq_weight(posts))
     if not result:
         return
     assert abs(sum(c.share for c in result) - 1.0) < 1e-6
@@ -223,7 +229,7 @@ def test_is_deterministic() -> None:
         [_pc("#AA0000", 0.7, ColorFamily.JEWEL), _pc("#0000AA", 0.3, ColorFamily.JEWEL)],
         [_pc("#00AA00", 1.0, ColorFamily.EARTH)],
     ]
-    r1 = build_cluster_palette(posts)
-    r2 = build_cluster_palette(posts)
+    r1 = build_cluster_palette(_eq_weight(posts))
+    r2 = build_cluster_palette(_eq_weight(posts))
     assert [(c.hex, c.family) for c in r1] == [(c.hex, c.family) for c in r2]
     assert [c.share for c in r1] == pytest.approx([c.share for c in r2])
