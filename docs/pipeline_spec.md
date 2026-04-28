@@ -1,5 +1,9 @@
 # Pipeline Spec — 데이터 계층 / 계산 로직 / DB 적재 (2026-04-27)
 
+> **Schema 버전**: `pipeline_spec_v1.0` (2026-04-27). 모든 4 base table 의 `schema_version`
+> 컬럼에 `"pipeline_v1.0"` 적재. 본 문서 수정 시 minor (v1.1) 또는 major (v2.0) bump +
+> DDL 수정 검토.
+>
 > **본 문서의 위치**: 데이터 계층 모델 (4-tier) / 기여도 합성 / 매칭 multiplier / weekly
 > representative 적재 / DB 스키마 의 canonical. score / lifecycle / direction 공식의 weekly
 > 정의 (§3.4, §3.5) 도 본 문서 self-contained — `docs/spec.md` 별도 참조 없이 적재 구현 가능.
@@ -50,8 +54,8 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적/디버깅
 | `brand_distribution` | **로직 C (2026-04-29)** — top 5 brand `{name: share}` map (share desc insertion order), share<0.05 drop 후 정규화. 빈 dict 시 NULL 적재 | §2.8 (로직 C) |
 | `trajectory` | 최근 12주 score 시계열 (부족분 = 0) | §3.4 |
 | `total_item_contribution` | 이 representative 에 누적된 item contribution 합 (sparse 적재 기준) | §2.4 |
-| `schema_version` | 본 문서 버전 | §6.3 |
-| `computed_at` | 적재 timestamp (UTC) | §6.3 |
+| `schema_version` | 본 문서 버전 | 머리말 |
+| `computed_at` | 적재 timestamp (UTC) | 머리말 |
 
 ### 1.2 Item (post / video)
 
@@ -77,7 +81,7 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적/디버깅
 | `engagement_raw` | IG: like+comment, YT: views | normalized |
 | `account_handle` | IG 핸들 또는 YT 채널 | normalized |
 | `account_follower_count` | tier 분류용 | normalized |
-| `schema_version`, `computed_at` | — | §6.3 |
+| `schema_version`, `computed_at` | — | 머리말 |
 
 > **적재 cadence (정정)**: post 처음 분석된 시점에 적재.
 > **spec / 알고리즘 변경에 따른 upsert 가능** — 같은 `(source, source_post_id)` 에 대해
@@ -99,7 +103,7 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적/디버깅
 | `item_contribution_score` | item 내 기여도 (등장횟수 × 면적 곱셈 log scale) | §2.7 |
 | `n_objects` | 멤버 객체 수 | — |
 | `mean_area_ratio` | 객체 면적 비율 평균 | — |
-| `schema_version`, `computed_at` | — | §6.3 |
+| `schema_version`, `computed_at` | — | 머리말 |
 
 > **적재 cadence**: item 적재 시점에 같이 적재. **spec / 알고리즘 변경 시 upsert 가능**
 > (같은 `(item_id, canonical_index)` 덮어쓰기). history 누적 시 `computed_at` PK 포함 (§5.3).
@@ -121,7 +125,7 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적/디버깅
 | `area_ratio` | person_bbox area | vision |
 | `group_contribution_score` | group 내 기여도 (면적 log scale 단축) | §2.7 |
 | `bbox` | `[x, y, w, h]` normalized | vision |
-| `schema_version`, `computed_at` | — | §6.3 |
+| `schema_version`, `computed_at` | — | 머리말 |
 
 > **적재 cadence**: item 적재 시점에 같이 적재. **spec / 알고리즘 변경 시 upsert 가능**
 > (같은 `(group_id, member_index)` 덮어쓰기).
@@ -591,15 +595,16 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 
 ---
 
-## 6. 잔존 미구현 + 정책 결정 사항
+## 6. 잔존 미구현
 
-각 sub-section 머리에 카테고리 라벨 (`[잔존 미구현]` / `[정책 결정]` / `[메타]`) 을 붙여
-구분. 같은 §6 안에 있어도 의미가 다르므로 reader 가 헷갈리지 않도록.
-
-### 6.1 [잔존 미구현] vision LLM
+### 6.1 vision LLM
 - `occasion` (vision part) — vision 으로 안 뽑음. text-only.
 
-### 6.2 [정책 결정] 사용자 정정으로 정리된 정책 요약
+---
+
+## 7. 정책 결정 사항
+
+### 7.1 사용자 정정으로 정리된 정책 요약
 - B.1 rule 잡히면 gpt 안잡힘 (OR, 가중치 6 vs 3).
 - B.2 group 기여도 = `log2(Σ n_objects + 1)`.
 - B.3 group 단일값 동률 시 tie-break = 평균 면적 큰 group.
@@ -612,19 +617,14 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 - C.7 factor contribution = source 별 contribution score 합산 비율.
 - ~~Q4 vision 결과 제외, brand 제외~~ — vision/brand 모두 **이 phase 에서 적용 완료** (M3.F brand registry + Step 7 4-tier 적재).
 
-### 6.3 [메타] Schema 버전
-- 본 문서 = `pipeline_spec_v1.0` (2026-04-27).
-- `schema_version` 컬럼 = `"pipeline_v1.0"` 적재.
-- 본 문서 수정 시 minor (v1.1) 또는 major (v2.0) bump + DDL 수정 검토.
-
-### 6.4 [정책 결정] Backend 통신 path — `backend_poster` 폐기
+### 7.2 Backend 통신 path — `backend_poster` 폐기
 - 분석 결과 → **StarRocks 적재** → BE 가 StarRocks 직접 read (4 base table + 4 `_latest` view + 3 ethnic view).
 - 별도 push 채널 (`backend_poster`, HTTP POST sender) **불필요. M3.B 폐기**.
 - BE 측 read pattern 은 `_latest` / ethnic view 기준 (raw DUPLICATE KEY 직접 조회 금지).
 
 ---
 
-## 7. 구현 갭 체크 (Step 7 완료 시점)
+## 8. 구현 갭 체크 (Step 7 완료 시점)
 
 본 spec 으로 구현 들어가기 전에 다음을 §2 단계에서 점검:
 
@@ -648,9 +648,9 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 
 ---
 
-## 8. Step 7 적재 부록 (2026-04-27)
+## 9. Step 7 적재 부록 (2026-04-27)
 
-### 8.1 적재 path 이중화
+### 9.1 적재 path 이중화
 
 prod StarRocks 환경에 **8030 (Stream Load HTTP) 가 server-side allow-list 로 차단** 발견 (2026-04-27).
 fallback 으로 9030 (query) INSERT writer 채택, 정공법 8030 은 allow-list 수령 후 1회 smoke 로 전환.
@@ -663,7 +663,7 @@ fallback 으로 9030 (query) INSERT writer 채택, 정공법 8030 은 allow-list
 
 두 writer 모두 `StarRocksWriter` Protocol — `write_batch(table, rows) -> int` 동일 시그니처.
 
-### 8.2 cluster_match 메트릭
+### 9.2 cluster_match 메트릭
 
 `sink_runner._build_representative_rows` 가 cluster_key (summary 측) ↔ representative_key
 (aggregate 측) 매칭 진단 emit:
