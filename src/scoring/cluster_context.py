@@ -27,7 +27,7 @@ class ClusterScoringContext(BaseModel):
     social_weighted_engagement: float
 
     # --- YouTube (spec §9.2 YouTube) ---
-    youtube_video_count: int              # V, 최근 window_days 일
+    youtube_video_count: float            # V (Phase β2: share-weighted fan-out 으로 fractional)
     youtube_views_total: float            # 최근 window_days 일 조회수 합
     youtube_view_growth: float            # (this_week - last_week) / last_week. 0 안전처리.
 
@@ -41,7 +41,7 @@ class ClusterScoringContext(BaseModel):
     momentum_new_account_ratio: float     # 0~1.
 
     # --- 라이프사이클 / 방향성 / maturity 판정용 ---
-    post_count_total: int                 # 누적 (직전일까지 + 오늘)
-    post_count_today: int
+    post_count_total: int                 # 누적 (직전일까지 + 오늘). Phase γ TODO: history schema 마이그 후 float
+    post_count_today: float               # Phase β2: share-weighted fan-out 으로 fractional
     avg_engagement_rate: float
     # 전일 / 지난 주 같은 비교 기준은 orchestrator 가 별도 dict 로 넘긴다.
