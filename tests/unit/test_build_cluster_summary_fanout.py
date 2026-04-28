@@ -1,8 +1,10 @@
-"""Phase β3 (2026-04-28) — group_by_cluster cross-product fan-out pinning.
+"""Phase β3 + partial(g) (2026-04-28) — group_by_cluster cross-product fan-out pinning.
 
 검증 포인트 (spec §2.4 share-weighted summary path):
 - N=3 item: share > 0 인 모든 cluster_key 에 등록 (winner-keyed 동치 X)
-- N<3 item (G/T/F 한 축 빔): 어느 cluster 에도 등록 X (item_cluster_shares 빈 dict)
+- N<3 item (1 또는 2 축만 채워짐): partial 활성화로 multiplier_ratio (0.5/0.2) 가중
+  share 로 placeholder (`unknown`) cluster 에 등록
+- N=0 item (G/T/F 모두 빔): 어느 cluster 에도 등록 X (assign_shares 빈 dict)
 - contract `trend_cluster_key` read X — 다른 winner key 가 set 되어 있어도 무시
 - 다른 cluster 매칭 item 은 별도 cluster 로 분리 (mass preservation)
 - score_and_export 정합 — summary path ↔ score path 같은 cluster space
@@ -81,12 +83,27 @@ def test_n3_single_distribution_registers_in_one_cluster() -> None:
     assert grouped["kurta_set__chikankari__cotton"] == [item]
 
 
-def test_n_lt_3_item_registers_in_no_cluster() -> None:
-    """technique 누락 (N=2) → item_cluster_shares 빈 dict → grouping X."""
+def test_n_lt_3_item_registers_in_partial_cluster() -> None:
+    """technique 누락 (N=2) → partial(g) 활성화 후 multiplier_ratio=0.5 share 로
+    placeholder (`unknown`) cluster 에 등록. mass=0.5 결과는 _accumulate_share_weighted
+    pinning 영역.
+    """
     item = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
-        cluster_key="kurta_set__unknown__cotton",  # winner contract 값 — 무시되어야
+        cluster_key="kurta_set__unknown__cotton",  # winner contract 값 — 무시되고 있어도 동치
+    )
+    grouped = group_by_cluster([item])
+    assert set(grouped.keys()) == {"kurta_set__unknown__cotton"}
+    assert grouped["kurta_set__unknown__cotton"] == [item]
+
+
+def test_n_zero_item_registers_in_no_cluster() -> None:
+    """G/T/F 모두 빔 (N=0) → assign_shares 빈 dict → grouping X."""
+    item = _enriched(
+        "p1",
+        g=None, t=None, f=None,
+        cluster_key="unclassified",
     )
     grouped = group_by_cluster([item])
     assert grouped == {}
