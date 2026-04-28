@@ -745,6 +745,7 @@ def test_build_representative_row_full_payload() -> None:
         evidence_ig_post_ids=["p1", "p2"],
         evidence_yt_video_ids=["yt1"],
         trajectory=[0.0] * 11 + [72.5],
+        effective_item_count=42.5,
         display_name="Cotton Block Print Kurta Set",
     )
 
@@ -788,6 +789,7 @@ def test_build_representative_row_full_payload() -> None:
     assert row["trajectory"] == [0.0] * 11 + [72.5]
     assert len(row["trajectory"]) == 12
     assert row["total_item_contribution"] == 12.5
+    assert row["effective_item_count"] == 42.5
     assert row["schema_version"] == SCHEMA_VERSION
 
 
@@ -829,3 +831,5 @@ def test_build_representative_row_empty_evidence_and_palette_nullable() -> None:
         assert row[key] is None, key
     # display_name optional default.
     assert row["display_name"] is None
+    # β1: effective_item_count default = None (호출자가 안 넘기면 NULL 적재).
+    assert row["effective_item_count"] is None

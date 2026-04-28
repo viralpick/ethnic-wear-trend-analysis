@@ -34,6 +34,7 @@ from aggregation.representative_builder import (
     RepresentativeContribution,
     aggregate_representatives,
     build_contributions,
+    effective_item_count,
     top_evidence_per_source,
 )
 from contracts.common import ContentSource, PaletteCluster
@@ -167,6 +168,7 @@ def _build_representative_rows(
     week_start_iso: str,
     target_date: date,
     computed_at: str,
+    batch_effective_item_count: float,
 ) -> list[dict[str, Any]]:
     aggregates = aggregate_representatives(contributions)
     if not aggregates:
@@ -203,6 +205,7 @@ def _build_representative_rows(
                 evidence_ig_post_ids=ig_ids,
                 evidence_yt_video_ids=yt_ids,
                 trajectory=trajectory,
+                effective_item_count=batch_effective_item_count,
                 display_name=summary.display_name if summary is not None else None,
             )
         )
@@ -257,6 +260,7 @@ def emit_to_starrocks(
         object_rows.extend(build_object_rows(item, computed_at=computed))
 
     contributions = build_contributions(item_distributions)
+    batch_eff_count = effective_item_count(item_distributions)
     weekly_history = WeeklyScoreHistory(weekly_history_path)
     representative_rows = _build_representative_rows(
         contributions,
@@ -266,6 +270,7 @@ def emit_to_starrocks(
         week_start_iso=week_start_iso,
         target_date=target_date,
         computed_at=computed,
+        batch_effective_item_count=batch_eff_count,
     )
 
     # cluster_key ↔ representative_key 매칭 진단 (갭 #3 B 검증).

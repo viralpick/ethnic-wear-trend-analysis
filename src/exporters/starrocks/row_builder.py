@@ -356,6 +356,7 @@ def build_representative_row(
     evidence_ig_post_ids: list[str],
     evidence_yt_video_ids: list[str],
     trajectory: list[float],
+    effective_item_count: float | None = None,
     display_name: str | None = None,
 ) -> dict[str, Any]:
     """`representative_weekly` 1 row.
@@ -366,6 +367,9 @@ def build_representative_row(
       color_palette: representative 단위 palette (spec §2.3 — caller 가 cluster 합성).
       trajectory: 최근 12주 score (부족분 0). 길이 12 권장.
       score_breakdown: {social, youtube, cultural, momentum} 부분 점수.
+      effective_item_count: Phase β1 (2026-04-28) — multiplier-scaled batch 분모.
+        view-layer normalize (`score_total / effective_item_count`) 용. None 이면
+        NULL 적재 (β1 wiring 안된 호출자 backward-compat).
     """
     factor_contribution = {
         source.value: pct for source, pct in aggregate.factor_contribution.items()
@@ -395,5 +399,6 @@ def build_representative_row(
         "technique_distribution": distributions.get("technique") or None,
         "trajectory": list(trajectory),
         "total_item_contribution": aggregate.total_item_contribution,
+        "effective_item_count": effective_item_count,
         "schema_version": SCHEMA_VERSION,
     }
