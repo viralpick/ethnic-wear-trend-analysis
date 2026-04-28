@@ -27,8 +27,8 @@ def _esc(s: Any) -> str:
     return html_mod.escape(str(s)) if s is not None else ""
 
 
-def _resolve_image_src(url: str, html_dir: Path) -> str:
-    """blob 캐시에 있으면 상대 경로, 아니면 원본 URL 반환."""
+def _resolve_media_src(url: str, html_dir: Path) -> str:
+    """blob 캐시 (이미지/영상) 있으면 상대 경로, 아니면 원본 URL 반환."""
     if not url:
         return ""
     path_only = url.split("?", 1)[0]
@@ -37,12 +37,85 @@ def _resolve_image_src(url: str, html_dir: Path) -> str:
         return url
     cached = _IMG_CACHE / basename
     if cached.exists():
-        # html_dir 기준 상대 경로
         try:
             return str(cached.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
         except ValueError:
             return cached.as_uri()
     return url
+
+
+# 호환 alias
+_resolve_image_src = _resolve_media_src
+
+
+_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
+
+
+def _is_video_url(url: str) -> bool:
+    path_only = url.split("?", 1)[0].lower()
+    return any(path_only.endswith(ext) for ext in _VIDEO_EXTS)
+
+
+def _ffprobe_duration(video_path: Path) -> float | None:
+    """ffprobe 로 영상 duration (초) 반환. 실패 시 None."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        return float(out.stdout.strip()) if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _extract_video_thumbs(
+    video_path: Path, thumbs_dir: Path, *, n_frames: int = 3,
+) -> list[Path]:
+    """영상에서 중간 frame n 개 추출 (25%/50%/75% 등 균등 분포). 캐시 히트 시 재추출 안 함."""
+    import subprocess
+    if not video_path.exists():
+        return []
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    stem = video_path.stem
+    out_paths: list[Path] = []
+
+    duration = _ffprobe_duration(video_path)
+    if duration is None or duration <= 0:
+        return []
+
+    # 균등 분포 fraction (n=3 → 0.25/0.5/0.75)
+    fractions = [(i + 1) / (n_frames + 1) for i in range(n_frames)]
+    for idx, frac in enumerate(fractions):
+        ts = duration * frac
+        thumb_path = thumbs_dir / f"{stem}_f{idx}.jpg"
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            out_paths.append(thumb_path)
+            continue
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{ts:.2f}", "-i", str(video_path),
+                 "-frames:v", "1", "-q:v", "3", str(thumb_path)],
+                capture_output=True, timeout=15,
+            )
+            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+                out_paths.append(thumb_path)
+        except Exception:
+            continue
+    return out_paths
+
+
+def _resolve_video_local_path(url: str) -> Path | None:
+    """video URL → blob 캐시 로컬 Path. 없으면 None."""
+    if not url:
+        return None
+    path_only = url.split("?", 1)[0]
+    basename = Path(urlparse(path_only).path).name
+    if not basename:
+        return None
+    cached = _IMG_CACHE / basename
+    return cached if cached.exists() else None
 
 
 def _color_chips(palette: list[dict[str, Any]]) -> str:
@@ -147,12 +220,42 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
 
     method = item.get("classification_method_per_attribute") or {}
 
-    img_html = ""
-    for url in image_urls[:5]:
-        src_path = _resolve_image_src(url, html_dir)
-        img_html += f'<img src="{_esc(src_path)}" loading="lazy" tabindex="0" alt="" />'
-    if video_urls:
-        img_html += f'<div class="video-tag">▶ video × {len(video_urls)}</div>'
+    media_html = ""
+    for url in image_urls:  # 모두 표시
+        src_path = _resolve_media_src(url, html_dir)
+        media_html += (
+            f'<img src="{_esc(src_path)}" loading="lazy" tabindex="0" alt="" '
+            f'class="media-img" />'
+        )
+    # 영상은 ffmpeg 으로 중간 frame 3 개 추출해 thumbnail 로 표시 (player 무거움 회피)
+    thumbs_dir = html_dir / "_video_thumbs"
+    for url in video_urls:
+        local_path = _resolve_video_local_path(url)
+        if local_path is None:
+            # blob cache 없으면 fallback <video> tag
+            src_path = _resolve_media_src(url, html_dir)
+            media_html += (
+                f'<video src="{_esc(src_path)}" controls muted preload="metadata" '
+                f'class="media-video"></video>'
+            )
+            continue
+        thumbs = _extract_video_thumbs(local_path, thumbs_dir, n_frames=3)
+        if not thumbs:
+            src_path = _resolve_media_src(url, html_dir)
+            media_html += (
+                f'<video src="{_esc(src_path)}" controls muted preload="metadata" '
+                f'class="media-video"></video>'
+            )
+            continue
+        for thumb in thumbs:
+            try:
+                rel = str(thumb.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
+            except ValueError:
+                rel = thumb.as_uri()
+            media_html += (
+                f'<img src="{_esc(rel)}" loading="lazy" tabindex="0" '
+                f'alt="video frame" class="media-img video-thumb" />'
+            )
 
     canon_html = "".join(_render_canonical(c) for c in canonicals) or '<span class="muted">no canonical</span>'
 
@@ -188,7 +291,7 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
     {f'<span class="muted">type={_esc(src_type)}</span>' if src_type else ''}
   </header>
   <div class="post-body">
-    <div class="post-images">{img_html}</div>
+    <div class="post-images">{media_html}</div>
     <div class="post-meta">
       <section>
         <h4>text attributes</h4>
@@ -333,19 +436,22 @@ small { color: #888; font-size: 0.85em; }
 .cluster-body section { font-size: 12px; }
 .dist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-.post-body { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
-.post-images img { width: 60px; height: 60px; object-fit: cover; margin-right: 4px;
-                   border-radius: 4px; vertical-align: top; cursor: zoom-in;
-                   transition: transform 0.2s; }
-.post-images img:hover { transform: scale(1.1); }
-.post-images img:focus, .post-images img:active {
-                   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-                   width: 90vw; height: 90vh; object-fit: contain; z-index: 1000;
-                   background: rgba(0,0,0,0.9); cursor: zoom-out; }
-.post-images { display: flex; flex-wrap: wrap; gap: 4px; }
-.video-tag { font-size: 11px; background: #333; color: #fff; padding: 2px 6px;
-             border-radius: 3px; margin-top: 4px; display: inline-block; }
+.post-body { display: grid; grid-template-columns: 540px 1fr; gap: 16px; }
+.post-images { display: flex; flex-wrap: wrap; gap: 6px; }
+.media-img { width: 250px; height: 250px; object-fit: cover;
+             border-radius: 4px; vertical-align: top; cursor: zoom-in;
+             transition: transform 0.2s; }
+.media-img:hover { transform: scale(1.05); }
+.media-img:focus, .media-img:active {
+             position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+             width: 90vw; height: 90vh; object-fit: contain; z-index: 1000;
+             background: rgba(0,0,0,0.9); cursor: zoom-out; outline: none; }
+.media-video { width: 250px; max-height: 320px; border-radius: 4px;
+               background: #000; vertical-align: top; }
+.video-thumb { border: 2px solid #ff0000; }
+.video-thumb::after { content: '▶'; position: absolute; }
 .post-meta section { font-size: 12px; margin-bottom: 6px; }
+.post-meta { min-width: 0; }
 
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px;
          font-weight: bold; text-transform: uppercase; }
