@@ -25,8 +25,8 @@
     "top_videos": [],
     "top_influencers": ["@masoomminawala"]
   },
-  "post_count_total": 1,
-  "post_count_today": 1,
+  "post_count_total": 1.0,
+  "post_count_today": 1.0,
   "avg_engagement_rate": 0.0,
   "total_video_views": 0
 }

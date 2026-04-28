@@ -36,7 +36,7 @@ def classify_weekly_direction(
 
 def classify_lifecycle(
     score: float,
-    post_count_total: int,
+    post_count_total: float,
     score_trend: str,
     cfg: LifecycleConfig,
 ) -> LifecycleStage:
@@ -44,6 +44,9 @@ def classify_lifecycle(
 
     score_trend: "rising" | "falling" | "flat" — 직전 3일 흐름 요약.
     post_count_total < early_post_count_threshold 이면 점수와 관계없이 EARLY (non-negotiable).
+
+    옵션 C (2026-04-29): post_count_total int → float (share-weighted fan-out 의 fractional
+    mass). early threshold 비교는 부동소수 비교로 자연 동작.
     """
     if post_count_total < cfg.early_post_count_threshold:
         return LifecycleStage.EARLY
