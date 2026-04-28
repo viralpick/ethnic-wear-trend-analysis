@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS representative_weekly (
     garment_type_distribution  JSON          NULL,
     fabric_distribution        JSON          NULL,
     technique_distribution     JSON          NULL,
+    brand_distribution         JSON          NULL      COMMENT '로직 C top 5 brand share, log-scale 균등 분배',
     trajectory                 JSON          NULL      COMMENT '최근 12주 score 시계열',
     total_item_contribution    DOUBLE        NULL      COMMENT 'sparse 적재 분모 (per-rep)',
     effective_item_count       DOUBLE        NULL      COMMENT 'batch 분모 (multiplier-scaled, view normalize 용)',

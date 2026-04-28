@@ -36,22 +36,21 @@ import re
 from pathlib import PurePosixPath
 from typing import Any
 
-from attributes.derive_styling_from_vision import derive_styling_from_outfit
-from contracts.common import PaletteCluster, Silhouette
-from contracts.enriched import BrandInfo, EnrichedContentItem
-from contracts.vision import CanonicalOutfit, OutfitMember
-
-from aggregation.distribution_builder import (
-    GroupSnapshot,
-    build_distribution,
-    group_to_item_contrib,
+from aggregation.distribution_builder import group_to_item_contrib
+from aggregation.item_distribution_builder import (
+    build_silhouette_distribution,
+    build_styling_combo_distribution,
+    canonical_mean_area_ratio,
+    enriched_to_item_distribution,
 )
-from aggregation.item_distribution_builder import enriched_to_item_distribution
 from aggregation.representative_builder import (
     ItemDistribution,
     RepresentativeAggregate,
 )
-
+from attributes.derive_styling_from_vision import derive_styling_from_outfit
+from contracts.common import PaletteCluster
+from contracts.enriched import BrandInfo, EnrichedContentItem
+from contracts.vision import CanonicalOutfit, OutfitMember
 
 SCHEMA_VERSION = "pipeline_v1.0"
 GRANULARITY_WEEKLY = "weekly"
@@ -103,51 +102,11 @@ def _enum_value(value: Any) -> Any:
     return value
 
 
-def _silhouette_groups(canonicals: list[CanonicalOutfit]) -> list[GroupSnapshot]:
-    """silhouette distribution (vision_only) 입력. enum 값을 str 로 풀어 build_distribution
-    에 전달 — None 은 그대로 (자연 drop)."""
-    out: list[GroupSnapshot] = []
-    for c in canonicals:
-        sil: Silhouette | None = c.representative.silhouette
-        out.append(
-            GroupSnapshot(
-                value=sil.value if sil is not None else None,
-                n_objects=len(c.members),
-                mean_area_ratio=_canonical_mean_area_ratio(c),
-            )
-        )
-    return out
-
-
 def _styling_combo_for_canonical(canonical: CanonicalOutfit) -> str | None:
-    """canonical.representative → StylingCombo 파생 → str 또는 None."""
+    """canonical.representative → StylingCombo 파생 → str 또는 None.
+    canonical_group / canonical_object 단위 단일값 적재용."""
     combo = derive_styling_from_outfit(canonical.representative)
     return combo.value if combo is not None else None
-
-
-def _styling_combo_groups(canonicals: list[CanonicalOutfit]) -> list[GroupSnapshot]:
-    """styling_combo distribution 입력. canonical 단일값을 GroupSnapshot.value 에 풀어둠."""
-    out: list[GroupSnapshot] = []
-    for c in canonicals:
-        out.append(
-            GroupSnapshot(
-                value=_styling_combo_for_canonical(c),
-                n_objects=len(c.members),
-                mean_area_ratio=_canonical_mean_area_ratio(c),
-            )
-        )
-    return out
-
-
-def _canonical_mean_area_ratio(canonical: CanonicalOutfit) -> float:
-    """멤버 person_bbox area 평균 — item_distribution_builder 와 동일 정의 (spec §2.7)."""
-    if not canonical.members:
-        return 0.0
-    total = 0.0
-    for m in canonical.members:
-        _, _, w, h = m.person_bbox
-        total += w * h
-    return total / len(canonical.members)
 
 
 def build_item_row(
@@ -167,22 +126,8 @@ def build_item_row(
 
     normalized = enriched.normalized
 
-    silhouette_dist = build_distribution(
-        text_value=None,
-        text_method=None,
-        canonical_groups=_silhouette_groups(enriched.canonicals),
-        vision_only=True,
-    )
-
-    method_map = enriched.classification_method_per_attribute
-    styling_combo_text = (
-        enriched.styling_combo.value if enriched.styling_combo is not None else None
-    )
-    styling_combo_dist = build_distribution(
-        text_value=styling_combo_text,
-        text_method=method_map.get("styling_combo"),
-        canonical_groups=_styling_combo_groups(enriched.canonicals),
-    )
+    silhouette_dist = build_silhouette_distribution(enriched)
+    styling_combo_dist = build_styling_combo_distribution(enriched)
 
     return {
         "source": normalized.source.value,
@@ -227,7 +172,7 @@ def build_group_rows(
     for c in enriched.canonicals:
         rep = c.representative
         n = len(c.members)
-        mean_area = _canonical_mean_area_ratio(c)
+        mean_area = canonical_mean_area_ratio(c)
         rows.append({
             "item_source": src,
             "item_source_post_id": pid,
@@ -362,8 +307,9 @@ def build_representative_row(
     """`representative_weekly` 1 row.
 
     Args:
-      distributions: {silhouette/occasion/styling_combo/garment_type/fabric/technique
-        → {value:pct} or None}. caller 가 6개 키 모두 전달 — 키 누락 시 NULL.
+      distributions: {silhouette/occasion/styling_combo/garment_type/fabric/technique/
+        brand → {value:pct} or None}. caller 가 7 키 모두 전달 — 키 누락 시 NULL.
+        brand 는 로직 C (log-scale 균등 분배 + top 5 + threshold) 결과.
       color_palette: representative 단위 palette (spec §2.3 — caller 가 cluster 합성).
       trajectory: 최근 12주 score (부족분 0). 길이 12 권장.
       score_breakdown: {social, youtube, cultural, momentum} 부분 점수.
@@ -397,6 +343,8 @@ def build_representative_row(
         "garment_type_distribution": distributions.get("garment_type") or None,
         "fabric_distribution": distributions.get("fabric") or None,
         "technique_distribution": distributions.get("technique") or None,
+        # 로직 C — top 5 + share≥0.05. 빈 dict → NULL (Stream Load JSON null).
+        "brand_distribution": distributions.get("brand") or None,
         "trajectory": list(trajectory),
         "total_item_contribution": aggregate.total_item_contribution,
         "effective_item_count": effective_item_count,

@@ -22,6 +22,7 @@ pytest.importorskip("sklearn", reason="sklearn required (color_space deps for cl
 
 from aggregation.build_cluster_summary import make_drilldown  # noqa: E402
 from contracts.common import (  # noqa: E402
+    ClassificationMethod,
     ColorFamily,
     ContentSource,
     Occasion,
@@ -98,16 +99,27 @@ def _enriched(
     source: ContentSource = ContentSource.INSTAGRAM,
     handle: str | None = None,
     post_palette: list[PaletteCluster] | None = None,
+    canonicals: list[CanonicalOutfit] | None = None,
 ) -> EnrichedContentItem:
-    canonicals: list[CanonicalOutfit] = []
-    if silhouette is not None:
-        canonicals = [_canonical(silhouette)]
+    """canonicals override 를 받으면 그대로 사용 (vision-side styling_combo 테스트용).
+    아니면 silhouette argument 로 single canonical 합성 — 기존 로직 유지.
+    """
+    if canonicals is None:
+        canonicals = []
+        if silhouette is not None:
+            canonicals = [_canonical(silhouette)]
+    method_map: dict[str, ClassificationMethod] = {}
+    if styling is not None:
+        # extract_text_attributes_llm 가 setting 하는 production state 반영.
+        # method 없이 styling_combo enum 만 있는 enriched 는 비현실적 — text 가중치 0.
+        method_map["styling_combo"] = ClassificationMethod.LLM
     return EnrichedContentItem(
         normalized=_normalized(post_id, source=source, engagement=engagement, handle=handle),
         canonicals=canonicals,
         occasion=occasion,
         styling_combo=styling,
         post_palette=post_palette or [],
+        classification_method_per_attribute=method_map,
     )
 
 
@@ -134,7 +146,8 @@ def test_silhouette_distribution_share_weighted_two_items() -> None:
 
 
 def test_silhouette_distribution_share_weighted_same_silhouette_two_items() -> None:
-    """같은 silhouette 두 item 의 share 가 합산. 다른 silhouette 작은 share 도 정규화 후 비례 유지."""
+    """같은 silhouette 두 item 의 share 가 합산.
+    다른 silhouette 작은 share 도 정규화 후 비례 유지."""
     a = _enriched("p_a", silhouette=Silhouette.A_LINE)
     b = _enriched("p_b", silhouette=Silhouette.A_LINE)
     c = _enriched("p_c", silhouette=Silhouette.STRAIGHT)
@@ -177,6 +190,110 @@ def test_styling_distribution_share_weighted() -> None:
     assert drill.styling_distribution[StylingCombo.CO_ORD_SET.value] == pytest.approx(0.2)
 
 
+def _vision_outfit(
+    *,
+    lower: str | None = None,
+    is_co_ord_set: bool | None = None,
+    dress_as_single: bool = False,
+    outer_layer: str | None = None,
+    upper: str = "kurta",
+) -> EthnicOutfit:
+    return EthnicOutfit(
+        person_bbox=(0.1, 0.1, 0.5, 0.7),
+        person_bbox_area_ratio=0.4,
+        upper_garment_type=upper,
+        lower_garment_type=lower,
+        silhouette=None,
+        fabric="cotton",
+        technique="plain",
+        is_co_ord_set=is_co_ord_set,
+        dress_as_single=dress_as_single,
+        outer_layer=outer_layer,
+        color_preset_picks_top3=[],
+    )
+
+
+def _vision_canonical(index: int, outfit: EthnicOutfit) -> CanonicalOutfit:
+    return CanonicalOutfit(
+        canonical_index=index,
+        representative=outfit,
+        members=[
+            OutfitMember(
+                image_id=f"img_{index}",
+                outfit_index=0,
+                person_bbox=outfit.person_bbox,
+            )
+        ],
+    )
+
+
+def test_styling_distribution_vision_only_canonical() -> None:
+    """canonicals 만으로 styling 파생 — text styling_combo 미설정 (로직 B 핵심).
+
+    item A: lower=palazzo → WITH_PALAZZO, share=0.7
+    item B: dress_as_single=True → STANDALONE, share=0.3
+    """
+    a = _enriched(
+        "p_a",
+        canonicals=[_vision_canonical(0, _vision_outfit(lower="palazzo"))],
+    )
+    b = _enriched(
+        "p_b",
+        canonicals=[_vision_canonical(0, _vision_outfit(dress_as_single=True))],
+    )
+    drill = make_drilldown(
+        items_with_share=[(a, 0.7), (b, 0.3)],
+        palette_cfg=_PALETTE_CFG,
+        top_post_limit=3,
+        top_video_ids=[],
+    )
+    assert drill.styling_distribution[StylingCombo.WITH_PALAZZO.value] == pytest.approx(0.7)
+    assert drill.styling_distribution[StylingCombo.STANDALONE.value] == pytest.approx(0.3)
+
+
+def test_styling_distribution_multi_canonical_per_post_split_within_item() -> None:
+    """한 post 의 canonical 2개 → per-item distribution 안에서 둘이 분배 → cluster share
+    가중. canonical 둘 다 같은 area, n_objects 같으면 정확히 50:50.
+
+    item A (share=1.0): 2 canonicals, lower=palazzo / lower=churidar → 0.5/0.5
+    """
+    canonicals = [
+        _vision_canonical(0, _vision_outfit(lower="palazzo")),
+        _vision_canonical(1, _vision_outfit(lower="churidar")),
+    ]
+    a = _enriched("p_a", canonicals=canonicals)
+    drill = make_drilldown(
+        items_with_share=[(a, 1.0)],
+        palette_cfg=_PALETTE_CFG,
+        top_post_limit=3,
+        top_video_ids=[],
+    )
+    assert drill.styling_distribution[StylingCombo.WITH_PALAZZO.value] == pytest.approx(0.5)
+    assert drill.styling_distribution[StylingCombo.WITH_CHURIDAR.value] == pytest.approx(0.5)
+
+
+def test_styling_distribution_text_plus_vision_blend() -> None:
+    """text styling_combo (LLM=3.0) + vision-side derived styling (G=log2(2+1) ≈ 1.585)
+    합산. text=WITH_PANTS, vision=WITH_PALAZZO 일 때 정규화 후 둘 다 양수 share.
+    """
+    canonicals = [_vision_canonical(0, _vision_outfit(lower="palazzo"))]
+    a = _enriched(
+        "p_a",
+        styling=StylingCombo.WITH_PANTS,
+        canonicals=canonicals,
+    )
+    drill = make_drilldown(
+        items_with_share=[(a, 1.0)],
+        palette_cfg=_PALETTE_CFG,
+        top_post_limit=3,
+        top_video_ids=[],
+    )
+    # text(LLM=3.0) + vision(log2(2+1) ≈ 1.585) → text 가 dominant 이지만 vision 도 살아남음
+    assert drill.styling_distribution.get(StylingCombo.WITH_PANTS.value, 0) > 0.5
+    assert drill.styling_distribution.get(StylingCombo.WITH_PALAZZO.value, 0) > 0.0
+    assert sum(drill.styling_distribution.values()) == pytest.approx(1.0)
+
+
 def test_distribution_zero_share_entry_excluded() -> None:
     """share<=0 인 entry 는 distribution 에 미기여 (β4 invariant)."""
     a = _enriched("p_a", silhouette=Silhouette.A_LINE)
@@ -191,7 +308,8 @@ def test_distribution_zero_share_entry_excluded() -> None:
 
 
 def test_distribution_none_value_excluded() -> None:
-    """value=None entry 는 분포에 미기여 (silhouette/occasion/styling)."""
+    """value=None entry 는 분포에 미기여 (silhouette/occasion). styling 은 canonical 의
+    lower_garment_type='palazzo' 에서 vision-side 로 자동 파생되므로 a 의 1표만 살아남음."""
     a = _enriched("p_a", silhouette=Silhouette.A_LINE)
     b = _enriched("p_b", silhouette=None, occasion=None, styling=None)
     drill = make_drilldown(
@@ -202,7 +320,8 @@ def test_distribution_none_value_excluded() -> None:
     )
     assert drill.silhouette_distribution == {"a_line": 1.0}
     assert drill.occasion_distribution == {}
-    assert drill.styling_distribution == {}
+    # 로직 B: a 의 canonical lower="palazzo" → WITH_PALAZZO; b 는 canonical 0개 → 미기여.
+    assert drill.styling_distribution == {StylingCombo.WITH_PALAZZO.value: 1.0}
 
 
 # --------------------------------------------------------------------------- #

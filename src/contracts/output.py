@@ -47,6 +47,9 @@ class DrilldownPayload(BaseModel):
     silhouette_distribution: DistributionMap
     occasion_distribution: DistributionMap
     styling_distribution: DistributionMap
+    # 로직 C (2026-04-29) — log-scale 균등 분배 + threshold/top-N cap. 합=1.0 또는 빈 dict.
+    # insertion order = share desc (JSON 직렬화 시 순서 보존).
+    brand_distribution: DistributionMap = {}
     top_posts: list[str]
     top_videos: list[str]
     top_influencers: list[str]
