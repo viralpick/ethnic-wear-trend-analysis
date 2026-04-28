@@ -18,12 +18,39 @@ Phase 0 에서 v0.1 확정 (scripts/pilot_llm_bbox.py). 이후 수정 이력:
          dress 전체 ethnic 여부로 재활용, lower_is_ethnic=null. 또한
          `color_preset_picks_top3` 를 강제 top-3 에서 "1~3 동적 pick, DO NOT pad"
          으로 완화 — 단/2톤 의류 정확 표현 목적.
+  v0.5 — 2026-04-25, C2 pool_02 10 smoke 관측 후. `color_preset_picks_top3` 에
+         include/exclude region 명시. 10 smoke 에서 Fabindia kurta 의 cream_ivory
+         2nd pick 이 옷에 없고 가방/악세서리 색이었던 문제 defend 목적. include:
+         upper/lower/full-body garment + dupatta/shawl/jacket/cardigan (전통 drape/
+         outer). exclude: 가방/신발/안경/모자/터번(pagdi)/쥬얼리/벨트/헤어액세서리/
+         피부/배경/소품. 이후 β hybrid 의 R3 (pick↔KMeans 매칭 drop) 이 남은 환각을
+         2차 방어.
+  v0.6 — 2026-04-25, SceneFilter canonical-path 통합 (adult-woman-only 강제).
+         prod canonical path (PipelineBColorExtractor → _analyze_images) 가
+         SceneFilter 를 우회해 child/man BBOX 가 그대로 Gemini 로 흘러들어가던 leak
+         (project_scene_filter_canonical_integration.md) 의 Gemini 측 방어선.
+         outfits 배열 자체에서 비-adult-female 통째 제외 — bbox + 모든 attribute
+         (upper/lower_garment_type, upper/lower_is_ethnic, dress_as_single,
+         silhouette, fabric, technique, color_preset_picks_top3, person_bbox,
+         person_bbox_area_ratio) 까지. v0.5 cache 폐기 (key = model + prompt_version
+         + image sha256 이라 자동 무효화).
+  v0.7 — 2026-04-27, F-12 R2(β) 와 동기화. color_preset_picks_top3 픽 규칙 강화:
+         (a) EVIDENCE — 이미지에 실재하는 색만 픽 (warm/cool/ethnic 어휘 prior 환각
+         차단), (b) PATTERN — 자잘한 multi-color 패턴은 평균/혼합색이 아니라 background +
+         dominant motif 의 개별 색을 픽. F-11 13-post smoke 의 두 회귀 (01KPYYMEA4
+         maroon_red 환각 / 01KQ28YDASZ mint_green=초록+흰 평균 환각) 진단 결과 반영.
+  v0.8 — 2026-04-28, M3.I styling_combo P1 (co_ord_set / with_dupatta / with_jacket)
+         파생용 schema 슬롯 2개 추가: `outer_layer` (단일 word: dupatta/shawl/jacket/
+         cardigan/nehru/shrug 등 traditional drape 또는 outer) + `is_co_ord_set` (bool —
+         upper 와 lower 가 동일 fabric/print/색조로 매칭된 set 여부). 색 픽 규칙은 v0.7
+         그대로 (color regression 방지). dress_as_single=True 시 is_co_ord_set=null.
+         derive_styling_from_outfit 의 P1 매핑 (M3.I) 의 입력으로 사용 — 추가 LLM call 0.
 """
 from __future__ import annotations
 
 from contracts.common import Silhouette
 
-PROMPT_VERSION = "v0.4"
+PROMPT_VERSION = "v0.8"
 
 _SILHOUETTE_ENUM = [s.value for s in Silhouette]
 
@@ -49,7 +76,19 @@ SYSTEM_PROMPT = (
     "  * saree drape (any pattern) → TRUE (traditional drape)\n"
     "  * bodycon dress with Indian print → FALSE (Western silhouette)\n\n"
     "Rules:\n"
-    "- Output top-2 outfits by visible person size. If only 1 person, return 1.\n"
+    "- Output top-2 outfits by visible ADULT WOMAN size. If only 1 adult woman, "
+    "return 1.\n"
+    "- DO NOT include any outfit object for children, infants, men, or any "
+    "non-adult-female person. The \"outfits\" array MUST contain only adult-female "
+    "outfits — exclude their bbox AND all attributes "
+    "(upper/lower_garment_type, upper/lower_is_ethnic, dress_as_single, silhouette, "
+    "fabric, technique, color_preset_picks_top3, person_bbox, "
+    "person_bbox_area_ratio).\n"
+    "- If no adult woman is visible (only children, infants, or men), return "
+    "is_india_ethnic_wear=false and outfits=[]. Do NOT substitute child or man "
+    "outfits.\n"
+    "- Adult woman = visibly post-pubescent female; exclude pre-pubescent children "
+    "and infants regardless of clothing.\n"
     "- person_bbox is [x, y, w, h] in 0..1 normalized image coordinates (top-left origin).\n"
     "- person_bbox_area_ratio = w * h.\n"
     "- For a single-piece outfit (saree drape, lehenga choli viewed as single, ethnic dress), "
@@ -85,10 +124,38 @@ SYSTEM_PROMPT = (
     "angrakha = wrap-front with tie; empire = high waistline.\n"
     "- Each color pick must be chosen from the provided color_preset \"name\" list "
     "(e.g. \"pool_00\", \"saffron\"), NOT free-form hex.\n"
-    "- color_preset_picks_top3: pick 1 to 3 preset colors that dominate the ethnic-wear "
-    "region of each outfit (skin excluded). Use fewer picks when the garment is "
-    "genuinely single-tone (1 pick) or two-tone (2 picks). DO NOT pad the list to 3 "
-    "by adding minor/negligible colors.\n"
+    "- color_preset_picks_top3: pick 1 to 3 preset colors that dominate the GARMENT "
+    "region of each outfit. Use fewer picks when the garment is genuinely single-tone "
+    "(1 pick) or two-tone (2 picks). DO NOT pad the list to 3 by adding minor/"
+    "negligible colors.\n"
+    "  INCLUDE (pick from these regions only):\n"
+    "    * upper garment: kurta, kurti, blouse, choli, shirt, tunic, sherwani top\n"
+    "    * lower garment: palazzo, churidar, salwar, sharara, lehenga skirt, pants, "
+    "skirt, pyjama\n"
+    "    * full-body garment: saree drape, anarkali, ethnic dress, jumpsuit, kaftan\n"
+    "    * traditional drape / outer layer: dupatta, shawl, stole, jacket, cardigan, "
+    "nehru jacket\n"
+    "  EXCLUDE (never pick colors from these regions):\n"
+    "    * bag / handbag / clutch / potli\n"
+    "    * footwear / shoes / sandals / heels\n"
+    "    * eyewear / glasses / sunglasses\n"
+    "    * hat / cap / turban / pagdi\n"
+    "    * jewelry (necklace, earrings, bangles, maang tikka, nose ring, anklets)\n"
+    "    * belt / watch / hair accessories / hairband\n"
+    "    * skin / hair / makeup\n"
+    "    * background / props / furniture / walls\n"
+    "  If the accessory and the garment share the same hue, still pick based on "
+    "garment evidence only.\n"
+    "  EVIDENCE — pick only colors that are VISIBLY PRESENT in the garment region. "
+    "Do NOT add a pick because it would fit a \"warm\" / \"cool\" / \"ethnic\" / "
+    "\"festive\" tone, and do NOT carry priors from the garment_type label "
+    "(e.g. saree → maroon_red). If you are not confident a color occupies a "
+    "meaningful share (≥ ~5%) of the garment, omit it — fewer picks is correct.\n"
+    "  PATTERN — when the garment has a multi-color pattern (small motifs, prints, "
+    "embroidery, mixed weave), DO NOT pick the visual MIX / AVERAGE of those colors "
+    "(e.g. green + cream weave → \"mint_green\"). Pick the dominant individual colors "
+    "actually present (background + 1–2 most prominent motif colors). If individual "
+    "colors are too small/scattered to call confidently, prefer fewer picks.\n"
     "- fabric MUST be a SINGLE lowercase word describing the DOMINANT visible material "
     "(e.g. \"cotton\", \"linen\", \"silk\", \"chiffon\", \"georgette\", \"rayon\", "
     "\"khadi\", \"chanderi\", \"organza\", \"velvet\", \"net\", \"satin\"). "
@@ -100,6 +167,18 @@ SYSTEM_PROMPT = (
     "\"schiffli\", \"ikat\", \"pintuck\", \"plain\"). "
     "Use \"plain\" only when the garment is visibly undecorated. If the garment has "
     "decoration but the specific technique is unclear, null. NO multi-word.\n"
+    "- outer_layer: a SINGLE lowercase word for any traditional drape / outer worn "
+    "OVER the upper garment (\"dupatta\", \"shawl\", \"stole\", \"jacket\", \"cardigan\", "
+    "\"nehru\", \"shrug\"). Pick the most prominent one if multiple. Null if the outfit "
+    "has no separate outer layer or drape. NOT a substitute for upper_garment_type — "
+    "outer_layer is what's worn over a kurta/blouse, not the kurta itself. "
+    "For saree drape (single-piece), outer_layer is null (the drape IS the garment).\n"
+    "- is_co_ord_set: true ONLY when upper and lower are clearly an INTENTIONALLY MATCHED "
+    "set — same fabric AND same print/color scheme, marketed as a coordinated 2-piece "
+    "(e.g. matching kurta + palazzo in identical block print, matching crop top + skirt "
+    "in identical ikat). False when upper and lower differ in fabric/print/color even if "
+    "tones are complementary. Null when dress_as_single=true (single-piece, no upper-lower "
+    "pairing) or when only one piece is visible.\n"
     "- If is_india_ethnic_wear=false, outfits MAY be empty array.\n"
     "- No prose, no code fences. JSON only.\n\n"
     "Output schema:\n"
@@ -117,7 +196,9 @@ SYSTEM_PROMPT = (
     "      \"silhouette\": string | null,\n"
     "      \"fabric\": string | null,\n"
     "      \"technique\": string | null,\n"
-    "      \"color_preset_picks_top3\": [\"name\", ...]  // 1 to 3 entries, do not pad\n"
+    "      \"color_preset_picks_top3\": [\"name\", ...],  // 1 to 3 entries, do not pad\n"
+    "      \"outer_layer\": string | null,  // dupatta/shawl/stole/jacket/cardigan/nehru/shrug\n"
+    "      \"is_co_ord_set\": bool | null   // upper+lower matched set; null if single-piece\n"
     "    }\n"
     "  ]\n"
     "}"

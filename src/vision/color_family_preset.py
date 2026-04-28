@@ -28,30 +28,32 @@ from contracts.common import ColorFamily
 def lab_to_family(L: float, a: float, b: float) -> ColorFamily:
     """LAB 좌표 1개 → ColorFamily. dedup 용 coarse rule.
 
-    thresholds:
-      - chroma = sqrt(a^2 + b^2)
-      - L > 85 AND chroma < 12  → WHITE_ON_WHITE (ivory/white/off-white)
-      - chroma < 12              → NEUTRAL (gray/black/무채색)
-      - L > 70 AND chroma < 30   → PASTEL (baby pink, powder blue 등)
-      - L < 45 AND chroma > 30   → JEWEL (sapphire, emerald, ruby 등)
-      - chroma > 55              → BRIGHT (saffron, rani pink 등)
-      - b > 10 AND a > 0 AND 25 < L < 65 → EARTH (rust, terracotta, mustard 등)
-      - 나머지 → NEUTRAL
+    chroma-first 분기 — 기존 6-line cascade 가 mid-L × mid-chroma 영역을 NEUTRAL 로 흡수
+    (pool_13 indigo / pool_29 fuchsia 등 6 색) 하던 갭 수정 (F-8).
+
+    thresholds (순서 의존):
+      1. chroma < 12 (achromatic) → L > 85 면 WHITE_ON_WHITE, else NEUTRAL
+      2. L > 70 AND chroma <= 55 → PASTEL (소프트 톤)
+      3. EARTH 우선: 25 < L < 65 AND a > 0 AND b > 10 AND chroma <= 55 → EARTH
+         (rust/terracotta/mustard — warm-side mid-L. JEWEL/BRIGHT 보다 먼저 평가해
+          unit test lab(45,28,30) chroma=41 케이스 보존)
+      4. JEWEL: L <= 45 AND chroma >= 20 → JEWEL (deep saturated — sapphire, ruby 등)
+      5. BRIGHT: chroma > 55 → BRIGHT (vivid saturated — saffron, rani pink 등)
+      6. fallback JEWEL — mid-L × mid-chroma 영역 (cool 계열 + 중간 명도 + 중간 채도)
+         은 NEUTRAL 보다 JEWEL 이 dedup 정합. teal/mid-blue/lavender 등.
     """
     chroma = (a * a + b * b) ** 0.5
-    if L > 85 and chroma < 12:
-        return ColorFamily.WHITE_ON_WHITE
     if chroma < 12:
-        return ColorFamily.NEUTRAL
-    if L > 70 and chroma < 30:
+        return ColorFamily.WHITE_ON_WHITE if L > 85 else ColorFamily.NEUTRAL
+    if L > 70 and chroma <= 55:
         return ColorFamily.PASTEL
-    if L < 45 and chroma > 30:
+    if 25 < L < 65 and a > 0 and b > 10 and chroma <= 55:
+        return ColorFamily.EARTH
+    if L <= 45 and chroma >= 20:
         return ColorFamily.JEWEL
     if chroma > 55:
         return ColorFamily.BRIGHT
-    if b > 10 and a > 0 and 25 < L < 65:
-        return ColorFamily.EARTH
-    return ColorFamily.NEUTRAL
+    return ColorFamily.JEWEL
 
 
 def load_preset_family_map(preset_path: Path) -> dict[str, ColorFamily]:

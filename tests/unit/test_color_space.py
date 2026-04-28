@@ -11,6 +11,7 @@ import pytest
 from vision.color_space import (
     SKIN_LAB_MAX,
     SKIN_LAB_MIN,
+    SkinDropConfig,
     delta_e76,
     drop_skin,
     drop_skin_2layer,
@@ -357,9 +358,24 @@ def test_drop_skin_2layer_primary_only_segformer_overlap() -> None:
     assert cleaned.shape == (10, 3)
 
 
-def test_drop_skin_2layer_secondary_only_lab_edge_leak() -> None:
-    # segformer_skin_mask 비어있음 (skin 미검출). garment 중 3/10 픽셀이 skin-beige.
-    # ratio 0.3 < threshold 0.5 → edge leak 분기: 3 pixel drop.
+def test_drop_skin_2layer_secondary_only_lab_edge_leak_legacy() -> None:
+    # legacy 분기 (skin_dilate_iterations=0) — spatial 비활성, LAB box 안 픽셀 전체 drop.
+    # 새 default 는 spatial-aware 라 skin_mask 비어있으면 전체 보존이지만, 0 명시 시 구 동작.
+    crop = np.empty((1, 10, 3), dtype=np.uint8)
+    crop[:, 0:3] = SKIN_BEIGE_RGB
+    crop[:, 3:10] = VIBRANT_RED_RGB
+    garment_mask = np.ones((1, 10), dtype=bool)
+    skin_mask = np.zeros((1, 10), dtype=bool)
+    cfg = SkinDropConfig(skin_dilate_iterations=0)
+    cleaned, primary, secondary = drop_skin_2layer(crop, garment_mask, skin_mask, cfg)
+    assert primary == 0
+    assert secondary == 3
+    assert cleaned.shape == (7, 3)
+
+
+def test_drop_skin_2layer_skin_class_absent_preserves_all() -> None:
+    # skin_mask 비어있음 (제품샷 / segformer 가 skin 놓친 crop). default spatial-aware
+    # 분기 — drop 근거 없음 → 전체 보존. 옷 내부 패턴(maroon/베이지) 보호.
     crop = np.empty((1, 10, 3), dtype=np.uint8)
     crop[:, 0:3] = SKIN_BEIGE_RGB
     crop[:, 3:10] = VIBRANT_RED_RGB
@@ -367,8 +383,28 @@ def test_drop_skin_2layer_secondary_only_lab_edge_leak() -> None:
     skin_mask = np.zeros((1, 10), dtype=bool)
     cleaned, primary, secondary = drop_skin_2layer(crop, garment_mask, skin_mask)
     assert primary == 0
-    assert secondary == 3
-    assert cleaned.shape == (7, 3)
+    assert secondary == 0
+    assert cleaned.shape == (10, 3)
+
+
+def test_drop_skin_2layer_spatial_drop_only_near_skin() -> None:
+    # Sridevi 시나리오 유사 — maroon (LAB box 안) pixel 이 skin mask 에서 멀리 있으면 keep.
+    # 30x30 crop. SKIN_BEIGE 영역 200 pixel (ratio 0.22 < 0.5 → spatial 분기).
+    # skin_mask 좌상단 3x3. dilate=4 → 좌상단 ~11x11 zone.
+    # zone 안 SKIN_BEIGE 만 drop, zone 밖 SKIN_BEIGE (maroon-like) 는 보존.
+    crop = np.empty((30, 30, 3), dtype=np.uint8)
+    crop[:, :] = VIBRANT_RED_RGB
+    crop[0:10, 0:20] = SKIN_BEIGE_RGB
+    garment_mask = np.ones((30, 30), dtype=bool)
+    skin_mask = np.zeros((30, 30), dtype=bool)
+    skin_mask[0:3, 0:3] = True
+    cleaned, primary, secondary = drop_skin_2layer(crop, garment_mask, skin_mask)
+    # primary: garment & skin_mask = 9 pixel
+    assert primary == 9
+    # secondary: zone (~11x11) ∩ inside (row 0-9, col 0-19) — 일부, 전체 200 보다 작음.
+    assert 0 < secondary < 200
+    # cleaned: SKIN_BEIGE zone 밖 보존 + VIBRANT_RED 전부 → 700 초과.
+    assert cleaned.shape[0] > 700
 
 
 def test_drop_skin_2layer_both_layers_active() -> None:

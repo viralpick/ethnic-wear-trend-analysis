@@ -17,6 +17,8 @@ import argparse
 from datetime import date, datetime
 from pathlib import Path
 
+from aggregation.item_distribution_builder import enriched_to_item_distribution
+from attributes.brand_registry import BrandRegistry, load_brand_registry
 from attributes.extract_text_attributes import (
     AttributeExtractionState,
     extract_rule_based,
@@ -28,8 +30,8 @@ from attributes.extract_text_attributes_llm import (
     apply_llm_extraction,
 )
 from attributes.unknown_signal_tracker import run_tracker
-from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster
-from contracts.common import ContentSource
+from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster, build_exact_key
+from contracts.common import ContentSource, Fabric, GarmentType, Technique
 from contracts.enriched import EnrichedContentItem
 from exporters.write_json_output import write_enriched
 from loaders.raw_loader import LocalSampleLoader, RawDailyBatch, RawLoader
@@ -50,6 +52,18 @@ logger = get_logger(__name__)
 
 def _load_raw(loader: RawLoader, target_date: date) -> RawDailyBatch:
     return loader.load_batch(target_date)
+
+
+def _load_brand_registry_or_warn(settings: Settings) -> BrandRegistry | None:
+    """settings.paths.brand_registry 가 있으면 로드. 없거나 파일 부재면 None + warn."""
+    path = settings.paths.brand_registry
+    if path is None:
+        logger.info("brand_registry path not configured — brand 추출 skip")
+        return None
+    if not path.exists():
+        logger.warning("brand_registry file not found path=%s — brand 추출 skip", path)
+        return None
+    return load_brand_registry(path)
 
 
 def _assign_clusters(
@@ -101,6 +115,37 @@ def _case2_targets(
     return picks
 
 
+def _vision_reassign_cluster_key(item: EnrichedContentItem) -> str | None:
+    """canonicals 채워진 후 ItemDistribution top-1 G/T/F 로 cluster_key 재계산 (갭 #3 B).
+
+    text 단계 partial cluster_key 가 vision 결과 reflect 안돼서 representative_key
+    (= ItemDistribution top-1 G/T/F) 와 어긋남 → summary 매칭 실패. 여기서 재할당하면
+    mechanical 하게 representative_key 와 일치 (representative_builder 의 cross-product
+    top-1 이 동일 ItemDistribution 으로부터 나오기 때문).
+
+    안전장치:
+    - canonicals 비어있으면 기존 키 유지 (text-level 결정 보존).
+    - dist 의 G/T/F 한 axis 라도 비면 기존 키 유지 (어차피 N=3 representative 에는 미적재).
+    - top-1 이 enum 멤버에 없는 free-form 값이면 기존 키 유지 (vision 단계 raw 값 방어).
+    - 동률 시 (-pct, value asc) 로 결정론적 tiebreak.
+    """
+    if not item.canonicals:
+        return item.trend_cluster_key
+
+    dist = enriched_to_item_distribution(item)
+    if not dist.garment_type or not dist.technique or not dist.fabric:
+        return item.trend_cluster_key
+
+    g_top = min(dist.garment_type.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    t_top = min(dist.technique.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    f_top = min(dist.fabric.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+    try:
+        return build_exact_key(GarmentType(g_top), Technique(t_top), Fabric(f_top))
+    except ValueError:
+        return item.trend_cluster_key
+
+
 def _apply_extraction_result(
     enriched: list[EnrichedContentItem],
     results: list[ColorExtractionResult],
@@ -109,6 +154,10 @@ def _apply_extraction_result(
 
     Color 3층 재설계 B3a/B3b/B3d (2026-04-24): canonicals + post_palette 반영. post-level
     silhouette 단일값은 제거됨 — canonical silhouette 은 result.canonicals 복사로 자연 전달.
+
+    갭 #3 B (2026-04-27): canonicals 가 채워지면 trend_cluster_key 도 vision-aware 재계산
+    (`_vision_reassign_cluster_key`). text-level partial 가 vision 후 N=3 representative
+    적재로 승격되는 경우, summary 매칭이 끊기지 않게 키를 동기화.
     """
     by_id = {r.source_post_id: r for r in results}
     updated: list[EnrichedContentItem] = []
@@ -119,10 +168,14 @@ def _apply_extraction_result(
             # Case1 / Case2 2-pass 간 의도치 않은 wipe 방어.
             updated.append(item)
             continue
-        updated.append(item.model_copy(update={
+        new_item = item.model_copy(update={
             "canonicals": list(result.canonicals),
             "post_palette": list(result.post_palette),
-        }))
+        })
+        new_item = new_item.model_copy(update={
+            "trend_cluster_key": _vision_reassign_cluster_key(new_item),
+        })
+        updated.append(new_item)
     return updated
 
 
@@ -150,6 +203,8 @@ def run_pipeline(
     llm_client: LLMClient,
     color_extractor: ColorExtractor,
     raw_loader: RawLoader | None = None,
+    *,
+    sink: str = "none",
 ) -> None:
     loader = raw_loader or LocalSampleLoader(settings.paths.sample_data)
     batch = _load_raw(loader, target_date)
@@ -157,7 +212,8 @@ def run_pipeline(
 
     haul_tags = frozenset(settings.normalization.haul_tags)
     normalized = normalize_batch(batch.instagram, batch.youtube, haul_tags)
-    states = [extract_rule_based(item) for item in normalized]
+    brand_registry = _load_brand_registry_or_warn(settings)
+    states = [extract_rule_based(item, brand_registry) for item in normalized]
     apply_llm_extraction(states, llm_client)
     enriched = _assign_clusters(states)
 
@@ -169,7 +225,41 @@ def run_pipeline(
     )
     run_tracker(normalized, settings.paths.outputs / "unknown_signals.json", target_date)
 
-    score_and_export(enriched, settings, target_date, settings.paths.outputs)
+    _, summaries = score_and_export(
+        enriched, settings, target_date, settings.paths.outputs
+    )
+
+    if sink in ("starrocks", "starrocks_insert", "dry_run"):
+        from exporters.starrocks.sink_runner import emit_to_starrocks  # noqa: I001
+
+        weekly_history_path = settings.paths.outputs / "score_history_weekly.json"
+        if sink == "starrocks":
+            from exporters.starrocks.stream_load_writer import (  # noqa: I001
+                StarRocksStreamLoadWriter,
+            )
+            writer = StarRocksStreamLoadWriter.from_env()
+            emit_to_starrocks(
+                enriched, summaries, target_date, writer,
+                weekly_history_path=weekly_history_path,
+            )
+        elif sink == "starrocks_insert":
+            from exporters.starrocks.insert_writer import (  # noqa: I001
+                StarRocksInsertWriter,
+            )
+            writer = StarRocksInsertWriter.from_env()
+            emit_to_starrocks(
+                enriched, summaries, target_date, writer,
+                weekly_history_path=weekly_history_path,
+            )
+        else:  # dry_run
+            from exporters.starrocks.fake_writer import FakeStarRocksWriter  # noqa: I001
+            from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
+            writer = FakeStarRocksWriter()
+            counts = emit_to_starrocks(
+                enriched, summaries, target_date, writer,
+                weekly_history_path=weekly_history_path,
+            )
+            log_dry_run_summary(writer, counts)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -226,6 +316,14 @@ def _parse_args() -> argparse.Namespace:
         help="Vision LLM (BBOX+attributes) 클라이언트 선택. gemini 는 GEMINI_API_KEY 필요. "
              "--color-extractor pipeline_b 일 때만 사용됨.",
     )
+    parser.add_argument(
+        "--sink", choices=["none", "starrocks", "starrocks_insert", "dry_run"],
+        default="none",
+        help="결과 적재 sink. starrocks 는 STARROCKS_HOST/USER/PASSWORD/RESULT_DATABASE "
+             "+ optional STARROCKS_STREAM_LOAD_PORT(8030) 환경변수 필요. "
+             "starrocks_insert 는 9030 query 포트 INSERT VALUES fallback (8030 차단 환경용). "
+             "dry_run 은 FakeStarRocksWriter 로 in-memory 적재 후 row 갯수 + sample 출력 (HTTP 안 보냄).",
+    )
     return parser.parse_args()
 
 
@@ -271,7 +369,10 @@ def _select_color_extractor(
     from vision.pipeline_b_adapter import PipelineBColorExtractor
     from vision.pipeline_b_extractor import load_models
 
-    bundle = load_models()
+    # SceneFilterConfig 를 load_models 에 명시 전달 — yaml `enabled: true` 가 무시되던
+    # leak 방어 (Phase 4, 2026-04-25). canonical path 는 별도 인자로 같은 SceneFilter
+    # 객체 재사용 (CLIP ~600MB 중복 로드 회피).
+    bundle = load_models(scene_filter_cfg=settings.vision.scene_filter)
     views = load_preset_views(settings.outfit_dedup.preset_path)
     vision_llm = _build_vision_llm(vision_llm_choice, settings)
 
@@ -291,6 +392,7 @@ def _select_color_extractor(
         image_root=image_root,
         blob_downloader=blob_downloader,
         blob_cache_dir=blob_cache,
+        scene_filter=bundle.scene_filter,
     )
 
 
@@ -335,8 +437,51 @@ def _select_raw_loader(
     return LocalSampleLoader(settings.paths.sample_data)
 
 
+_LIVE_SINKS: frozenset[str] = frozenset({"starrocks", "starrocks_insert"})
+
+
+def _validate_sink_extractor(
+    sink: str, color_extractor: str, vision_llm: str
+) -> None:
+    """`--sink starrocks{,_insert}` + fake 조합 reject (color_extractor / vision_llm 양쪽).
+
+    silent stale 시나리오 (2026-04-27 SL smoke 발견):
+
+    1. `--color-extractor fake` 면 FakeColorExtractor 가 의도적으로 빈 canonicals 반환
+       (color_extractor.py:54-73, B3a 이후) → group/object 0 적재.
+    2. `--vision-llm fake` 면 FakeVisionLLMClient 가 ethnic decision 채우지 않아
+       canonical_extractor 의 pools=[] → `_attach_palette` skip → canonical/member palette
+       빈 list → DB color_palette NULL.
+
+    DB view 모델이 DUPLICATE KEY append-only + MAX(computed_at) 라 빈 적재가 latest 가
+    되면 직전 정상 row 를 가리고 운영 query 는 stale data 노출. main argparse 직후 reject —
+    `--sink none` (snapshot/test path) 은 그대로 허용.
+    """
+    if sink not in _LIVE_SINKS:
+        return
+    missing: list[str] = []
+    if color_extractor != "pipeline_b":
+        missing.append("--color-extractor pipeline_b")
+    if vision_llm != "gemini":
+        missing.append("--vision-llm gemini")
+    if missing:
+        raise SystemExit(
+            f"--sink {sink} requires {' + '.join(missing)} "
+            "(fake variants produce empty canonicals/palette — silent stale on DB view). "
+            "Use --sink none for fake-based local runs."
+        )
+
+
 def main() -> None:
     args = _parse_args()
+    _validate_sink_extractor(args.sink, args.color_extractor, args.vision_llm)
+    if (args.sink in ("starrocks", "starrocks_insert")
+            or args.source == "starrocks" or args.blob_cache):
+        # raw_loader / blob_downloader / stream_load_writer 모두 from_env() 패턴 —
+        # CLI main 에서 한 번만 .env 로드 (편의). 이미 process env 에 있으면 no-op.
+        from dotenv import load_dotenv  # noqa: I001 — optional dep
+        load_dotenv()
+
     settings = load_settings()
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
     llm_client = _select_llm_client(args.llm, settings)
@@ -353,7 +498,10 @@ def main() -> None:
         window_days=args.window_days,
         target_date=target,
     )
-    run_pipeline(settings, target, llm_client, color_extractor, raw_loader=raw_loader)
+    run_pipeline(
+        settings, target, llm_client, color_extractor,
+        raw_loader=raw_loader, sink=args.sink,
+    )
 
 
 if __name__ == "__main__":

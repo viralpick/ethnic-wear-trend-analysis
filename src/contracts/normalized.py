@@ -34,6 +34,11 @@ class NormalizedContentItem(BaseModel):
     # VLM 대상 이미지. IG 포스트는 여러 장, YT 는 [] (spec §7.2 — YouTube 컬러 추출 안 함)
     image_urls: list[str]
 
+    # 영상 URL (.mp4/.mov/.webm/.m4v). IG Reel / IG carousel video 는 raw download_urls
+    # 를 확장자로 split 후 여기에. YT 영상은 M3.H 까지 [] (raw row 에 별도 매핑 미구현).
+    # M3.G (2026-04-28) 추가, 기존 fixture 호환 default `[]`.
+    video_urls: list[str] = []
+
     # IG: post_date, YT: published_at
     post_date: datetime
 

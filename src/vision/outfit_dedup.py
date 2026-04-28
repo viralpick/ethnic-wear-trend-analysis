@@ -244,6 +244,10 @@ def _assemble_canonicals(
                         image_id=nodes[i].image_id,
                         outfit_index=nodes[i].outfit_index,
                         person_bbox=nodes[i].outfit.person_bbox,
+                        garment_type=nodes[i].outfit.upper_garment_type,
+                        fabric=nodes[i].outfit.fabric,
+                        technique=nodes[i].outfit.technique,
+                        silhouette=nodes[i].outfit.silhouette,
                     )
                     for i in sorted_members
                 ],

@@ -363,6 +363,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings", extra = ["yaml"] },
     { name = "pymysql" },
+    { name = "requests" },
     { name = "scikit-learn" },
 ]
 
@@ -403,6 +404,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-dotenv", marker = "extra == 'blob'", specifier = ">=1.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "scikit-learn", specifier = ">=1.4" },
     { name = "torch", marker = "extra == 'vision'", specifier = ">=2.1" },

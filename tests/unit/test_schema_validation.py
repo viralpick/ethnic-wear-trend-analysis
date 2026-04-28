@@ -72,7 +72,7 @@ def test_enriched_item_allows_all_attrs_null() -> None:
     )
 
     assert item.garment_type is None
-    assert item.brand is None
+    assert item.brands == []
     assert item.trend_cluster_key is None
     assert item.classification_method_per_attribute == {}
 

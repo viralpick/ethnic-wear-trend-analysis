@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeVar
 
+from attributes.brand_registry import BrandRegistry
 from attributes.mapping_tables import (
     FABRIC_KEYWORD_INDEX,
     FABRIC_TAG_INDEX,
@@ -51,7 +52,7 @@ class AttributeExtractionState:
     embellishment_intensity: EmbellishmentIntensity | None = None
     occasion: Occasion | None = None
     styling_combo: StylingCombo | None = None
-    brand: BrandInfo | None = None
+    brands: list[BrandInfo] = field(default_factory=list)
     method_per_attribute: dict[str, ClassificationMethod] = field(default_factory=dict)
 
     def to_enriched(self, cluster_key: str | None) -> EnrichedContentItem:
@@ -63,7 +64,7 @@ class AttributeExtractionState:
             embellishment_intensity=self.embellishment_intensity,
             occasion=self.occasion,
             styling_combo=self.styling_combo,
-            brand=self.brand,
+            brands=list(self.brands),
             trend_cluster_key=cluster_key,
             classification_method_per_attribute=dict(self.method_per_attribute),
         )
@@ -137,8 +138,18 @@ def _derive_embellishment_intensity(technique: Technique) -> EmbellishmentIntens
 # Stage 2a entry point
 # --------------------------------------------------------------------------- #
 
-def extract_rule_based(item: NormalizedContentItem) -> AttributeExtractionState:
-    """spec §6.2 매핑으로 속성 채우기. brand / color / silhouette 은 rule 에서 안 잡는다."""
+def extract_rule_based(
+    item: NormalizedContentItem,
+    brand_registry: BrandRegistry | None = None,
+) -> AttributeExtractionState:
+    """spec §6.2 매핑으로 속성 채우기. color / silhouette 은 rule 에서 안 잡는다.
+
+    M3.F (2026-04-28) — brand_registry 가 주입되면 rule 단계에서 brands 채움 (1:N):
+    1) IG account_handle 1차 lookup (있으면 첫 brand 로 추가)
+    2) caption text 의 `@mention` 모두 lookup → 각각 brand 추가
+    중복 (account_handle 과 caption 의 같은 brand) 은 dedup. YT 는 account_handle 없어
+    (channel 매핑은 후속 phase) caption 만 시도.
+    """
     state = AttributeExtractionState(normalized=item)
     tags = item.hashtags
     text = item.text_blob.lower()
@@ -151,7 +162,9 @@ def extract_rule_based(item: NormalizedContentItem) -> AttributeExtractionState:
     if state.technique is not None:
         state.embellishment_intensity = _derive_embellishment_intensity(state.technique)
 
-    # TODO(§4.1 ⑧): brand 는 brand registry (외부 리스트) 도입 후 추출. 현재 rule 에서 skip.
+    if brand_registry is not None:
+        state.brands = _collect_brands(item, brand_registry)
+
     for key, value in (
         ("garment_type", state.garment_type),
         ("fabric", state.fabric),
@@ -162,5 +175,27 @@ def extract_rule_based(item: NormalizedContentItem) -> AttributeExtractionState:
     ):
         if value is not None:
             state.method_per_attribute[key] = ClassificationMethod.RULE
+    if state.brands:
+        state.method_per_attribute["brand"] = ClassificationMethod.RULE
 
     return state
+
+
+def _collect_brands(
+    item: NormalizedContentItem,
+    registry: BrandRegistry,
+) -> list[BrandInfo]:
+    """account_handle + caption @mention 의 brand 를 dedup 순서 보존 반환."""
+    handle_entry = registry.lookup_entry(item.account_handle)
+    seen_ids: set[str] = set()
+    out: list[BrandInfo] = []
+    if handle_entry is not None:
+        seen_ids.add(handle_entry.id)
+        out.append(BrandInfo(name=handle_entry.display_name, tier=handle_entry.tier))
+    for info in registry.extract_all_from_text(item.text_blob):
+        # extract_all_from_text 는 자체 dedup 하지만 handle 과 겹칠 수 있음.
+        # display_name 으로 비교 (BrandInfo 가 entry.id 보유 X).
+        if any(info.name == existing.name for existing in out):
+            continue
+        out.append(info)
+    return out

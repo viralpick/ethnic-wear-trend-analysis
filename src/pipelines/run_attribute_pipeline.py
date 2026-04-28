@@ -12,6 +12,7 @@ import argparse
 from datetime import date
 from pathlib import Path
 
+from attributes.brand_registry import BrandRegistry
 from attributes.extract_text_attributes import (
     AttributeExtractionState,
     extract_rule_based,
@@ -71,6 +72,7 @@ def run_pipeline(
     target_date: date,
     llm_client: LLMClient,
     haul_tags: frozenset[str] = frozenset(),
+    brand_registry: BrandRegistry | None = None,
 ) -> None:
     batch = _load_raw(input_dir, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
@@ -78,7 +80,7 @@ def run_pipeline(
     normalized = normalize_batch(batch.instagram, batch.youtube, haul_tags)
     logger.info("normalized items=%d", len(normalized))
 
-    states = [extract_rule_based(item) for item in normalized]
+    states = [extract_rule_based(item, brand_registry) for item in normalized]
     resolved_after_rule = sum(1 for s in states if s.garment_type and s.technique and s.fabric)
     logger.info("rule_stage exact_resolved=%d partial_or_none=%d",
                 resolved_after_rule, len(states) - resolved_after_rule)

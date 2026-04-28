@@ -33,6 +33,10 @@ class RawInstagramPost(BaseModel):
     account_followers: int
 
     image_urls: list[str]
+    # IG Reel / IG carousel 의 영상 URL (.mp4/.mov/.webm/.m4v). 크롤러 raw 에서는
+    # download_urls 가 image+video 혼입 단일 CSV — loader 가 확장자로 split. M3.G
+    # (2026-04-28) 추가. 기존 fixture / FakeIngestor 호환 위해 default `[]`.
+    video_urls: list[str] = []
     caption_text: str
     hashtags: list[str]
 
@@ -67,3 +71,6 @@ class RawYouTubeVideo(BaseModel):
     top_comments: list[str]  # spec §3.2 — 상위 50개, 텍스트만
 
     published_at: datetime
+
+    # M3.H — YT 영상 mp4 Azure Blob URL. 보통 1개. backwards-compat 위해 default `[]`.
+    video_urls: list[str] = []

@@ -18,6 +18,8 @@ dependencies = [
     "scikit-learn>=1.4",
     "pymysql>=1.1.2",
     "openai>=2.32.0",
+    # StarRocks Stream Load HTTP PUT 적재 — pymysql 은 query 포트(9030), Stream Load 는 별도 HTTP(8030).
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
