@@ -32,11 +32,28 @@ fi
 STOP=0
 trap 'echo "[backfill] stop requested — current batch 완료 후 종료"; STOP=1' INT TERM
 
+# --------- resume: manifest 에 exit=0 으로 완료된 batch skip ---------
+declare -A DONE
+if [[ -f "$MANIFEST" ]]; then
+  while IFS=, read -r p_idx _started _finished p_exit _gem _items _clu; do
+    [[ "$p_idx" == "page_index" ]] && continue  # header
+    if [[ "$p_exit" == "0" ]]; then
+      DONE[$p_idx]=1
+    fi
+  done < "$MANIFEST"
+  echo "[backfill] resume: ${#DONE[@]} batch already complete (exit=0), will skip"
+fi
+
 # --------- main loop ---------
 for (( idx=START_INDEX; idx>=END_INDEX; idx-- )); do
   if [[ $STOP -eq 1 ]]; then
     echo "[backfill] stopped before page_index=$idx"
     break
+  fi
+
+  if [[ -n "${DONE[$idx]:-}" ]]; then
+    echo "[backfill] page_index=$idx skip (이미 완료)"
+    continue
   fi
 
   LOG="$OUT_DIR/page_${idx}_smoke.log"
