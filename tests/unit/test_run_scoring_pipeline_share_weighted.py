@@ -133,27 +133,42 @@ def empty_history(tmp_path: Path) -> ScoreHistory:
 # Invariants
 # --------------------------------------------------------------------------- #
 
-def test_n_lt_3_item_contributes_zero(empty_history: ScoreHistory) -> None:
-    # N=2 (technique 누락) → assign_shares 빈 dict → accumulator 빈 dict.
-    # _build_contexts 는 grouped 의 모든 winner key 를 zero-aggregate context 로 emit
-    # (score_and_export decisions[key] KeyError 방지). N<3 의미는 모든 share-weighted
-    # 필드가 0 인 것으로 보존됨.
+def test_n_lt_3_item_contributes_partial_mass(empty_history: ScoreHistory) -> None:
+    # Phase partial(g) 활성화 (2026-04-28) — β2 의 N<3 zero contribution 정책 revisit.
+    # N=2 (technique 누락) → assign_shares 가 multiplier_ratio (0.5) 가중 share 반환 →
+    # cluster 에 mass=0.5 비례 기여 (per-item mass: N=3=1.0 / N=2=0.5 / N=1=0.2).
     item = _enriched("p1", g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
                      cluster_key="kurta_set__unknown__cotton")
     grouped = {"kurta_set__unknown__cotton": [item]}
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
-    assert acc == {}  # accumulator 자체는 비어있음
+    assert "kurta_set__unknown__cotton" in acc
+    a = acc["kurta_set__unknown__cotton"]
+    assert a.post_count_today == pytest.approx(0.5)  # N=2 multiplier_ratio
+    assert a.social_weighted_engagement == pytest.approx(50.0)  # 100 × 0.5
 
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
     assert len(contexts) == 1
     ctx = contexts[0]
     assert ctx.cluster_key == "kurta_set__unknown__cotton"
+    assert ctx.post_count_today == pytest.approx(0.5)
+    assert ctx.social_weighted_engagement == pytest.approx(50.0)
+
+
+def test_n_zero_item_contributes_zero(empty_history: ScoreHistory) -> None:
+    # N=0 (G/T/F 모두 없음) → assign_shares 빈 dict → accumulator 빈 dict.
+    # zero-aggregate fallback 으로 grouped 의 winner key 만 context 받음.
+    item = _enriched("p1", g=None, t=None, f=None,
+                     cluster_key="unclassified")
+    grouped = {"unclassified": [item]}
+    acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
+    assert acc == {}
+
+    contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
+    assert len(contexts) == 1
+    ctx = contexts[0]
+    assert ctx.cluster_key == "unclassified"
     assert ctx.post_count_today == pytest.approx(0.0)
     assert ctx.social_weighted_engagement == pytest.approx(0.0)
-    assert ctx.youtube_video_count == pytest.approx(0.0)
-    assert ctx.youtube_views_total == pytest.approx(0.0)
-    assert ctx.cultural_festival_match == pytest.approx(0.0)
-    assert ctx.cultural_bollywood_presence == pytest.approx(0.0)
 
 
 def test_n_eq_3_mass_preservation_single_winner(empty_history: ScoreHistory) -> None:
@@ -173,7 +188,8 @@ def test_n_eq_3_mass_preservation_single_winner(empty_history: ScoreHistory) -> 
 
 
 def test_mass_preservation_3_items(empty_history: ScoreHistory) -> None:
-    # 3 N=3 items + 1 N=2 item → fan-out 후 sum(post_count_today) 가 정확히 3.0.
+    # 3 N=3 items + 1 N=2 item → partial 활성화 후 sum(post_count_today) = 3.0 + 0.5 = 3.5.
+    # per-item mass: N=3=1.0 (×3) + N=2=0.5 (×1) = 3.5.
     items = [
         _enriched("p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
                   cluster_key="kurta_set__chikankari__cotton"),
@@ -191,7 +207,7 @@ def test_mass_preservation_3_items(empty_history: ScoreHistory) -> None:
     }
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     total_mass = sum(a.post_count_today for a in acc.values())
-    assert total_mass == pytest.approx(3.0)  # N<3 item drop
+    assert total_mass == pytest.approx(3.5)  # N=3 (×3, 1.0) + N=2 (×1, 0.5)
 
 
 def test_share_fan_out_cross_product(empty_history: ScoreHistory) -> None:
@@ -210,8 +226,10 @@ def test_share_fan_out_cross_product(empty_history: ScoreHistory) -> None:
         "casual_saree__block_print__chanderi": [items[1]],
     }
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
-    assert acc["kurta_set__chikankari__cotton"].social_weighted_engagement == pytest.approx(200.0)
-    assert acc["casual_saree__block_print__chanderi"].social_weighted_engagement == pytest.approx(300.0)
+    a_kurta = acc["kurta_set__chikankari__cotton"]
+    a_saree = acc["casual_saree__block_print__chanderi"]
+    assert a_kurta.social_weighted_engagement == pytest.approx(200.0)
+    assert a_saree.social_weighted_engagement == pytest.approx(300.0)
 
 
 def test_youtube_video_count_share_weighted(empty_history: ScoreHistory) -> None:

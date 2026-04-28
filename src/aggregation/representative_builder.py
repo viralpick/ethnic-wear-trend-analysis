@@ -20,7 +20,6 @@ from itertools import product
 from clustering.assign_trend_cluster import assign_shares
 from contracts.common import ContentSource
 
-
 _MULTIPLIER_BY_N: dict[int, float] = {
     1: 1.0,
     2: 2.5,
@@ -100,20 +99,32 @@ def effective_item_count(items: list[ItemDistribution]) -> float:
     return sum(multiplier_for_n(_resolved_axis_count(item)) / full for item in items)
 
 
+# `clustering.assign_trend_cluster._UNKNOWN` 와 같은 placeholder ("unknown" 하드코드 — partial
+# key 포맷 단일 source). 후속 cleanup 으로 두 모듈 공유 상수로 분리 예정.
+_UNKNOWN_AXIS = "unknown"
+
+
 def _item_contributions(item: ItemDistribution) -> list[RepresentativeContribution]:
     """1 item → cross-product 후 representative 별 contribution 목록.
 
-    G/T/F 한 distribution 이라도 비면 N<3 이므로 빈 list. (현 phase 정책 = N=3 만 emit.)
+    Phase partial(g) 활성화 (2026-04-28):
+    - N (resolved axis 수) = 0 → 빈 list (representative 후보 아님)
+    - N≥1 → cross-product. 비어있는 axis 는 `_UNKNOWN_AXIS` placeholder (1.0 share).
+      multiplier = multiplier_for_n(N) (1.0 / 2.5 / 5.0).
+    - contribution = share × multiplier × item_base_unit.
     """
-    if not item.garment_type or not item.technique or not item.fabric:
+    n_axes = _resolved_axis_count(item)
+    if n_axes == 0:
         return []
 
+    g_eff = item.garment_type or {_UNKNOWN_AXIS: 1.0}
+    t_eff = item.technique or {_UNKNOWN_AXIS: 1.0}
+    f_eff = item.fabric or {_UNKNOWN_AXIS: 1.0}
+    mult = multiplier_for_n(n_axes)
+
     out: list[RepresentativeContribution] = []
-    mult = multiplier_for_n(3)
     for (g, gp), (t, tp), (f, fp) in product(
-        item.garment_type.items(),
-        item.technique.items(),
-        item.fabric.items(),
+        g_eff.items(), t_eff.items(), f_eff.items(),
     ):
         share = gp * tp * fp
         if share <= 0.0:

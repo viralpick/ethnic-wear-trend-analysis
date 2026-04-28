@@ -135,6 +135,12 @@ def assign_cluster(
 # 부분 share 로 fan-out. winner-takes-all (assign_cluster) 와 평행 — Phase β
 # (build_cluster_summary share-weighted fan-out) 가 wire 할 때까지 호출자 없음.
 
+# multiplier_for_n(N) / multiplier_for_n(3) — partial 활성화 후 per-item mass.
+# representative_builder._MULTIPLIER_BY_N 와 단일 source 의도지만, 순환 import 회피
+# 위해 인라인 매핑 (후속 cleanup 으로 단일 모듈 분리 예정).
+_PARTIAL_MASS_BY_N: dict[int, float] = {1: 0.2, 2: 0.5, 3: 1.0}
+
+
 def assign_shares(
     garment_dist: dict[str, float],
     technique_dist: dict[str, float],
@@ -142,29 +148,39 @@ def assign_shares(
     *,
     min_share: float = 0.0,
 ) -> dict[str, float]:
-    """G/T/F 분포 dict → exact cluster_key 별 share dict (cross-product).
+    """G/T/F 분포 dict → cluster_key 별 share dict (cross-product, multiplier_ratio 가중).
 
-    - input 셋 중 하나라도 빈 dict 면 N<3 → 빈 결과 (현 phase 정책 = N=3 만 emit,
-      representative_builder._item_contributions 와 동일).
-    - share = gp × tp × fp. min_share 이하는 drop (default 0 → 0 share 만 drop).
-    - cluster_key 포맷은 `assign_exact` (`build_exact_key`) 와 동일 — string 단위
-      `g__t__f` (enum value 가 이미 들어와 있다고 가정).
-    - 결과 share 합 ≤ 1.0 (input 분포 합 = 1.0 일 때 정확히 1.0).
+    Phase β3 + partial(g) 활성화 (2026-04-28):
+    - N (resolved axis 수) = 0 → 빈 dict
+    - N≥1 → cross-product. 비어있는 axis 는 `_UNKNOWN` placeholder (1.0 share).
+      share × multiplier_ratio 가중 — N=3 → ×1.0 / N=2 → ×0.5 / N=1 → ×0.2.
+      (multiplier_for_n(N) / multiplier_for_n(3) — β1 effective_item_count 와 단위 정합)
+    - per-item mass: N=3 = 1.0 / N=2 = 0.5 / N=1 = 0.2 / N=0 = 0
+    - cluster_key 포맷 = `g__t__f` (enum value 또는 unknown placeholder).
+      `_build_partial_key` / `assign_exact` 와 같은 포맷 — winner-keyed 와 fan-out cluster
+      space 가 동일.
+    - min_share 이하는 drop (default 0 → 0 share 만 drop).
     """
-    if not garment_dist or not technique_dist or not fabric_dist:
+    n_axes = sum(1 for d in (garment_dist, technique_dist, fabric_dist) if d)
+    if n_axes == 0:
         return {}
 
+    g_eff = garment_dist or {_UNKNOWN: 1.0}
+    t_eff = technique_dist or {_UNKNOWN: 1.0}
+    f_eff = fabric_dist or {_UNKNOWN: 1.0}
+    mult_ratio = _PARTIAL_MASS_BY_N[n_axes]
+
     out: dict[str, float] = {}
-    for g, gp in garment_dist.items():
+    for g, gp in g_eff.items():
         if gp <= 0.0:
             continue
-        for t, tp in technique_dist.items():
+        for t, tp in t_eff.items():
             if tp <= 0.0:
                 continue
-            for f, fp in fabric_dist.items():
+            for f, fp in f_eff.items():
                 if fp <= 0.0:
                     continue
-                share = gp * tp * fp
+                share = gp * tp * fp * mult_ratio
                 if share <= min_share:
                     continue
                 out[build_exact_key_strs(g, t, f)] = share

@@ -392,11 +392,13 @@ def test_emit_evidence_resolves_source_post_id(populated_weekly_history) -> None
     assert row["evidence_yt_video_ids"] == []
 
 
-def test_emit_no_representative_when_partial_cluster(populated_weekly_history) -> None:
-    """N<3 (G/T/F 중 한 distribution 이라도 비면) representative emit 안됨.
+def test_emit_partial_cluster_representative_partial_activation(populated_weekly_history) -> None:
+    """Phase partial(g) 활성화 (2026-04-28) — N<3 도 representative emit.
 
-    text + vision 양쪽 모두 비어야 distribution 이 빈다 — outfit 도 technique=None
-    이어야 vision contribution 이 0 이 됨. 가짜 partial cluster_key 만으로는 부족.
+    text + vision 양쪽 technique=None → ItemDistribution 의 technique dict 가 빈
+    상태 (N=2). 이전엔 representative emit 안 됐으나, partial 활성화 후 unknown
+    placeholder 로 partial cluster (`kurta_set__unknown__cotton`) emit 됨.
+    multiplier=2.5 (N=2).
     """
     writer = FakeStarRocksWriter()
     # technique=None + canonical 의 representative.technique=None 양쪽 모두 비움.
@@ -438,9 +440,12 @@ def test_emit_no_representative_when_partial_cluster(populated_weekly_history) -
         weekly_history_path=populated_weekly_history,
         computed_at=_COMPUTED_AT,
     )
-    # item / group / object 는 적재되지만 representative 는 0.
+    # item / group / object 적재 + partial cluster representative 1 row 적재.
     assert counts[ITEM_TABLE] == 1
-    assert counts[REPRESENTATIVE_TABLE] == 0
+    assert counts[REPRESENTATIVE_TABLE] == 1
+    rep_row = writer.batches[REPRESENTATIVE_TABLE][0]
+    # representative_key 가 partial 형태로 적재.
+    assert "unknown" in rep_row["representative_key"]
 
 
 def test_emit_trajectory_length_is_12(populated_weekly_history) -> None:
