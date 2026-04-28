@@ -1,11 +1,14 @@
-"""Frame source 추상화 — 이미지/영상을 공통 Frame 단위로 공급 (spec §7.2 경계 반영).
+"""Frame source 추상화 — 이미지/영상을 공통 Frame 단위로 공급.
 
-Step C (2026-04-21): IG 정적 이미지 포스트 → ImageFrameSource (캐러셀 N장).
-                     IG Reel → VideoFrameSource (M3 에서 ffmpeg 연결).
-                     YT 영상 → 이 모듈 호출 대상 아님 (spec §7.2).
+- IG 정적 이미지 / IG 캐러셀 이미지 → `ImageFrameSource` (PIL).
+- IG Reel / YT 영상 / IG 캐러셀 video → `VideoFrameSource` (cv2 + selector).
+
+VideoFrameSource: 영상 전체 균등 N candidate sampling → quality score (Laplacian
+variance + brightness 게이트) → scene diversity NMS (HSV H+S histogram corr) → top
+n_final Frame yield. cv2.VideoCapture wrapper. selector cfg 만 외부 입력.
 
 PipelineBExtractor 는 FrameSource 를 받아 `iter_frames()` 로 돌림 → garment segmentation.
-PIL 은 ImageFrameSource 내부에서만 lazy import — Protocol/dataclass 자체는 numpy 만 필요.
+PIL/cv2 는 각 구현 내부에서만 lazy import — Protocol/dataclass 자체는 numpy 만 필요.
 """
 from __future__ import annotations
 
@@ -14,6 +17,8 @@ from pathlib import Path
 from typing import Iterator, Literal, Protocol, runtime_checkable
 
 import numpy as np
+
+from vision.video_frame_selector import VideoFrameSelectorConfig, select_top_frames
 
 FrameSourceKind = Literal["image", "video"]
 
@@ -54,19 +59,52 @@ class ImageFrameSource:
 
 
 class VideoFrameSource:
-    """영상 1건 → fps 에 따른 N Frame. M3 에서 ffmpeg subprocess 연결 예정.
+    """영상 1건 → quality + diversity 통과한 top n_final Frame.
 
-    현재는 import 는 가능하되 iter_frames 호출 시 NotImplementedError.
-    spec §7.2: YT 영상은 이 클래스 호출 대상 아님 (IG Reel 용). 호출부에서 ContentSource
-    check 해서 YT 는 reject.
+    Two-pass: cv2.VideoCapture 로 균등 cfg.n_candidate frame 추출 → select_top_frames 로
+    quality+diversity 필터 → 시간순 Frame yield. Frame.id = "{video_stem}_f{global_idx}"
+    (영상 전체 frame index, candidate index 아님 — drilldown 추적용).
+
+    매우 짧은 영상 (total_frame < n_candidate) 도 자연스럽게 동작 — n_candidate 가 total
+    로 cap 되어 모든 frame 이 후보에 들어감. 영상 열기 실패 / FRAME_COUNT 0 이면 빈 iterator.
     """
 
-    def __init__(self, video_path: Path, fps: int = 1) -> None:
+    def __init__(self, video_path: Path, cfg: VideoFrameSelectorConfig) -> None:
         self._video_path = Path(video_path)
-        self._fps = fps
+        self._cfg = cfg
 
     def iter_frames(self) -> Iterator[Frame]:
-        raise NotImplementedError(
-            "VideoFrameSource: M3 에서 ffmpeg subprocess 연결 예정. "
-            "YT 영상은 spec §7.2 에 따라 호출 대상 아님 — IG Reel 에만 사용할 것."
-        )
+        import cv2  # lazy — `uv sync --extra vision` 필요
+
+        cap = cv2.VideoCapture(str(self._video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"cv2.VideoCapture failed to open: {self._video_path}")
+        try:
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total <= 0:
+                return
+            n_cand = min(self._cfg.n_candidate, total)
+            # 균등 sampling: 0..total-1 에서 n_cand 개. 끝 frame 은 보통 fade-out 이라 제외.
+            cand_indices = [int(i * total / n_cand) for i in range(n_cand)]
+            candidates: list[tuple[int, np.ndarray]] = []
+            for idx in cand_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ok, bgr = cap.read()
+                if not ok or bgr is None:
+                    continue
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                candidates.append((idx, rgb))
+            if not candidates:
+                return
+            rgb_only = [rgb for _, rgb in candidates]
+            kept_local = select_top_frames(rgb_only, self._cfg)
+            stem = self._video_path.stem
+            for local_idx in kept_local:
+                global_idx, rgb = candidates[local_idx]
+                yield Frame(
+                    id=f"{stem}_f{global_idx}",
+                    rgb=rgb,
+                    source_type="video",
+                )
+        finally:
+            cap.release()

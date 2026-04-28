@@ -171,6 +171,45 @@ def test_dominant_family_order_independent() -> None:
     assert {m.image_id for m in result[0].members} == {"img_0", "img_1"}
 
 
+def test_member_carry_over_garment_fabric_technique_silhouette() -> None:
+    # 7.4a: dedup 후에도 멤버별 raw attribute 보존 (canonical_object 행 검수용).
+    # dress_as_single (silhouette=None, technique=block_print) ↔ two_piece (A_LINE, chikankari)
+    # 가 같은 canonical 로 묶이지만 멤버별 attribute 는 그대로 원본 값.
+    single = _outfit(
+        upper_garment_type="lehenga",
+        lower_garment_type=None,
+        dress_as_single=True,
+        silhouette=None,
+        technique="block_print",
+        fabric="silk",
+    )
+    two_piece = _outfit(
+        upper_garment_type="lehenga",
+        lower_garment_type="choli",
+        dress_as_single=False,
+        silhouette=Silhouette.A_LINE,
+        technique="block_print",  # technique 매칭 유지 (브리징 신호)
+        fabric="cotton",
+    )
+    result = dedup_post(
+        [("img_0", _wrap([single])), ("img_1", _wrap([two_piece]))],
+        _cfg(),
+        _FAMILY_MAP,
+    )
+    assert len(result) == 1
+    by_image = {m.image_id: m for m in result[0].members}
+
+    assert by_image["img_0"].garment_type == "lehenga"
+    assert by_image["img_0"].fabric == "silk"
+    assert by_image["img_0"].technique == "block_print"
+    assert by_image["img_0"].silhouette is None
+
+    assert by_image["img_1"].garment_type == "lehenga"
+    assert by_image["img_1"].fabric == "cotton"
+    assert by_image["img_1"].technique == "block_print"
+    assert by_image["img_1"].silhouette == Silhouette.A_LINE
+
+
 def test_empty_and_non_ethnic_post_returns_empty() -> None:
     # non-ethnic analysis 는 skip. 전부 skip 이면 빈 리스트.
     empty_analysis = GarmentAnalysis(is_india_ethnic_wear=False, outfits=[])
