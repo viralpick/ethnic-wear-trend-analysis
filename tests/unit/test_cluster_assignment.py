@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster, assign_shares
 from contracts.common import Fabric, GarmentType, Technique
 
@@ -79,11 +81,21 @@ def test_assign_shares_cross_product_matches_spec_example() -> None:
     assert abs(sum(shares.values()) - 1.0) < 1e-9
 
 
-def test_assign_shares_empty_when_any_distribution_missing() -> None:
-    # G/T/F 한 축이라도 비면 N<3 → 빈 dict (현 phase 정책).
-    assert assign_shares({}, {"a": 1.0}, {"b": 1.0}) == {}
-    assert assign_shares({"a": 1.0}, {}, {"b": 1.0}) == {}
-    assert assign_shares({"a": 1.0}, {"b": 1.0}, {}) == {}
+def test_assign_shares_partial_emits_with_unknown_axis() -> None:
+    # Phase partial(g) 활성화 (2026-04-28): N<3 도 emit. 비어있는 axis 는 unknown
+    # placeholder, share × multiplier_ratio (N=2 → 0.5 / N=1 → 0.2).
+    # N=2 — 비어있는 axis 1개.
+    assert assign_shares({}, {"a": 1.0}, {"b": 1.0}) == {
+        "unknown__a__b": pytest.approx(0.5)
+    }
+    assert assign_shares({"a": 1.0}, {}, {"b": 1.0}) == {
+        "a__unknown__b": pytest.approx(0.5)
+    }
+    assert assign_shares({"a": 1.0}, {"b": 1.0}, {}) == {
+        "a__b__unknown": pytest.approx(0.5)
+    }
+    # N=0 만 빈 dict.
+    assert assign_shares({}, {}, {}) == {}
 
 
 def test_assign_shares_drops_zero_share_entries() -> None:

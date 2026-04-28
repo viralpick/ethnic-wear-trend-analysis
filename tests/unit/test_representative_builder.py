@@ -63,14 +63,33 @@ def test_build_contributions_cross_product() -> None:
     assert kbc.contribution == pytest.approx(2.1)
 
 
-def test_partial_distribution_drops_item() -> None:
-    # technique 비어있으면 N<3, contribution 0개.
+def test_partial_distribution_emits_with_unknown_axis() -> None:
+    # Phase partial(g) 활성화 (2026-04-28): N=2 (technique 비어있음) → 1 contribution
+    # with unknown axis placeholder. multiplier = 2.5 (N=2).
     item = ItemDistribution(
         item_id="ig_002",
         source=ContentSource.INSTAGRAM,
         garment_type={"kurta": 1.0},
         technique={},
         fabric={"cotton": 1.0},
+    )
+    contribs = build_contributions([item])
+    assert len(contribs) == 1
+    c = contribs[0]
+    assert c.representative_key == "kurta__unknown__cotton"
+    assert c.match_share == pytest.approx(1.0)
+    assert c.multiplier == pytest.approx(2.5)  # N=2
+    assert c.contribution == pytest.approx(2.5)  # share × multiplier
+
+
+def test_n_zero_item_emits_no_contribution() -> None:
+    # N=0 (모든 axis 비어있음) → representative 후보 아님 (빈 list).
+    item = ItemDistribution(
+        item_id="ig_n0",
+        source=ContentSource.INSTAGRAM,
+        garment_type={},
+        technique={},
+        fabric={},
     )
     assert build_contributions([item]) == []
 
@@ -128,7 +147,9 @@ def test_aggregate_sparse_filter() -> None:
     assert aggs == []
 
 
-def _mk_contrib(item_id: str, source: ContentSource, contribution: float) -> RepresentativeContribution:
+def _mk_contrib(
+    item_id: str, source: ContentSource, contribution: float
+) -> RepresentativeContribution:
     return RepresentativeContribution(
         representative_key="kurta__block_print__cotton",
         item_id=item_id,
@@ -213,8 +234,8 @@ def test_item_cluster_shares_matches_spec_cross_product() -> None:
     assert abs(sum(shares.values()) - 1.0) < 1e-9
 
 
-def test_item_cluster_shares_empty_when_n_lt_3() -> None:
-    # build_contributions 와 동일 정책 — N<3 빈 dict.
+def test_item_cluster_shares_n2_emits_with_unknown_axis() -> None:
+    # Phase partial(g) (2026-04-28): N=2 → unknown placeholder, share × 0.5.
     item = ItemDistribution(
         item_id="i1",
         source=ContentSource.INSTAGRAM,
@@ -223,11 +244,13 @@ def test_item_cluster_shares_empty_when_n_lt_3() -> None:
         fabric={"cotton": 1.0},
     )
 
-    assert item_cluster_shares(item) == {}
+    shares = item_cluster_shares(item)
+    assert shares == {"kurta__unknown__cotton": pytest.approx(0.5)}
 
 
-def test_item_cluster_shares_no_multiplier_applied() -> None:
-    # build_contributions 의 contribution = share × multiplier(=5.0). raw share 만 반환.
+def test_item_cluster_shares_n3_full_mass() -> None:
+    # N=3 single value → multiplier_ratio=1.0 → share=1.0 (variance 없음, 동작 변화 X).
+    # build_contributions 는 동일 input 으로 contribution=5.0 (× multiplier=5.0).
     item = ItemDistribution(
         item_id="i1",
         source=ContentSource.INSTAGRAM,
@@ -236,8 +259,7 @@ def test_item_cluster_shares_no_multiplier_applied() -> None:
         fabric={"cotton": 1.0},
     )
 
-    assert item_cluster_shares(item) == {"kurta__chikankari__cotton": 1.0}
-    # build_contributions 는 동일 input 으로 contribution=5.0 (× multiplier).
+    assert item_cluster_shares(item) == {"kurta__chikankari__cotton": pytest.approx(1.0)}
     [contrib] = build_contributions([item])
     assert contrib.contribution == 5.0
     assert contrib.match_share == 1.0
