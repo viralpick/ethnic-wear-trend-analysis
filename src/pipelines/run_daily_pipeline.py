@@ -345,6 +345,16 @@ def _parse_args() -> argparse.Namespace:
              "starrocks_insert 는 9030 query 포트 INSERT VALUES fallback (8030 차단 환경용). "
              "dry_run 은 FakeStarRocksWriter 로 in-memory 적재 후 row 갯수 + sample 출력 (HTTP 안 보냄).",
     )
+    parser.add_argument(
+        "--text-workers", type=int, default=1,
+        help="text LLM (azure-openai) batch parallel worker 수. "
+             "기본 1 (sequential). Azure deployment TPM 한도 고려해 8 권장.",
+    )
+    parser.add_argument(
+        "--vision-workers", type=int, default=1,
+        help="vision pipeline (pipeline_b) per-post parallel worker 수. "
+             "기본 1 (sequential). IO-bound (blob download + Gemini) 라 8~16 권장.",
+    )
     return parser.parse_args()
 
 
@@ -381,6 +391,7 @@ def _select_color_extractor(
     *,
     vision_llm_choice: str = "fake",
     blob_cache: Path | None = None,
+    max_workers: int = 1,
 ) -> ColorExtractor:
     """CLI flag 기반 ColorExtractor DI. pipeline_b 는 lazy import (vision extras 격리)."""
     if choice != "pipeline_b":
@@ -414,14 +425,17 @@ def _select_color_extractor(
         blob_downloader=blob_downloader,
         blob_cache_dir=blob_cache,
         scene_filter=bundle.scene_filter,
+        max_workers=max_workers,
     )
 
 
-def _select_llm_client(choice: str, settings: Settings) -> LLMClient:
+def _select_llm_client(
+    choice: str, settings: Settings, max_workers: int = 1,
+) -> LLMClient:
     """CLI flag 기반 LLMClient DI. azure-openai 는 lazy import (openai 패키지 필요)."""
     if choice == "azure-openai":
         from attributes.azure_openai_llm_client import AzureOpenAILLMClient  # noqa: I001
-        return AzureOpenAILLMClient(seed=DEFAULT_LLM_SEED)
+        return AzureOpenAILLMClient(seed=DEFAULT_LLM_SEED, max_workers=max_workers)
     return FakeLLMClient(seed=DEFAULT_LLM_SEED)
 
 
@@ -505,11 +519,12 @@ def main() -> None:
 
     settings = load_settings()
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
-    llm_client = _select_llm_client(args.llm, settings)
+    llm_client = _select_llm_client(args.llm, settings, max_workers=args.text_workers)
     color_extractor = _select_color_extractor(
         args.color_extractor, settings, args.image_root,
         vision_llm_choice=args.vision_llm,
         blob_cache=args.blob_cache,
+        max_workers=args.vision_workers,
     )
     raw_loader = _select_raw_loader(
         args.source, settings, args.tsv_dir,
