@@ -302,6 +302,51 @@ def test_emit_representative_row_pulls_from_summary(populated_weekly_history) ->
     assert len(row["color_palette"]) == 2
 
 
+def test_emit_writes_effective_item_count_pin(populated_weekly_history) -> None:
+    """β1 (2026-04-28): batch 분모가 모든 representative row 에 동일 값 주입.
+
+    enriched 2 post 모두 G/T/F 결정 (N=3 → weight 1.0 each) → batch 분모 = 2.0.
+    """
+    writer = FakeStarRocksWriter()
+    enriched = [_enriched("p1"), _enriched("p2")]
+
+    emit_to_starrocks(
+        enriched=enriched,
+        summaries=[_summary()],
+        target_date=_FIXED_DATE,
+        writer=writer,
+        weekly_history_path=populated_weekly_history,
+        computed_at=_COMPUTED_AT,
+    )
+
+    rep_rows = writer.batches[REPRESENTATIVE_TABLE]
+    assert all(row["effective_item_count"] == 2.0 for row in rep_rows)
+
+
+def test_emit_effective_item_count_partial_n_proportional(populated_weekly_history) -> None:
+    """N<3 item 은 multiplier-scaled 비율로만 분모 기여 (1=0.2 / 2=0.5 / 3=1.0)."""
+    writer = FakeStarRocksWriter()
+    enriched = [
+        _enriched("p1"),  # N=3 → 1.0
+        _enriched("p2", fabric=None),  # N=2 → 0.5
+        _enriched("p3", fabric=None, technique=None),  # N=1 → 0.2
+    ]
+
+    emit_to_starrocks(
+        enriched=enriched,
+        summaries=[_summary()],
+        target_date=_FIXED_DATE,
+        writer=writer,
+        weekly_history_path=populated_weekly_history,
+        computed_at=_COMPUTED_AT,
+    )
+
+    rep_rows = writer.batches[REPRESENTATIVE_TABLE]
+    # 1.0 + 0.5 + 0.2 = 1.7. 단, p2/p3 는 N<3 이라 representative contribution 0
+    # → only p1 의 cluster 가 emit, 그 row 에 batch 분모 = 1.7.
+    assert all(row["effective_item_count"] == pytest.approx(1.7) for row in rep_rows)
+
+
 def test_emit_distribution_keys_pin(populated_weekly_history) -> None:
     """6 key 중 silhouette/occasion 채움, styling_combo 빈 dict 도 NULL,
     garment/fabric/technique 는 항상 NULL (representative 단일값이라 redundant)."""

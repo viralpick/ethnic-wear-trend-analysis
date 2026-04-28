@@ -17,6 +17,7 @@ from aggregation.representative_builder import (
     RepresentativeContribution,
     aggregate_representatives,
     build_contributions,
+    effective_item_count,
     item_cluster_shares,
     multiplier_for_n,
     representative_key,
@@ -240,3 +241,55 @@ def test_item_cluster_shares_no_multiplier_applied() -> None:
     [contrib] = build_contributions([item])
     assert contrib.contribution == 5.0
     assert contrib.match_share == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Phase β1 (2026-04-28) — effective_item_count (multiplier-scaled denominator)
+# --------------------------------------------------------------------------- #
+
+
+def _mk_item(item_id: str, *, g: bool, t: bool, f: bool) -> ItemDistribution:
+    """Helper — N 축 결정 여부만 토글하는 fixture."""
+    return ItemDistribution(
+        item_id=item_id,
+        source=ContentSource.INSTAGRAM,
+        garment_type={"kurta": 1.0} if g else {},
+        technique={"block_print": 1.0} if t else {},
+        fabric={"cotton": 1.0} if f else {},
+    )
+
+
+def test_effective_item_count_n_eq_3() -> None:
+    items = [_mk_item("i1", g=True, t=True, f=True)]
+    assert effective_item_count(items) == pytest.approx(1.0)
+
+
+def test_effective_item_count_n_eq_2() -> None:
+    # N=2 → multiplier 2.5 / 5.0 = 0.5
+    items = [_mk_item("i1", g=True, t=True, f=False)]
+    assert effective_item_count(items) == pytest.approx(0.5)
+
+
+def test_effective_item_count_n_eq_1() -> None:
+    # N=1 → multiplier 1.0 / 5.0 = 0.2
+    items = [_mk_item("i1", g=True, t=False, f=False)]
+    assert effective_item_count(items) == pytest.approx(0.2)
+
+
+def test_effective_item_count_n_eq_0() -> None:
+    items = [_mk_item("i1", g=False, t=False, f=False)]
+    assert effective_item_count(items) == 0.0
+
+
+def test_effective_item_count_mixed_batch_sums_correctly() -> None:
+    items = [
+        _mk_item("a", g=True, t=True, f=True),    # 1.0
+        _mk_item("b", g=True, t=True, f=False),   # 0.5
+        _mk_item("c", g=True, t=False, f=False),  # 0.2
+        _mk_item("d", g=False, t=False, f=False), # 0.0
+    ]
+    assert effective_item_count(items) == pytest.approx(1.7)
+
+
+def test_effective_item_count_empty_returns_zero() -> None:
+    assert effective_item_count([]) == 0.0

@@ -78,6 +78,28 @@ def multiplier_for_n(n: int) -> float:
     return _MULTIPLIER_BY_N.get(n, 0.0)
 
 
+def _resolved_axis_count(item: ItemDistribution) -> int:
+    """G/T/F 중 비어있지 않은 축 수 (0~3)."""
+    return sum(
+        1 for d in (item.garment_type, item.technique, item.fabric) if d
+    )
+
+
+def effective_item_count(items: list[ItemDistribution]) -> float:
+    """multiplier-scaled batch denominator (Phase β1, 2026-04-28).
+
+    `score_total / effective_item_count` 가 view-layer normalize 분모. multiplier
+    테이블 (1.0 / 2.5 / 5.0) 을 N=3 기준으로 정규화하여 N=0:0 / 1:0.2 / 2:0.5 /
+    3:1.0 weight 합산.
+
+    이 형태가 numerator (Σ share × multiplier) 와 단위 정합 — 미래에 N<3 도 emit
+    하면 분자/분모 동시에 자동 반영됨. binary 카운트 (N>0) 는 N=1 도 full count
+    되어 분자 multiplier scale 과 맞지 않음.
+    """
+    full = multiplier_for_n(3)
+    return sum(multiplier_for_n(_resolved_axis_count(item)) / full for item in items)
+
+
 def _item_contributions(item: ItemDistribution) -> list[RepresentativeContribution]:
     """1 item → cross-product 후 representative 별 contribution 목록.
 
