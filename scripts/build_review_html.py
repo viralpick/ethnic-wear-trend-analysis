@@ -73,14 +73,14 @@ def _dist_table(dist: dict[str, float], top_n: int = 5) -> str:
     return f'<table class="dist">{rows}</table>'
 
 
-def _post_url(item: dict[str, Any]) -> str:
-    n = item["normalized"]
-    src = n.get("source", "instagram")
-    pid = n.get("source_post_id", "")
-    if src == "instagram":
-        return f"https://www.instagram.com/p/{pid}/"
-    if src == "youtube":
-        return f"https://www.youtube.com/watch?v={pid}"
+def _account_url(source: str, handle: str | None) -> str:
+    """source_post_id 는 내부 ID 라 외부 링크 못 만듦. 계정 프로필 URL 만 링크."""
+    if not handle:
+        return ""
+    if source == "instagram":
+        return f"https://www.instagram.com/{handle}/"
+    if source == "youtube":
+        return f"https://www.youtube.com/@{handle}"
     return ""
 
 
@@ -150,7 +150,7 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
     img_html = ""
     for url in image_urls[:5]:
         src_path = _resolve_image_src(url, html_dir)
-        img_html += f'<img src="{_esc(src_path)}" loading="lazy" />'
+        img_html += f'<img src="{_esc(src_path)}" loading="lazy" tabindex="0" alt="" />'
     if video_urls:
         img_html += f'<div class="video-tag">▶ video × {len(video_urls)}</div>'
 
@@ -172,12 +172,17 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
 
     shares_html = _dist_table(cluster_shares, top_n=5)
 
-    post_url = _post_url(item)
+    acct_url = _account_url(src, handle if handle != "—" else None)
+    handle_html = (
+        f'<a href="{_esc(acct_url)}" target="_blank">@{_esc(handle)}</a>'
+        if acct_url else f'<span>@{_esc(handle)}</span>'
+    )
     return f'''
-<article class="post" id="post-{_esc(pid)}">
+<article class="post" data-cluster="{_esc(cluster_key)}" data-source="{_esc(src)}" id="post-{_esc(pid)}">
   <header>
     <span class="badge src-{_esc(src)}">{_esc(src)}</span>
-    <a href="{_esc(post_url)}" target="_blank">@{_esc(handle)}</a>
+    {handle_html}
+    <code class="post-id">{_esc(pid)}</code>
     <span class="muted">{_esc(date)}</span>
     <span class="muted">eng={eng:,}</span>
     {f'<span class="muted">type={_esc(src_type)}</span>' if src_type else ''}
@@ -223,15 +228,21 @@ def _render_cluster_card(s: dict[str, Any]) -> str:
     )
     palette_html = _color_chips(drill.get("color_palette") or [])
     top_posts = drill.get("top_posts") or []
+    top_videos = drill.get("top_videos") or []
     top_inf = drill.get("top_influencers") or []
     top_posts_html = "".join(
-        f'<li><a href="https://www.instagram.com/p/{_esc(p.get("post_id"))}/" target="_blank">'
-        f'@{_esc(p.get("account_handle"))} <small>eng={int(p.get("engagement", 0)):,}</small></a></li>'
+        f'<li><a href="https://www.instagram.com/p/{_esc(p)}/" target="_blank">'
+        f'<code>{_esc(p)}</code></a></li>'
         for p in top_posts[:5]
     ) or '<li class="muted">∅</li>'
+    top_videos_html = "".join(
+        f'<li><a href="https://www.youtube.com/watch?v={_esc(v)}" target="_blank">'
+        f'<code>{_esc(v)}</code></a></li>'
+        for v in top_videos[:5]
+    ) or '<li class="muted">∅</li>'
     top_inf_html = "".join(
-        f'<li>@{_esc(i.get("handle"))} <small>{int(i.get("followers", 0)):,}</small></li>'
-        for i in top_inf[:5]
+        f'<li><a href="https://www.instagram.com/{_esc(h)}/" target="_blank">@{_esc(h)}</a></li>'
+        for h in top_inf[:5]
     ) or '<li class="muted">∅</li>'
     return f'''
 <article class="cluster">
@@ -258,8 +269,12 @@ def _render_cluster_card(s: dict[str, Any]) -> str:
       {palette_html}
     </section>
     <section>
-      <h4>top_posts</h4>
+      <h4>top_posts (IG)</h4>
       <ul>{top_posts_html}</ul>
+    </section>
+    <section>
+      <h4>top_videos (YT)</h4>
+      <ul>{top_videos_html}</ul>
     </section>
     <section>
       <h4>top_influencers</h4>
@@ -290,9 +305,21 @@ h4 { font-size: 12px; color: #666; margin: 8px 0 4px; text-transform: uppercase;
 code { background: #eef; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 small { color: #888; font-size: 0.85em; }
 
-.summary-bar { background: #fff; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;
+.summary-bar { background: #fff; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px;
                display: flex; gap: 16px; flex-wrap: wrap; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .summary-bar b { color: #2a5db8; }
+
+.filter-bar { background: #fff; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px;
+              display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 12px; }
+.filter-bar select, .filter-bar input { font-size: 12px; padding: 3px 6px;
+              border: 1px solid #ccc; border-radius: 3px; }
+.filter-bar input { width: 200px; }
+
+.cluster-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }
+
+.post-id { font-size: 10px; color: #999; font-family: ui-monospace, monospace;
+           background: transparent; padding: 0; }
 
 .cluster, .post { background: #fff; border-radius: 6px; padding: 12px 16px;
                   margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
@@ -308,7 +335,13 @@ small { color: #888; font-size: 0.85em; }
 
 .post-body { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
 .post-images img { width: 60px; height: 60px; object-fit: cover; margin-right: 4px;
-                   border-radius: 4px; vertical-align: top; }
+                   border-radius: 4px; vertical-align: top; cursor: zoom-in;
+                   transition: transform 0.2s; }
+.post-images img:hover { transform: scale(1.1); }
+.post-images img:focus, .post-images img:active {
+                   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                   width: 90vw; height: 90vh; object-fit: contain; z-index: 1000;
+                   background: rgba(0,0,0,0.9); cursor: zoom-out; }
 .post-images { display: flex; flex-wrap: wrap; gap: 4px; }
 .video-tag { font-size: 11px; background: #333; color: #fff; padding: 2px 6px;
              border-radius: 3px; margin-top: 4px; display: inline-block; }
@@ -343,7 +376,12 @@ a:hover { text-decoration: underline; }
 def build_html(
     enriched: list[dict[str, Any]], summaries: list[dict[str, Any]], html_dir: Path
 ) -> str:
-    posts_html = "\n".join(_render_post_card(item, html_dir) for item in enriched)
+    # cluster_key 기준 그룹 정렬 (검수 시 "같은 cluster post 모아보기" 편의)
+    sorted_enriched = sorted(
+        enriched,
+        key=lambda it: (it.get("trend_cluster_key") or "~~~", it["normalized"].get("source_post_id", "")),
+    )
+    posts_html = "\n".join(_render_post_card(item, html_dir) for item in sorted_enriched)
     sorted_summaries = sorted(summaries, key=lambda s: -s.get("score", 0))
     clusters_html = "\n".join(_render_cluster_card(s) for s in sorted_summaries)
 
@@ -351,6 +389,14 @@ def build_html(
     n_clusters = len(summaries)
     n_canonicals = sum(len(it.get("canonicals", [])) for it in enriched)
     n_with_palette = sum(1 for it in enriched if it.get("post_palette"))
+    n_ig = sum(1 for it in enriched if it["normalized"].get("source") == "instagram")
+    n_yt = sum(1 for it in enriched if it["normalized"].get("source") == "youtube")
+    n_with_brand = sum(1 for it in enriched if (it.get("brands") or it.get("brand")))
+
+    distinct_clusters = sorted({it.get("trend_cluster_key") or "—" for it in enriched})
+    cluster_options = "".join(
+        f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in distinct_clusters
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="ko"><head>
@@ -363,16 +409,55 @@ def build_html(
 
 <div class="summary-bar">
   <span><b>{n_items}</b> items</span>
+  <span>(IG <b>{n_ig}</b> / YT <b>{n_yt}</b>)</span>
   <span><b>{n_clusters}</b> trend clusters</span>
   <span><b>{n_canonicals}</b> canonicals</span>
   <span><b>{n_with_palette}</b> with palette</span>
+  <span><b>{n_with_brand}</b> with brand</span>
+</div>
+
+<div class="filter-bar">
+  <label>cluster filter:
+    <select id="cluster-filter" onchange="filterPosts()">
+      <option value="">(all)</option>
+      {cluster_options}
+    </select>
+  </label>
+  <label>source:
+    <select id="source-filter" onchange="filterPosts()">
+      <option value="">(all)</option>
+      <option value="instagram">instagram</option>
+      <option value="youtube">youtube</option>
+    </select>
+  </label>
+  <label>id 검색: <input id="id-search" type="search" placeholder="post_id 일부" oninput="filterPosts()"></label>
+  <span id="filter-count" class="muted"></span>
 </div>
 
 <h2>Trend Clusters (score desc)</h2>
-{clusters_html}
+<div class="cluster-list">{clusters_html}</div>
 
 <h2>Items ({n_items})</h2>
-{posts_html}
+<div id="post-list">{posts_html}</div>
+
+<script>
+function filterPosts() {{
+  const ck = document.getElementById('cluster-filter').value;
+  const src = document.getElementById('source-filter').value;
+  const q = document.getElementById('id-search').value.trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('article.post').forEach(el => {{
+    const okCk = !ck || el.dataset.cluster === ck;
+    const okSrc = !src || el.dataset.source === src;
+    const okQ = !q || el.id.toLowerCase().includes(q);
+    const visible = okCk && okSrc && okQ;
+    el.style.display = visible ? '' : 'none';
+    if (visible) shown++;
+  }});
+  document.getElementById('filter-count').textContent = `(${{shown}} 표시)`;
+}}
+filterPosts();
+</script>
 
 </body></html>"""
 

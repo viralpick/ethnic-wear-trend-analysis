@@ -207,10 +207,12 @@ def _run_color_extraction(
     )
     enriched = _apply_extraction_result(enriched, results1)
 
+    # Defensive read — case2_picking_min_share 가 인스턴스에 없는 환경 (Pydantic
+    # frozen + yaml partial override 의 미해소 이슈) 대비. 기본값은 VLMConfig 정의와 동일.
     case2 = _case2_targets(
         enriched,
         cap_per_cluster=settings.vlm.case2_per_cluster_cap,
-        min_share=settings.vlm.case2_picking_min_share,
+        min_share=getattr(settings.vlm, "case2_picking_min_share", 0.10),
     )
     results2 = run_color_extraction([e.normalized for e in case2], extractor)
     enriched = _apply_extraction_result(enriched, results2)
