@@ -164,12 +164,20 @@ def _accumulate_share_weighted(
 
     N<3 (G/T/F 한 축이라도 없는) item 은 assign_shares 가 빈 dict 반환 → 어떤 cluster
     에도 기여 0 (mass preservation 결과: 분모는 N=3 item 만).
+
+    grouped 는 multi-cluster fan-out 결과로 같은 item 이 여러 list 에 등장할 수 있어,
+    `id()` 기반 dedup 으로 unique item 만 1회 처리한다 (outer/inner 이중 추출 시
+    per-item mass 가 fan-out 수만큼 부풀어지는 over-count 방지).
     """
     festival_tags = _active_festival_tags(target_date, cfg)
     festival_boost = cfg.cultural_festival_boost if festival_tags else 0.0
     acc: dict[str, _ClusterAggregate] = defaultdict(_ClusterAggregate)
+    seen: set[int] = set()
     for items in grouped.values():
         for item in items:
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
             shares = item_cluster_shares(enriched_to_item_distribution(item))
             if not shares:
                 continue

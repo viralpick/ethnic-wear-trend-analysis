@@ -24,6 +24,7 @@ from contracts.common import (
 )
 from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
+from contracts.vision import CanonicalOutfit, EthnicOutfit, OutfitMember
 from pipelines.run_scoring_pipeline import (
     _accumulate_share_weighted,
     _build_contexts,
@@ -104,6 +105,7 @@ def _enriched(
     source: ContentSource = ContentSource.INSTAGRAM,
     engagement: int = 100,
     handle: str | None = None,
+    canonicals: list[CanonicalOutfit] | None = None,
 ) -> EnrichedContentItem:
     """3 축 enum + classification_method=RULE 로 distribution 결정성 확보."""
     methods: dict[str, ClassificationMethod] = {}
@@ -118,9 +120,37 @@ def _enriched(
         garment_type=g,
         fabric=f,
         technique=t,
-        canonicals=[],
+        canonicals=canonicals or [],
         classification_method_per_attribute=methods,
         trend_cluster_key=cluster_key,
+    )
+
+
+def _canonical_with_garment(
+    upper: str,
+    *,
+    fabric: str = "cotton",
+    technique: str = "chikankari",
+    bbox: tuple[float, float, float, float] = (0.1, 0.1, 0.5, 0.7),
+    area_ratio: float = 0.35,
+) -> CanonicalOutfit:
+    """multi-cluster fan-out 검증용 — text 와 다른 garment_type 의 canonical."""
+    outfit = EthnicOutfit(
+        person_bbox=bbox,
+        person_bbox_area_ratio=area_ratio,
+        upper_garment_type=upper,
+        upper_is_ethnic=True,
+        lower_garment_type="palazzo",
+        lower_is_ethnic=True,
+        dress_as_single=False,
+        fabric=fabric,
+        technique=technique,
+        color_preset_picks_top3=[],
+    )
+    return CanonicalOutfit(
+        canonical_index=0,
+        representative=outfit,
+        members=[OutfitMember(image_id="img_0", outfit_index=0, person_bbox=bbox)],
     )
 
 
@@ -277,3 +307,70 @@ def test_post_count_total_history_int_plus_rounded_share(empty_history: ScoreHis
 def test_empty_grouped_returns_empty(empty_history: ScoreHistory) -> None:
     assert _build_contexts({}, date(2026, 4, 27), _cfg(), empty_history) == []
     assert _accumulate_share_weighted({}, date(2026, 4, 27), _cfg()) == {}
+
+
+# --------------------------------------------------------------------------- #
+# Multi-cluster fan-out — outer-loop dedup invariant
+# --------------------------------------------------------------------------- #
+
+def test_multi_cluster_fan_out_no_over_count(empty_history: ScoreHistory) -> None:
+    """1 item 이 multi-cluster 에 fan-out 될 때 outer-loop 가 같은 item 을 중복 처리하면
+    mass invariant 가 깨진다 (per-item mass=1.0 인데 acc 합=fan-out 수 배).
+
+    재현 시나리오:
+    - text: garment_type=KURTA_SET (RULE, weight=6) + technique=CHIKANKARI + fabric=COTTON
+    - vision canonical: upper=casual_saree (다른 garment) + 같은 technique/fabric
+    → G distribution = {kurta_set: 6/(6+vision_share), casual_saree: vision_share/(...)}
+       (multi-key) / T, F = 단일 → cross-product 2 cluster 에 fan-out.
+
+    grouped 가 같은 item 을 두 cluster list 에 등록한 상태에서, _accumulate_share_weighted
+    의 outer loop 가 dedup 없이 두 번 inner 처리하면 acc 합이 정확히 2배 부풀어진다.
+    """
+    canonical = _canonical_with_garment(
+        upper="casual_saree", fabric="cotton", technique="chikankari",
+    )
+    item = _enriched(
+        "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
+        cluster_key="kurta_set__chikankari__cotton", engagement=100,
+        canonicals=[canonical],
+    )
+    grouped = {
+        "kurta_set__chikankari__cotton": [item],
+        "casual_saree__chikankari__cotton": [item],
+    }
+    acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
+
+    # 두 cluster 모두 share 받음 (multi-fan-out 확인).
+    assert set(acc.keys()) == {
+        "kurta_set__chikankari__cotton", "casual_saree__chikankari__cotton",
+    }
+    # mass invariant: per-item mass = 1.0 (N=3) — fan-out 으로 부풀면 안 됨.
+    total_mass = sum(a.post_count_today for a in acc.values())
+    assert total_mass == pytest.approx(1.0)
+    # social engagement 도 1번만 분배 — engagement_raw=100 이 fan-out 되어 100 합.
+    total_engagement = sum(a.social_weighted_engagement for a in acc.values())
+    assert total_engagement == pytest.approx(100.0)
+
+
+def test_multi_cluster_fan_out_build_contexts_mass_consistent(
+    empty_history: ScoreHistory,
+) -> None:
+    """`_build_contexts` 도 over-count 면 post_count_today 가 부풀어진다."""
+    canonical = _canonical_with_garment(upper="casual_saree")
+    item = _enriched(
+        "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
+        cluster_key="kurta_set__chikankari__cotton", engagement=100,
+        canonicals=[canonical],
+    )
+    grouped = {
+        "kurta_set__chikankari__cotton": [item],
+        "casual_saree__chikankari__cotton": [item],
+    }
+    contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
+
+    by_key = {c.cluster_key: c for c in contexts}
+    total_mass = sum(c.post_count_today for c in contexts)
+    assert total_mass == pytest.approx(1.0)
+    # 두 context 모두 양의 share — fan-out 결과 정상.
+    assert by_key["kurta_set__chikankari__cotton"].post_count_today > 0
+    assert by_key["casual_saree__chikankari__cotton"].post_count_today > 0
