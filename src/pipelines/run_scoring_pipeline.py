@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -19,6 +21,8 @@ from aggregation.build_cluster_summary import (
     build_summary,
     group_by_cluster,
 )
+from aggregation.item_distribution_builder import enriched_to_item_distribution
+from aggregation.representative_builder import item_cluster_shares
 from contracts.common import ContentSource, InstagramSourceType
 from contracts.enriched import EnrichedContentItem
 from contracts.output import TrendClusterSummary
@@ -87,25 +91,11 @@ def _source_type_weight(source_type: str | None, cfg: ScoringConfig) -> float:
     return mapping.get(source_type or "", 1.0)
 
 
-def _festival_match_score(
-    items: list[EnrichedContentItem],
-    target_date: date,
-    cfg: ScoringConfig,
-) -> float:
-    """spec §9.2 Cultural — target_date 가 festival 윈도우 안이면 태그 매치 포스트 수 × boost."""
-    for festival in cfg.cultural_festivals:
-        if festival.window_start <= target_date <= festival.window_end:
-            tag_set = {t.lower() for t in festival.tags}
-            matched = sum(
-                1 for item in items
-                if any(h.lower() in tag_set for h in item.normalized.hashtags)
-            )
-            return float(matched) * cfg.cultural_festival_boost
-    return 0.0
+def _post_growth(today_count: float, window_counts: list[int]) -> float:
+    """spec §9.2 Momentum — (오늘 - 7일평균) / 7일평균. 평균 0 이면 0.
 
-
-def _post_growth(today_count: int, window_counts: list[int]) -> float:
-    """spec §9.2 Momentum — (오늘 - 7일평균) / 7일평균. 평균 0 이면 0."""
+    Phase β2: share-weighted today_count 가 float (history int 와 mixed precision OK).
+    """
     if not window_counts:
         return 0.0
     avg = sum(window_counts) / len(window_counts)
@@ -120,68 +110,136 @@ def _hashtag_counts(items: list[EnrichedContentItem]) -> dict[str, int]:
     return counts
 
 
+@dataclass
+class _ClusterAggregate:
+    """Phase β2 share-weighted accumulator — share-fanned 누적값 모음."""
+    social_weighted_engagement: float = 0.0
+    youtube_video_count: float = 0.0
+    youtube_views_total: float = 0.0
+    festival_match: float = 0.0  # boost 곱하기 전 raw match 합 (× share)
+    bollywood_count: float = 0.0
+    post_count_today: float = 0.0  # share 합 = N=3 item 의 mass
+
+
+def _active_festival_tags(target_date: date, cfg: ScoringConfig) -> set[str]:
+    """target_date 가 들어있는 festival 의 tag set (lowercase). 없으면 빈 set."""
+    for festival in cfg.cultural_festivals:
+        if festival.window_start <= target_date <= festival.window_end:
+            return {t.lower() for t in festival.tags}
+    return set()
+
+
+def _per_item_signals(
+    item: EnrichedContentItem,
+    cfg: ScoringConfig,
+    festival_tags: set[str],
+) -> tuple[float, float, float, float, float]:
+    """1 item → (social_e, yt_count, yt_views, bolly, festival_match) — share fan-out 전.
+
+    festival_tags 가 비면 festival_match = 0. boost 는 호출 측에서 한 번에 곱함.
+    """
+    n = item.normalized
+    is_ig = n.source == ContentSource.INSTAGRAM
+    is_yt = n.source == ContentSource.YOUTUBE
+    social_e = (
+        n.engagement_raw
+        * _influencer_weight(n.account_followers, cfg)
+        * _source_type_weight(n.ig_source_type, cfg)
+    ) if is_ig else 0.0
+    yt_count = 1.0 if is_yt else 0.0
+    yt_views = float(n.engagement_raw) if is_yt else 0.0
+    bolly = 1.0 if (is_ig and n.ig_source_type == _BOLLYWOOD_SOURCE) else 0.0
+    festival_match = 1.0 if (
+        festival_tags and any(h.lower() in festival_tags for h in n.hashtags)
+    ) else 0.0
+    return social_e, yt_count, yt_views, bolly, festival_match
+
+
+def _accumulate_share_weighted(
+    grouped: dict[str, list[EnrichedContentItem]],
+    target_date: date,
+    cfg: ScoringConfig,
+) -> dict[str, _ClusterAggregate]:
+    """spec §2.4 — G×T×F cross-product fan-out 으로 cluster 별 share-weighted 누적.
+
+    N<3 (G/T/F 한 축이라도 없는) item 은 assign_shares 가 빈 dict 반환 → 어떤 cluster
+    에도 기여 0 (mass preservation 결과: 분모는 N=3 item 만).
+    """
+    festival_tags = _active_festival_tags(target_date, cfg)
+    festival_boost = cfg.cultural_festival_boost if festival_tags else 0.0
+    acc: dict[str, _ClusterAggregate] = defaultdict(_ClusterAggregate)
+    for items in grouped.values():
+        for item in items:
+            shares = item_cluster_shares(enriched_to_item_distribution(item))
+            if not shares:
+                continue
+            social_e, yt_c, yt_v, bolly, fest = _per_item_signals(item, cfg, festival_tags)
+            for cluster_key, share in shares.items():
+                a = acc[cluster_key]
+                a.social_weighted_engagement += social_e * share
+                a.youtube_video_count += yt_c * share
+                a.youtube_views_total += yt_v * share
+                a.festival_match += fest * share
+                a.bollywood_count += bolly * share
+                a.post_count_today += share
+    if festival_boost:
+        for a in acc.values():
+            a.festival_match *= festival_boost
+    return dict(acc)
+
+
 def _build_contexts(
     grouped: dict[str, list[EnrichedContentItem]],
     target_date: date,
     cfg: ScoringConfig,
     history: ScoreHistory,
 ) -> list[ClusterScoringContext]:
-    """enriched group → ClusterScoringContext (spec §9.2 Social + Cultural + Momentum 실 계산)."""
+    """share-weighted enriched fan-out → ClusterScoringContext (Phase β2, spec §2.4).
+
+    accounts 는 winner-keyed 로 유지 (account 식별 의미라 fan-out 시 중복으로 부풀려짐).
+    post_count_total 은 history int + round(share-sum) — γ 에서 history schema 마이그 후 float.
+
+    grouped 의 모든 winner key 는 zero-aggregate 라도 context 를 받음 — partial cluster
+    (e.g. `kurta_set__unknown__cotton`, `unclassified`) 가 score_and_export 의
+    `decisions[key]` 룩업에서 KeyError 가 나지 않도록. N<3 의미는 그대로 보존
+    (모든 share-weighted 필드 = 0).
+    """
+    accumulators = _accumulate_share_weighted(grouped, target_date, cfg)
+    for key in grouped:
+        accumulators.setdefault(key, _ClusterAggregate())
     contexts: list[ClusterScoringContext] = []
-    for key, items in grouped.items():
-        ig_items = [i for i in items if i.normalized.source == ContentSource.INSTAGRAM]
-        yt_items = [i for i in items if i.normalized.source == ContentSource.YOUTUBE]
-
-        # Social: 인플루언서 티어 × source_type 가중 engagement 합산 (spec §9.2, M3.E)
-        ig_engagement = sum(
-            i.normalized.engagement_raw
-            * _influencer_weight(i.normalized.account_followers, cfg)
-            * _source_type_weight(i.normalized.ig_source_type, cfg)
-            for i in ig_items
-        )
-        yt_engagement = float(sum(i.normalized.engagement_raw for i in yt_items))
-
-        # Cultural: festival 태그 매칭 + bollywood presence (spec §9.2, §9.5)
-        festival_match = _festival_match_score(items, target_date, cfg)
-        bollywood_count = float(sum(
-            1 for i in ig_items
-            if i.normalized.ig_source_type == _BOLLYWOOD_SOURCE
-        ))
-
-        # post_count: 오늘 배치 + 히스토리 누적 합산
-        post_count_today = len(items)
-        post_count_total = history.get_total_post_count(key) + post_count_today
-
-        # Momentum: post_growth + hashtag_velocity + new_account_ratio (spec §9.2)
-        window_counts = history.get_post_count_history(key, target_date, cfg.momentum_window_days)
-        growth = _post_growth(post_count_today, window_counts)
-        hashtag_vel = history.get_hashtag_velocity(key, target_date)
+    for key, a in accumulators.items():
+        winner_ig = [
+            i for i in grouped.get(key, [])
+            if i.normalized.source == ContentSource.INSTAGRAM
+        ]
         accounts = [
-            i.normalized.account_handle for i in ig_items
+            i.normalized.account_handle for i in winner_ig
             if i.normalized.account_handle
         ]
-        new_acct_ratio = history.get_new_account_ratio(
-            key, target_date, cfg.new_account_window_days, accounts
+        window_counts = history.get_post_count_history(
+            key, target_date, cfg.momentum_window_days
         )
-
-        # YouTube view growth (spec §9.2)
-        view_growth = history.get_youtube_view_growth(key, target_date)
-
+        avg_denom = a.post_count_today if a.post_count_today > 0 else 1.0
         contexts.append(
             ClusterScoringContext(
                 cluster_key=key,
-                social_weighted_engagement=ig_engagement,
-                youtube_video_count=len(yt_items),
-                youtube_views_total=yt_engagement,
-                youtube_view_growth=view_growth,
-                cultural_festival_match=festival_match,
-                cultural_bollywood_presence=bollywood_count,
-                momentum_post_growth=growth,
-                momentum_hashtag_velocity=hashtag_vel,
-                momentum_new_account_ratio=new_acct_ratio,
-                post_count_total=post_count_total,
-                post_count_today=post_count_today,
-                avg_engagement_rate=(ig_engagement + yt_engagement) / max(len(items), 1),
+                social_weighted_engagement=a.social_weighted_engagement,
+                youtube_video_count=a.youtube_video_count,
+                youtube_views_total=a.youtube_views_total,
+                youtube_view_growth=history.get_youtube_view_growth(key, target_date),
+                cultural_festival_match=a.festival_match,
+                cultural_bollywood_presence=a.bollywood_count,
+                momentum_post_growth=_post_growth(a.post_count_today, window_counts),
+                momentum_hashtag_velocity=history.get_hashtag_velocity(key, target_date),
+                momentum_new_account_ratio=history.get_new_account_ratio(
+                    key, target_date, cfg.new_account_window_days, accounts
+                ),
+                post_count_total=history.get_total_post_count(key) + round(a.post_count_today),
+                post_count_today=a.post_count_today,
+                avg_engagement_rate=(
+                    a.social_weighted_engagement + a.youtube_views_total
+                ) / avg_denom,
             )
         )
     return contexts
@@ -225,7 +283,9 @@ def _decide_clusters(
             data_maturity=maturity,
             display_name=_display_name(ctx.cluster_key),
             post_count_total=ctx.post_count_total,
-            post_count_today=ctx.post_count_today,
+            # Phase β2: ctx.post_count_today float → ClusterDecision int round.
+            # summary path 형변경은 β3 (drilldown share-vote) 에서 float 노출.
+            post_count_today=round(ctx.post_count_today),
             avg_engagement_rate=ctx.avg_engagement_rate,
             total_video_views=int(ctx.youtube_views_total),
             top_video_ids=[
@@ -281,16 +341,19 @@ def score_and_export(
             i.normalized.account_handle for i in ig_items
             if i.normalized.account_handle
         ]
+        # Phase β2: ctx.post_count_today 가 float (share-weighted) 이라 history int
+        # schema 와 단위 mismatch — round 로 보존. γ 에서 history schema float 마이그.
+        post_count_int = round(ctx.post_count_today) if ctx else 0
         history.update(
             summary.cluster_key, target_date, summary.score,
-            post_count=ctx.post_count_today if ctx else 0,
+            post_count=post_count_int,
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
             hashtag_counts=hashtag_counts,
             accounts=accounts,
         )
         weekly_history.update_weekly(
             summary.cluster_key, target_date, summary.score,
-            post_count=ctx.post_count_today if ctx else 0,
+            post_count=post_count_int,
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
             hashtag_counts=hashtag_counts,
             accounts=accounts,
