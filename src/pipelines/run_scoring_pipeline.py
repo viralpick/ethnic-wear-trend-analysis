@@ -21,8 +21,6 @@ from aggregation.build_cluster_summary import (
     build_summary,
     group_by_cluster,
 )
-from aggregation.item_distribution_builder import enriched_to_item_distribution
-from aggregation.representative_builder import item_cluster_shares
 from contracts.common import ContentSource, InstagramSourceType
 from contracts.enriched import EnrichedContentItem
 from contracts.output import TrendClusterSummary
@@ -156,40 +154,35 @@ def _per_item_signals(
 
 
 def _accumulate_share_weighted(
-    grouped: dict[str, list[EnrichedContentItem]],
+    grouped: dict[str, list[tuple[EnrichedContentItem, float]]],
     target_date: date,
     cfg: ScoringConfig,
 ) -> dict[str, _ClusterAggregate]:
     """spec §2.4 — G×T×F cross-product fan-out 으로 cluster 별 share-weighted 누적.
 
-    N<3 (G/T/F 한 축이라도 없는) item 은 assign_shares 가 빈 dict 반환 → 어떤 cluster
-    에도 기여 0 (mass preservation 결과: 분모는 N=3 item 만).
+    Phase β4 (2026-04-28): grouped entry 가 (item, share) tuple 이라 cluster_key 별로
+    그 cluster 안에서의 item share 가 직접 주어진다. outer 가 cluster_key 단위라 multi-fan-out
+    item 도 cluster 마다 자기 share 만 한 번씩 기여 — over-count 자연 차단 (PR #16 의
+    id() dedup 은 signature 변경으로 자연 unused, 함께 제거).
 
-    grouped 는 multi-cluster fan-out 결과로 같은 item 이 여러 list 에 등장할 수 있어,
-    `id()` 기반 dedup 으로 unique item 만 1회 처리한다 (outer/inner 이중 추출 시
-    per-item mass 가 fan-out 수만큼 부풀어지는 over-count 방지).
+    N<3 (G/T/F 한 축이라도 없는) item 은 group_by_cluster 단계에서 partial cluster 에
+    multiplier_ratio 가중 share 로 등장 (partial(g) 활성화).
     """
     festival_tags = _active_festival_tags(target_date, cfg)
     festival_boost = cfg.cultural_festival_boost if festival_tags else 0.0
     acc: dict[str, _ClusterAggregate] = defaultdict(_ClusterAggregate)
-    seen: set[int] = set()
-    for items in grouped.values():
-        for item in items:
-            if id(item) in seen:
-                continue
-            seen.add(id(item))
-            shares = item_cluster_shares(enriched_to_item_distribution(item))
-            if not shares:
+    for cluster_key, items_with_share in grouped.items():
+        for item, share in items_with_share:
+            if share <= 0.0:
                 continue
             social_e, yt_c, yt_v, bolly, fest = _per_item_signals(item, cfg, festival_tags)
-            for cluster_key, share in shares.items():
-                a = acc[cluster_key]
-                a.social_weighted_engagement += social_e * share
-                a.youtube_video_count += yt_c * share
-                a.youtube_views_total += yt_v * share
-                a.festival_match += fest * share
-                a.bollywood_count += bolly * share
-                a.post_count_today += share
+            a = acc[cluster_key]
+            a.social_weighted_engagement += social_e * share
+            a.youtube_video_count += yt_c * share
+            a.youtube_views_total += yt_v * share
+            a.festival_match += fest * share
+            a.bollywood_count += bolly * share
+            a.post_count_today += share
     if festival_boost:
         for a in acc.values():
             a.festival_match *= festival_boost
@@ -197,33 +190,34 @@ def _accumulate_share_weighted(
 
 
 def _build_contexts(
-    grouped: dict[str, list[EnrichedContentItem]],
+    grouped: dict[str, list[tuple[EnrichedContentItem, float]]],
     target_date: date,
     cfg: ScoringConfig,
     history: ScoreHistory,
 ) -> list[ClusterScoringContext]:
-    """share-weighted enriched fan-out → ClusterScoringContext (Phase β2, spec §2.4).
+    """share-weighted enriched fan-out → ClusterScoringContext (Phase β2 + β4, spec §2.4).
 
-    accounts 는 winner-keyed 로 유지 (account 식별 의미라 fan-out 시 중복으로 부풀려짐).
+    accounts 는 fan-out cluster 마다 등장 (β4: cluster 안 item share>0 인 IG account).
+    같은 account 가 multi-cluster 에 등장하는 건 정상 (cluster 별 trend 시그널 분리).
     post_count_total 은 history int + round(share-sum) — γ 에서 history schema 마이그 후 float.
 
-    grouped 의 모든 winner key 는 zero-aggregate 라도 context 를 받음 — partial cluster
+    grouped 의 모든 cluster key 는 zero-aggregate 라도 context 를 받음 — partial cluster
     (e.g. `kurta_set__unknown__cotton`, `unclassified`) 가 score_and_export 의
-    `decisions[key]` 룩업에서 KeyError 가 나지 않도록. N<3 의미는 그대로 보존
-    (모든 share-weighted 필드 = 0).
+    `decisions[key]` 룩업에서 KeyError 가 나지 않도록. N=0 의미는 그대로 보존
+    (group_by_cluster 단계에서 자연 제외).
     """
     accumulators = _accumulate_share_weighted(grouped, target_date, cfg)
     for key in grouped:
         accumulators.setdefault(key, _ClusterAggregate())
     contexts: list[ClusterScoringContext] = []
     for key, a in accumulators.items():
-        winner_ig = [
-            i for i in grouped.get(key, [])
-            if i.normalized.source == ContentSource.INSTAGRAM
+        cluster_ig_items = [
+            item for item, _ in grouped.get(key, [])
+            if item.normalized.source == ContentSource.INSTAGRAM
         ]
         accounts = [
-            i.normalized.account_handle for i in winner_ig
-            if i.normalized.account_handle
+            item.normalized.account_handle for item in cluster_ig_items
+            if item.normalized.account_handle
         ]
         window_counts = history.get_post_count_history(
             key, target_date, cfg.momentum_window_days
@@ -257,7 +251,7 @@ def _decide_clusters(
     contexts: list[ClusterScoringContext],
     settings: Settings,
     days_collected: int,
-    grouped: dict[str, list[EnrichedContentItem]],
+    grouped: dict[str, list[tuple[EnrichedContentItem, float]]],
     target_date: date,
     history: ScoreHistory,
 ) -> dict[str, ClusterDecision]:
@@ -297,9 +291,9 @@ def _decide_clusters(
             avg_engagement_rate=ctx.avg_engagement_rate,
             total_video_views=int(ctx.youtube_views_total),
             top_video_ids=[
-                i.normalized.source_post_id
-                for i in grouped[ctx.cluster_key]
-                if i.normalized.source == ContentSource.YOUTUBE
+                item.normalized.source_post_id
+                for item, _ in grouped[ctx.cluster_key]
+                if item.normalized.source == ContentSource.YOUTUBE
             ][:_TOP_POST_LIMIT],
         )
     return decisions
@@ -325,7 +319,7 @@ def score_and_export(
     summaries = [
         build_summary(
             cluster_key=key,
-            items=grouped[key],
+            items_with_share=grouped[key],
             decision=decisions[key],
             target_date=target_date,
             palette_cfg=settings.palette,
@@ -342,7 +336,7 @@ def score_and_export(
     ctx_by_key = {ctx.cluster_key: ctx for ctx in contexts}
     for summary in summaries:
         ctx = ctx_by_key.get(summary.cluster_key)
-        cluster_items = grouped.get(summary.cluster_key, [])
+        cluster_items = [item for item, _ in grouped.get(summary.cluster_key, [])]
         ig_items = [i for i in cluster_items if i.normalized.source == ContentSource.INSTAGRAM]
         hashtag_counts = _hashtag_counts(cluster_items)
         accounts = [

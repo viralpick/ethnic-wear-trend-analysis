@@ -81,8 +81,9 @@ _PALETTE_CFG = PaletteConfig()
 
 
 def _dist(items: list[EnrichedContentItem]) -> dict[str, float]:
+    """β4: 모든 item 을 동등 share=1.0 으로 wrap (post 간 동등 vote 동작 그대로)."""
     return make_drilldown(
-        items=items,
+        items_with_share=[(i, 1.0) for i in items],
         palette_cfg=_PALETTE_CFG,
         top_post_limit=3,
         top_video_ids=[],

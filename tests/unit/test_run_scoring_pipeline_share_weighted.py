@@ -22,6 +22,7 @@ from contracts.common import (
     GarmentType,
     Technique,
 )
+from aggregation.build_cluster_summary import group_by_cluster
 from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
 from contracts.vision import CanonicalOutfit, EthnicOutfit, OutfitMember
@@ -169,7 +170,7 @@ def test_n_lt_3_item_contributes_partial_mass(empty_history: ScoreHistory) -> No
     # cluster 에 mass=0.5 비례 기여 (per-item mass: N=3=1.0 / N=2=0.5 / N=1=0.2).
     item = _enriched("p1", g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
                      cluster_key="kurta_set__unknown__cotton")
-    grouped = {"kurta_set__unknown__cotton": [item]}
+    grouped = group_by_cluster([item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     assert "kurta_set__unknown__cotton" in acc
     a = acc["kurta_set__unknown__cotton"]
@@ -185,20 +186,16 @@ def test_n_lt_3_item_contributes_partial_mass(empty_history: ScoreHistory) -> No
 
 
 def test_n_zero_item_contributes_zero(empty_history: ScoreHistory) -> None:
-    # N=0 (G/T/F 모두 없음) → assign_shares 빈 dict → accumulator 빈 dict.
-    # zero-aggregate fallback 으로 grouped 의 winner key 만 context 받음.
+    # N=0 (G/T/F 모두 없음) → group_by_cluster 빈 dict → context [].
+    # β4 후 "unclassified" placeholder 자체가 grouped 에 진입하지 않음 (assign_shares 빈 dict).
     item = _enriched("p1", g=None, t=None, f=None,
                      cluster_key="unclassified")
-    grouped = {"unclassified": [item]}
+    grouped = group_by_cluster([item])
+    assert grouped == {}
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     assert acc == {}
-
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
-    assert len(contexts) == 1
-    ctx = contexts[0]
-    assert ctx.cluster_key == "unclassified"
-    assert ctx.post_count_today == pytest.approx(0.0)
-    assert ctx.social_weighted_engagement == pytest.approx(0.0)
+    assert contexts == []
 
 
 def test_n_eq_3_mass_preservation_single_winner(empty_history: ScoreHistory) -> None:
@@ -207,7 +204,7 @@ def test_n_eq_3_mass_preservation_single_winner(empty_history: ScoreHistory) -> 
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
         cluster_key="kurta_set__chikankari__cotton",
     )
-    grouped = {"kurta_set__chikankari__cotton": [item]}
+    grouped = group_by_cluster([item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
 
     assert set(acc.keys()) == {"kurta_set__chikankari__cotton"}
@@ -230,31 +227,22 @@ def test_mass_preservation_3_items(empty_history: ScoreHistory) -> None:
         _enriched("p4_n2", g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
                   cluster_key="kurta_set__unknown__cotton"),
     ]
-    grouped = {
-        "kurta_set__chikankari__cotton": [items[0], items[2]],
-        "casual_saree__block_print__chanderi": [items[1]],
-        "kurta_set__unknown__cotton": [items[3]],
-    }
+    grouped = group_by_cluster(items)
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     total_mass = sum(a.post_count_today for a in acc.values())
     assert total_mass == pytest.approx(3.5)  # N=3 (×3, 1.0) + N=2 (×1, 0.5)
 
 
 def test_share_fan_out_cross_product(empty_history: ScoreHistory) -> None:
-    # garment_type 의 분포는 enriched_to_item_distribution 에서 text RULE=6 만 단일이라
-    # G={value:1.0} 만 가능. cross-product 검증은 vision share 까지 가야해서 representative_builder
-    # 의 item_cluster_shares 에서 직접 확인 (test_representative_builder 가 cover).
-    # 여기서는 1 item 의 contribution 이 정확히 1 cluster 에 들어가는지 핀.
+    # 1 item 의 contribution 이 정확히 1 cluster 에 들어가는지 핀 (text RULE 단일값
+    # fixture 라 cross-product 결과도 1 cluster).
     items = [
         _enriched("p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
                   cluster_key="kurta_set__chikankari__cotton", engagement=200),
         _enriched("p2", g=GarmentType.CASUAL_SAREE, t=Technique.BLOCK_PRINT, f=Fabric.CHANDERI,
                   cluster_key="casual_saree__block_print__chanderi", engagement=300),
     ]
-    grouped = {
-        "kurta_set__chikankari__cotton": [items[0]],
-        "casual_saree__block_print__chanderi": [items[1]],
-    }
+    grouped = group_by_cluster(items)
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     a_kurta = acc["kurta_set__chikankari__cotton"]
     a_saree = acc["casual_saree__block_print__chanderi"]
@@ -269,21 +257,23 @@ def test_youtube_video_count_share_weighted(empty_history: ScoreHistory) -> None
         cluster_key="casual_saree__block_print__cotton",
         source=ContentSource.YOUTUBE, engagement=5000,
     )
-    grouped = {"casual_saree__block_print__cotton": [yt_item]}
+    grouped = group_by_cluster([yt_item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     a = acc["casual_saree__block_print__cotton"]
     assert a.youtube_video_count == pytest.approx(1.0)
     assert a.youtube_views_total == pytest.approx(5000.0)
 
 
-def test_accounts_winner_keyed_not_fanned(empty_history: ScoreHistory) -> None:
-    # accounts 는 winner-keyed (grouped[key]) 만 — fan-out 으로 inflate 되면 안됨.
+def test_accounts_in_cluster_includes_ig_handles(empty_history: ScoreHistory) -> None:
+    # β4 (2026-04-28): accounts 는 cluster 안 IG account_handle (share>0 인 entry).
+    # winner-keyed 시절과 달리 multi-fan-out 도 자연 cluster 별 분리 (multi-fan-out
+    # 자체는 별도 multi_cluster_fan_out 핀이 검증).
     item = _enriched(
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
         cluster_key="kurta_set__chikankari__cotton",
         handle="user_alpha",
     )
-    grouped = {"kurta_set__chikankari__cotton": [item]}
+    grouped = group_by_cluster([item])
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
     assert len(contexts) == 1
     # new_account_ratio 가 빈 history 에 대해 호출됐는지 (간접 — context 가 정상 빌드됨)
@@ -297,7 +287,7 @@ def test_post_count_total_history_int_plus_rounded_share(empty_history: ScoreHis
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
         cluster_key="kurta_set__chikankari__cotton",
     )
-    grouped = {"kurta_set__chikankari__cotton": [item]}
+    grouped = group_by_cluster([item])
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
     assert len(contexts) == 1
     assert contexts[0].post_count_total == 1
@@ -310,21 +300,15 @@ def test_empty_grouped_returns_empty(empty_history: ScoreHistory) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Multi-cluster fan-out — outer-loop dedup invariant
+# Multi-cluster fan-out — mass preservation (β4 signature 후 자연)
 # --------------------------------------------------------------------------- #
 
-def test_multi_cluster_fan_out_no_over_count(empty_history: ScoreHistory) -> None:
-    """1 item 이 multi-cluster 에 fan-out 될 때 outer-loop 가 같은 item 을 중복 처리하면
-    mass invariant 가 깨진다 (per-item mass=1.0 인데 acc 합=fan-out 수 배).
+def test_multi_cluster_fan_out_mass_preserved(empty_history: ScoreHistory) -> None:
+    """1 item 이 multi-cluster 에 fan-out 되어도 per-item mass=1.0 보존.
 
-    재현 시나리오:
-    - text: garment_type=KURTA_SET (RULE, weight=6) + technique=CHIKANKARI + fabric=COTTON
-    - vision canonical: upper=casual_saree (다른 garment) + 같은 technique/fabric
-    → G distribution = {kurta_set: 6/(6+vision_share), casual_saree: vision_share/(...)}
-       (multi-key) / T, F = 단일 → cross-product 2 cluster 에 fan-out.
-
-    grouped 가 같은 item 을 두 cluster list 에 등록한 상태에서, _accumulate_share_weighted
-    의 outer loop 가 dedup 없이 두 번 inner 처리하면 acc 합이 정확히 2배 부풀어진다.
+    β4 signature (grouped entry = (item, share)) 에서는 outer loop 가 cluster 단위라
+    같은 item 도 cluster 마다 자기 share 만큼만 1번씩 기여 — over-count 자연 차단.
+    재현: text RULE garment + vision canonical 다른 upper_garment_type → G dist multi-key.
     """
     canonical = _canonical_with_garment(
         upper="casual_saree", fabric="cotton", technique="chikankari",
@@ -334,20 +318,15 @@ def test_multi_cluster_fan_out_no_over_count(empty_history: ScoreHistory) -> Non
         cluster_key="kurta_set__chikankari__cotton", engagement=100,
         canonicals=[canonical],
     )
-    grouped = {
-        "kurta_set__chikankari__cotton": [item],
-        "casual_saree__chikankari__cotton": [item],
+    grouped = group_by_cluster([item])
+    # multi-fan-out 확인 — cluster 2 개 등장.
+    assert set(grouped.keys()) == {
+        "kurta_set__chikankari__cotton", "casual_saree__chikankari__cotton",
     }
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
 
-    # 두 cluster 모두 share 받음 (multi-fan-out 확인).
-    assert set(acc.keys()) == {
-        "kurta_set__chikankari__cotton", "casual_saree__chikankari__cotton",
-    }
-    # mass invariant: per-item mass = 1.0 (N=3) — fan-out 으로 부풀면 안 됨.
     total_mass = sum(a.post_count_today for a in acc.values())
     assert total_mass == pytest.approx(1.0)
-    # social engagement 도 1번만 분배 — engagement_raw=100 이 fan-out 되어 100 합.
     total_engagement = sum(a.social_weighted_engagement for a in acc.values())
     assert total_engagement == pytest.approx(100.0)
 
@@ -355,22 +334,18 @@ def test_multi_cluster_fan_out_no_over_count(empty_history: ScoreHistory) -> Non
 def test_multi_cluster_fan_out_build_contexts_mass_consistent(
     empty_history: ScoreHistory,
 ) -> None:
-    """`_build_contexts` 도 over-count 면 post_count_today 가 부풀어진다."""
+    """`_build_contexts` 도 fan-out 후 post_count_today 합 = per-item mass."""
     canonical = _canonical_with_garment(upper="casual_saree")
     item = _enriched(
         "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
         cluster_key="kurta_set__chikankari__cotton", engagement=100,
         canonicals=[canonical],
     )
-    grouped = {
-        "kurta_set__chikankari__cotton": [item],
-        "casual_saree__chikankari__cotton": [item],
-    }
+    grouped = group_by_cluster([item])
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
 
     by_key = {c.cluster_key: c for c in contexts}
     total_mass = sum(c.post_count_today for c in contexts)
     assert total_mass == pytest.approx(1.0)
-    # 두 context 모두 양의 share — fan-out 결과 정상.
     assert by_key["kurta_set__chikankari__cotton"].post_count_today > 0
     assert by_key["casual_saree__chikankari__cotton"].post_count_today > 0
