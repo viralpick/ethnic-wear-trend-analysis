@@ -116,7 +116,9 @@ def _build_evidence(
 def _summary_to_distributions(
     summary: TrendClusterSummary | None,
 ) -> dict[str, dict[str, float] | None]:
-    """6 키 중 3 키만 채움. 나머지는 None (representative 단일값이라 redundant)."""
+    """7 키 중 4 키만 채움. 나머지는 None (representative 단일값이라 redundant).
+    brand 는 로직 C (2026-04-29) 결과 — log-scale 균등 분배 + top 5 + threshold.
+    """
     if summary is None:
         return {
             "silhouette": None,
@@ -125,6 +127,7 @@ def _summary_to_distributions(
             "garment_type": None,
             "fabric": None,
             "technique": None,
+            "brand": None,
         }
     drill = summary.drilldown
     return {
@@ -134,6 +137,7 @@ def _summary_to_distributions(
         "garment_type": None,
         "fabric": None,
         "technique": None,
+        "brand": dict(drill.brand_distribution) or None,
     }
 
 

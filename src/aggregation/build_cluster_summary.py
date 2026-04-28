@@ -19,8 +19,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
+from aggregation.brand_distribution import compute_brand_distribution
 from aggregation.cluster_palette import build_cluster_palette
-from aggregation.item_distribution_builder import enriched_to_item_distribution
+from aggregation.item_distribution_builder import (
+    build_styling_combo_distribution,
+    enriched_to_item_distribution,
+)
 from aggregation.representative_builder import item_cluster_shares
 from contracts.common import (
     ContentSource,
@@ -105,6 +109,30 @@ def _share_weighted_distribution(
     return {k: v / total_sum for k, v in totals.items()}
 
 
+def _share_weighted_dict_aggregate(
+    dists_with_share: list[tuple[dict[str, float], float]],
+) -> DistributionMap:
+    """로직 B (2026-04-29) — per-item distribution 을 cluster share 가중 합산 + 정규화.
+
+    `dist[value] * share` 누적 → 합 0 이면 빈 dict, 아니면 정규화.
+    각 per-item distribution 은 이미 mass=1 (또는 빈 dict) 로 정규화돼 있다고 가정 —
+    `build_styling_combo_distribution` 등 build_distribution 출력. share<=0 / 빈 dist
+    는 자연 미기여.
+    """
+    totals: defaultdict[str, float] = defaultdict(float)
+    for dist, share in dists_with_share:
+        if share <= 0.0 or not dist:
+            continue
+        for value, pct in dist.items():
+            if pct <= 0.0:
+                continue
+            totals[value] += pct * share
+    total_sum = sum(totals.values())
+    if total_sum <= 0.0:
+        return {}
+    return {k: v / total_sum for k, v in totals.items()}
+
+
 def _top_posts(
     items_with_share: list[ItemWithShare], limit: int
 ) -> list[str]:
@@ -177,8 +205,11 @@ def make_drilldown(
         (item.occasion.value if item.occasion else None, share)
         for item, share in items_with_share
     ]
+    # styling_combo 는 로직 B (2026-04-29) — vision-side derive_styling_from_outfit 결과를
+    # canonical 단위 vote 로 합산한 per-item distribution × cluster share. text-only post
+    # 는 build_styling_combo_distribution 안에서 text 채널로 자연 fallback.
     stylings_with_share = [
-        (item.styling_combo.value if item.styling_combo else None, share)
+        (build_styling_combo_distribution(item), share)
         for item, share in items_with_share
     ]
 
@@ -188,7 +219,9 @@ def make_drilldown(
         ]),
         silhouette_distribution=_share_weighted_distribution(silhouettes_with_share),
         occasion_distribution=_share_weighted_distribution(occasions_with_share),
-        styling_distribution=_share_weighted_distribution(stylings_with_share),
+        styling_distribution=_share_weighted_dict_aggregate(stylings_with_share),
+        # 로직 C: log-scale 균등 분배 → threshold/top-N → 정규화. 빈 결과 시 빈 dict.
+        brand_distribution=compute_brand_distribution(items_with_share),
         top_posts=_top_posts(items_with_share, top_post_limit),
         top_videos=list(top_video_ids),
         top_influencers=_top_influencers(items_with_share, top_post_limit),
