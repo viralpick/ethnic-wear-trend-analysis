@@ -220,6 +220,24 @@ def _run_color_extraction(
     return enriched
 
 
+def _build_writer(sink: str):
+    """sink 종류별 StarRocksWriter 인스턴스 생성. emit_*_only 가 공유."""
+    if sink == "starrocks":
+        from exporters.starrocks.stream_load_writer import (  # noqa: I001
+            StarRocksStreamLoadWriter,
+        )
+        return StarRocksStreamLoadWriter.from_env()
+    if sink == "starrocks_insert":
+        from exporters.starrocks.insert_writer import (  # noqa: I001
+            StarRocksInsertWriter,
+        )
+        return StarRocksInsertWriter.from_env()
+    if sink == "dry_run":
+        from exporters.starrocks.fake_writer import FakeStarRocksWriter  # noqa: I001
+        return FakeStarRocksWriter()
+    raise ValueError(f"unknown sink: {sink!r}")
+
+
 def run_pipeline(
     settings: Settings,
     target_date: date,
@@ -228,7 +246,15 @@ def run_pipeline(
     raw_loader: RawLoader | None = None,
     *,
     sink: str = "none",
+    phase: str = "all",
 ) -> None:
+    """phase=all (기본, 전 단계) / phase=item (raw → enriched → items 적재).
+
+    phase=representative 는 별도 진입점 (run_representative_phase) — raw 안 읽음.
+    """
+    if phase not in ("all", "item"):
+        raise ValueError(f"run_pipeline phase must be all|item, got {phase!r}")
+
     loader = raw_loader or LocalSampleLoader(settings.paths.sample_data)
     batch = _load_raw(loader, target_date)
     logger.info("loaded ig=%d yt=%d", len(batch.instagram), len(batch.youtube))
@@ -248,41 +274,82 @@ def run_pipeline(
     )
     run_tracker(normalized, settings.paths.outputs / "unknown_signals.json", target_date)
 
+    summaries: list = []
+    if phase == "all":
+        _, summaries = score_and_export(
+            enriched, settings, target_date, settings.paths.outputs
+        )
+
+    if sink not in ("starrocks", "starrocks_insert", "dry_run"):
+        return
+
+    writer = _build_writer(sink)
+    if phase == "item":
+        from exporters.starrocks.sink_runner import emit_items_only  # noqa: I001
+        counts = emit_items_only(enriched, writer)
+        if sink == "dry_run":
+            from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
+            log_dry_run_summary(writer, counts)
+        return
+
+    # phase == "all"
+    from exporters.starrocks.sink_runner import emit_to_starrocks  # noqa: I001
+    weekly_history_path = settings.paths.outputs / "score_history_weekly.json"
+    counts = emit_to_starrocks(
+        enriched, summaries, target_date, writer,
+        weekly_history_path=weekly_history_path,
+    )
+    if sink == "dry_run":
+        from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
+        log_dry_run_summary(writer, counts)
+
+
+def run_representative_phase(
+    settings: Settings,
+    *,
+    enriched_glob: str,
+    start_date: date,
+    end_date: date,
+    sink: str,
+) -> None:
+    """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → score → representative 적재.
+
+    target_date 는 end_date 사용 (week_start_date / trajectory 조회 기준).
+    """
+    from pipelines.load_enriched import load_enriched_files, filter_by_date_range
+    from exporters.starrocks.sink_runner import emit_representatives_only
+
+    pool = load_enriched_files(enriched_glob)
+    enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
+    if not enriched:
+        logger.warning(
+            "run_representative_phase empty after filter glob=%s start=%s end=%s",
+            enriched_glob, start_date, end_date,
+        )
+        return
+
+    target_date = end_date  # week_start_date 계산 + score_history_weekly 갱신 기준
     _, summaries = score_and_export(
         enriched, settings, target_date, settings.paths.outputs
     )
 
-    if sink in ("starrocks", "starrocks_insert", "dry_run"):
-        from exporters.starrocks.sink_runner import emit_to_starrocks  # noqa: I001
+    if sink not in ("starrocks", "starrocks_insert", "dry_run"):
+        return
 
-        weekly_history_path = settings.paths.outputs / "score_history_weekly.json"
-        if sink == "starrocks":
-            from exporters.starrocks.stream_load_writer import (  # noqa: I001
-                StarRocksStreamLoadWriter,
-            )
-            writer = StarRocksStreamLoadWriter.from_env()
-            emit_to_starrocks(
-                enriched, summaries, target_date, writer,
-                weekly_history_path=weekly_history_path,
-            )
-        elif sink == "starrocks_insert":
-            from exporters.starrocks.insert_writer import (  # noqa: I001
-                StarRocksInsertWriter,
-            )
-            writer = StarRocksInsertWriter.from_env()
-            emit_to_starrocks(
-                enriched, summaries, target_date, writer,
-                weekly_history_path=weekly_history_path,
-            )
-        else:  # dry_run
-            from exporters.starrocks.fake_writer import FakeStarRocksWriter  # noqa: I001
-            from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
-            writer = FakeStarRocksWriter()
-            counts = emit_to_starrocks(
-                enriched, summaries, target_date, writer,
-                weekly_history_path=weekly_history_path,
-            )
-            log_dry_run_summary(writer, counts)
+    writer = _build_writer(sink)
+    weekly_history_path = settings.paths.outputs / "score_history_weekly.json"
+    counts = emit_representatives_only(
+        enriched, summaries, target_date, writer,
+        weekly_history_path=weekly_history_path,
+    )
+    if sink == "dry_run":
+        from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
+        log_dry_run_summary(writer, counts)
+    logger.info(
+        "run_representative_phase done window=[%s,%s] enriched=%d representatives=%d",
+        start_date, end_date, len(enriched),
+        counts.get("representative_weekly", 0),
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -356,6 +423,26 @@ def _parse_args() -> argparse.Namespace:
         "--vision-workers", type=int, default=1,
         help="vision pipeline (pipeline_b) per-post parallel worker 수. "
              "기본 1 (sequential). IO-bound (blob download + Gemini) 라 8~16 권장.",
+    )
+    parser.add_argument(
+        "--phase", choices=["all", "item", "representative"], default="all",
+        help="pipeline phase. all=raw→enriched→item+rep 모두, "
+             "item=raw→enriched→item/group/object (rep 스킵), "
+             "representative=enriched JSON 로드 → rep 만 적재 (raw 안 읽음).",
+    )
+    parser.add_argument(
+        "--start-date", type=str, default=None,
+        help="--phase representative: posted_at IST 기준 시작 (YYYY-MM-DD, inclusive).",
+    )
+    parser.add_argument(
+        "--end-date", type=str, default=None,
+        help="--phase representative: posted_at IST 기준 끝 (YYYY-MM-DD, inclusive). "
+             "week_start_date / trajectory 조회 기준 target_date 로도 사용.",
+    )
+    parser.add_argument(
+        "--enriched-glob", type=str, default=None,
+        help="--phase representative: enriched.json 글롭 패턴. "
+             "예: outputs/backfill/page_*_enriched.json",
     )
     return parser.parse_args()
 
@@ -520,6 +607,23 @@ def main() -> None:
         load_dotenv()
 
     settings = load_settings()
+
+    if args.phase == "representative":
+        if not args.enriched_glob or not args.start_date or not args.end_date:
+            raise SystemExit(
+                "--phase representative 는 --enriched-glob / --start-date / --end-date 필수"
+            )
+        start = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(args.end_date, "%Y-%m-%d").date()
+        run_representative_phase(
+            settings,
+            enriched_glob=args.enriched_glob,
+            start_date=start,
+            end_date=end,
+            sink=args.sink,
+        )
+        return
+
     target = _resolve_target_date(args.date, settings.pipeline.target_date)
     llm_client = _select_llm_client(args.llm, settings, max_workers=args.text_workers)
     color_extractor = _select_color_extractor(
@@ -538,7 +642,7 @@ def main() -> None:
     )
     run_pipeline(
         settings, target, llm_client, color_extractor,
-        raw_loader=raw_loader, sink=args.sink,
+        raw_loader=raw_loader, sink=args.sink, phase=args.phase,
     )
 
 

@@ -216,37 +216,22 @@ def _build_representative_rows(
     return rows
 
 
-def emit_to_starrocks(
+def emit_items_only(
     enriched: list[EnrichedContentItem],
-    summaries: Iterable[TrendClusterSummary],
-    target_date: date,
     writer: StarRocksWriter,
     *,
-    weekly_history_path: Path,
     computed_at: str | None = None,
 ) -> dict[str, int]:
-    """4 base 테이블 순차 적재. 적재된 row 수를 table 별 dict 로 반환.
+    """item / canonical_group / canonical_object 만 적재 — phase item 진입점.
 
-    Args:
-      enriched: 같은 run 의 enriched items.
-      summaries: 같은 run 의 TrendClusterSummary (cluster_key 가 representative_key 매칭).
-      target_date: trend run 기준 날짜 (week_start_date 계산 + trajectory 조회).
-      writer: StarRocksWriter Protocol — Stream Load 실 구현 또는 FakeWriter.
-      weekly_history_path: `outputs/score_history_weekly.json` 경로 (read-only).
-        score_and_export 가 이미 update + save 했으므로 여기는 trajectory 만 조회.
-      computed_at: 같은 run 의 timestamp (전 4 table 동일). None 이면 UTC now.
+    representative_weekly 는 별도 emit_representatives_only 가 처리.
     """
     if not enriched:
-        logger.info("emit_to_starrocks skip — empty enriched")
-        return {ITEM_TABLE: 0, GROUP_TABLE: 0, OBJECT_TABLE: 0, REPRESENTATIVE_TABLE: 0}
+        logger.info("emit_items_only skip — empty enriched")
+        return {ITEM_TABLE: 0, GROUP_TABLE: 0, OBJECT_TABLE: 0}
 
     computed = computed_at or _now_utc_str()
-    week_start_iso = week_start_monday(target_date).isoformat()
-
-    item_distributions, id_map = _build_item_distributions(enriched)
-    summaries_by_key: dict[str, TrendClusterSummary] = {
-        s.cluster_key: s for s in summaries
-    }
+    item_distributions, _ = _build_item_distributions(enriched)
 
     item_rows: list[dict[str, Any]] = []
     group_rows: list[dict[str, Any]] = []
@@ -263,6 +248,42 @@ def emit_to_starrocks(
         group_rows.extend(build_group_rows(item, computed_at=computed))
         object_rows.extend(build_object_rows(item, computed_at=computed))
 
+    counts: dict[str, int] = {
+        ITEM_TABLE: writer.write_batch(ITEM_TABLE, item_rows),
+        GROUP_TABLE: writer.write_batch(GROUP_TABLE, group_rows),
+        OBJECT_TABLE: writer.write_batch(OBJECT_TABLE, object_rows),
+    }
+    logger.info(
+        "emit_items_only done item=%d group=%d object=%d",
+        counts[ITEM_TABLE], counts[GROUP_TABLE], counts[OBJECT_TABLE],
+    )
+    return counts
+
+
+def emit_representatives_only(
+    enriched: list[EnrichedContentItem],
+    summaries: Iterable[TrendClusterSummary],
+    target_date: date,
+    writer: StarRocksWriter,
+    *,
+    weekly_history_path: Path,
+    computed_at: str | None = None,
+) -> dict[str, int]:
+    """representative_weekly 만 적재 — phase representative 진입점.
+
+    enriched 는 evidence (item_id → source_post_id) 매핑 + contribution 계산용.
+    item/group/object 는 별도 emit_items_only 가 처리 (이미 적재된 상태 가정).
+    """
+    if not enriched:
+        logger.info("emit_representatives_only skip — empty enriched")
+        return {REPRESENTATIVE_TABLE: 0}
+
+    computed = computed_at or _now_utc_str()
+    week_start_iso = week_start_monday(target_date).isoformat()
+    item_distributions, id_map = _build_item_distributions(enriched)
+    summaries_by_key: dict[str, TrendClusterSummary] = {
+        s.cluster_key: s for s in summaries
+    }
     contributions = build_contributions(item_distributions)
     batch_eff_count = effective_item_count(item_distributions)
     weekly_history = WeeklyScoreHistory(weekly_history_path)
@@ -277,12 +298,6 @@ def emit_to_starrocks(
         batch_effective_item_count=batch_eff_count,
     )
 
-    # cluster_key ↔ representative_key 매칭 진단 (갭 #3 B 검증).
-    # - summary_coverage: summary 중 representative_key 에 매칭된 비율 (vision-aware reassign
-    #   목표 = 1.0). 1.0 미만이면 cluster_key top-1 ↔ representative_key top-1 이 어긋남.
-    # - representative_with_summary: cross-product 으로 생긴 representative 중 summary 가
-    #   채워진 비율. distribution 확산으로 1.0 미만이 정상 (다수 partial-share key 가 score
-    #   없이 factor_contribution 만 갖는 형태).
     aggregate_keys = {row["representative_key"] for row in representative_rows}
     summary_keys = set(summaries_by_key.keys())
     matched_keys = aggregate_keys & summary_keys
@@ -291,20 +306,49 @@ def emit_to_starrocks(
         len(matched_keys) / len(aggregate_keys) if aggregate_keys else 1.0
     )
     logger.info(
-        "starrocks_emit cluster_match agg=%d summary=%d matched=%d "
-        "summary_coverage=%.3f rep_with_summary=%.3f",
+        "emit_representatives cluster_match agg=%d summary=%d matched=%d "
+        "summary_coverage=%.3f rep_with_summary=%.3f week_start=%s",
         len(aggregate_keys), len(summary_keys),
-        len(matched_keys), coverage, rep_with_summary_rate,
+        len(matched_keys), coverage, rep_with_summary_rate, week_start_iso,
     )
 
-    counts: dict[str, int] = {}
-    counts[ITEM_TABLE] = writer.write_batch(ITEM_TABLE, item_rows)
-    counts[GROUP_TABLE] = writer.write_batch(GROUP_TABLE, group_rows)
-    counts[OBJECT_TABLE] = writer.write_batch(OBJECT_TABLE, object_rows)
-    counts[REPRESENTATIVE_TABLE] = writer.write_batch(
-        REPRESENTATIVE_TABLE, representative_rows
+    counts = {
+        REPRESENTATIVE_TABLE: writer.write_batch(
+            REPRESENTATIVE_TABLE, representative_rows
+        )
+    }
+    logger.info(
+        "emit_representatives_only done representative=%d", counts[REPRESENTATIVE_TABLE]
     )
+    return counts
 
+
+def emit_to_starrocks(
+    enriched: list[EnrichedContentItem],
+    summaries: Iterable[TrendClusterSummary],
+    target_date: date,
+    writer: StarRocksWriter,
+    *,
+    weekly_history_path: Path,
+    computed_at: str | None = None,
+) -> dict[str, int]:
+    """4 base 테이블 모두 적재 (phase=all backwards-compat 진입점).
+
+    내부적으로 emit_items_only + emit_representatives_only 를 동일 computed_at 으로
+    순차 호출. 새 코드는 phase 분리 함수 직접 호출 권장.
+    """
+    if not enriched:
+        logger.info("emit_to_starrocks skip — empty enriched")
+        return {ITEM_TABLE: 0, GROUP_TABLE: 0, OBJECT_TABLE: 0, REPRESENTATIVE_TABLE: 0}
+
+    computed = computed_at or _now_utc_str()
+    item_counts = emit_items_only(enriched, writer, computed_at=computed)
+    rep_counts = emit_representatives_only(
+        enriched, summaries, target_date, writer,
+        weekly_history_path=weekly_history_path,
+        computed_at=computed,
+    )
+    counts = {**item_counts, **rep_counts}
     logger.info(
         "starrocks_emit done item=%d group=%d object=%d representative=%d",
         counts[ITEM_TABLE], counts[GROUP_TABLE],
