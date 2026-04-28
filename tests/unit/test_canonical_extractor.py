@@ -26,12 +26,14 @@ from contracts.vision import (  # noqa: E402
 )
 from settings import OutfitDedupConfig, load_settings  # noqa: E402
 from vision.canonical_extractor import (  # noqa: E402
+    ObjectPool,
+    _build_picks_lookup,
     _build_skin_drop_config,
     _extract_member_pixels,
-    _pool_canonical,
+    _lookup_member_picks,
     _select_wear_class_ids,
     drop_small_outfits,
-    extract_canonical_pixels,
+    extract_canonical_pixels_per_object,
 )
 from vision.pipeline_b_extractor import SegBundle  # noqa: E402
 from vision.scene_filter import NoopSceneFilter  # noqa: E402
@@ -91,16 +93,6 @@ def _seg_stub_all_background(_bundle, crop_rgb):
     """stub: 전 crop background — garment pixel 0."""
     h, w = crop_rgb.shape[:2]
     return np.zeros((h, w), dtype=np.int32)
-
-
-def _make_seg_stub_top_half(class_id: int):
-    """factory: crop 상단 절반을 주어진 class_id, 나머지 background."""
-    def _stub(_bundle, crop_rgb):
-        h, w = crop_rgb.shape[:2]
-        seg = np.zeros((h, w), dtype=np.int32)
-        seg[: h // 2] = class_id
-        return seg
-    return _stub
 
 
 def _make_rgb(h: int = 200, w: int = 200, color: tuple[int, int, int] = VIBRANT_RED):
@@ -182,146 +174,42 @@ def test_extract_member_pixels_skips_too_small_bbox(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# _pool_canonical — members 합산 / empty pool None
-# --------------------------------------------------------------------------- #
-
-def test_pool_canonical_concats_members(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
-    )
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(0.25)
-    canonical = CanonicalOutfit(
-        canonical_index=0,
-        representative=rep,
-        members=[
-            OutfitMember(
-                image_id="img_0", outfit_index=0,
-                person_bbox=(0.0, 0.0, 0.5, 0.5),
-            ),
-            OutfitMember(
-                image_id="img_1", outfit_index=0,
-                person_bbox=(0.0, 0.0, 0.5, 0.5),
-            ),
-        ],
-    )
-    frame_map = {"img_0": _make_rgb(200, 200), "img_1": _make_rgb(200, 200)}
-    result = _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg)
-    assert result is not None
-    # crop 100x100 × 상단 절반 garment = 5000 pixel × 2 member = 10000.
-    assert result.pooled_pixels.shape == (10000, 3)
-    assert result.per_image_pixel_counts == {"img_0": 5000, "img_1": 5000}
-    assert (result.skin_drop_primary_total, result.skin_drop_secondary_total) == (0, 0)
-
-
-def test_pool_canonical_returns_none_when_all_empty(monkeypatch) -> None:
-    # 모든 member 가 background-only → garment mask 빈 → empty pool.
-    monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _seg_stub_all_background,
-    )
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(0.25)
-    canonical = CanonicalOutfit(
-        canonical_index=0, representative=rep,
-        members=[OutfitMember(
-            image_id="img_0", outfit_index=0,
-            person_bbox=(0.0, 0.0, 0.5, 0.5),
-        )],
-    )
-    frame_map = {"img_0": _make_rgb(200, 200)}
-    assert _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg) is None
-
-
-# --------------------------------------------------------------------------- #
-# extract_canonical_pixels — end-to-end (size drop + dedup + pool)
-# --------------------------------------------------------------------------- #
-
-def test_extract_canonical_pixels_e2e_merges_same_outfit(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
-    )
-    rgb = _make_rgb(200, 200)
-    outfit = _outfit(0.25)
-    # 2-image post 에 같은 outfit 속성 → Phase 4.5 가 1 canonical 로 병합.
-    post_items = [
-        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
-        ("img_1", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
-    ]
-    result = extract_canonical_pixels(
-        post_items, _make_bundle(), load_settings().vision,
-        OutfitDedupConfig(), _FAMILY_MAP,
-    )
-    assert len(result) == 1
-    canonical, pixels = result[0]
-    assert pixels is not None
-    assert {m.image_id for m in pixels.members_meta} == {"img_0", "img_1"}
-    assert pixels.pooled_pixels.shape == (10000, 3)
-    assert canonical.canonical_index == 0
-
-
-def test_extract_canonical_pixels_drops_small_outfits(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
-    )
-    rgb = _make_rgb(200, 200)
-    # area_ratio 0.05 < min 0.10 — dedup 진입 전 drop.
-    tiny = _outfit(0.05)
-    post_items = [
-        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[tiny])),
-    ]
-    result = extract_canonical_pixels(
-        post_items, _make_bundle(), load_settings().vision,
-        OutfitDedupConfig(), _FAMILY_MAP,
-    )
-    assert result == []
-
-
-def test_extract_canonical_pixels_empty_pool_preserves_canonical(monkeypatch) -> None:
-    # outfit keep, 하지만 segformer 가 전부 background → pool 빈 → CanonicalOutfit
-    # 은 라벨 보존용으로 반환 (pixels=None). B3 adapter 가 enriched.canonicals 로 전달.
-    monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _seg_stub_all_background,
-    )
-    rgb = _make_rgb(200, 200)
-    outfit = _outfit(0.25)
-    post_items = [
-        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
-    ]
-    result = extract_canonical_pixels(
-        post_items, _make_bundle(), load_settings().vision,
-        OutfitDedupConfig(), _FAMILY_MAP,
-    )
-    assert len(result) == 1
-    canonical, pixels = result[0]
-    assert pixels is None
-    assert canonical.canonical_index == 0
-
-
-# --------------------------------------------------------------------------- #
 # B1 — _select_wear_class_ids ethnic-aware pool selection
 # --------------------------------------------------------------------------- #
 
 def test_select_wear_class_ids_upper_only() -> None:
+    # F-10 (2026-04-26): segformer 가 saree top 같은 ethnic 상의를 dress 로 분류해도
+    # 픽셀이 빠지지 않도록 DRESS_CLASS_IDS union.
     o = _outfit(0.25, upper_is_ethnic=True, lower_is_ethnic=False)
-    assert _select_wear_class_ids(o) == UPPER_CLASS_IDS
+    assert _select_wear_class_ids(o) == UPPER_CLASS_IDS | DRESS_CLASS_IDS
 
 
 def test_select_wear_class_ids_lower_only() -> None:
     o = _outfit(0.25, upper_is_ethnic=False, lower_is_ethnic=True)
-    assert _select_wear_class_ids(o) == LOWER_CLASS_IDS
+    assert _select_wear_class_ids(o) == LOWER_CLASS_IDS | DRESS_CLASS_IDS
 
 
 def test_select_wear_class_ids_two_piece_both_ethnic() -> None:
+    # 양쪽 ethnic 시 DRESS_CLASS_IDS 도 union — Gemini 2-piece ↔ segformer dress
+    # disagreement 케이스 방어 (F-7 algorithmic gap fix). 어느 쪽이 옳든 dress
+    # 픽셀을 ethnic pool 에 포함하는 게 정합.
     o = _outfit(0.25, upper_is_ethnic=True, lower_is_ethnic=True)
-    assert _select_wear_class_ids(o) == UPPER_CLASS_IDS | LOWER_CLASS_IDS
+    assert _select_wear_class_ids(o) == (
+        UPPER_CLASS_IDS | LOWER_CLASS_IDS | DRESS_CLASS_IDS
+    )
 
 
 def test_select_wear_class_ids_dress_as_single_ethnic() -> None:
+    # F-10 (2026-04-26): dress_as_single + ethnic → segformer 가 어떻게 쪼개도 모두
+    # keep (UPPER + LOWER + DRESS). Sridevi saree 의 maroon 상의가 upper-clothes 로
+    # 분류돼 dress-only pool 에서 96% 손실되던 케이스 방어.
     o = _outfit(
         0.25, dress_as_single=True, upper_is_ethnic=True,
         lower_garment_type=None, lower_is_ethnic=None,
     )
-    assert _select_wear_class_ids(o) == DRESS_CLASS_IDS
+    assert _select_wear_class_ids(o) == (
+        UPPER_CLASS_IDS | LOWER_CLASS_IDS | DRESS_CLASS_IDS
+    )
 
 
 def test_select_wear_class_ids_dress_as_single_non_ethnic() -> None:
@@ -382,72 +270,138 @@ def test_select_wear_class_ids_bool_false_no_warning(caplog) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# B1 — _pool_canonical ethnic-aware pool pooling
+# β-hybrid 재설계 (per-object) — picks lookup util
 # --------------------------------------------------------------------------- #
 
-def test_pool_canonical_upper_only_excludes_lower_pool(monkeypatch) -> None:
-    # stub 이 lower class(6=pants) 만 리턴 — upper-only outfit 은 pool empty → None.
+def test_build_picks_lookup_indexes_filtered_outfits() -> None:
+    a = _outfit(0.30, color_preset_picks_top3=["ivory"])
+    b = _outfit(0.20, color_preset_picks_top3=["saffron", "pool_05"])
+    items = [
+        ("img_0", GarmentAnalysis(is_india_ethnic_wear=True, outfits=[a, b])),
+        ("img_1", GarmentAnalysis(is_india_ethnic_wear=True, outfits=[a])),
+    ]
+    lookup = _build_picks_lookup(items)
+    assert lookup[("img_0", 0)] == ["ivory"]
+    assert lookup[("img_0", 1)] == ["saffron", "pool_05"]
+    assert lookup[("img_1", 0)] == ["ivory"]
+    assert len(lookup) == 3
+
+
+def test_lookup_member_picks_raises_on_miss() -> None:
+    member = OutfitMember(
+        image_id="img_missing", outfit_index=0,
+        person_bbox=(0.0, 0.0, 0.5, 0.5),
+    )
+    with pytest.raises(KeyError, match="picks lookup miss"):
+        _lookup_member_picks({}, member)
+
+
+# --------------------------------------------------------------------------- #
+# extract_canonical_pixels_per_object — Phase 1 entry
+# --------------------------------------------------------------------------- #
+
+def test_extract_canonical_pixels_per_object_returns_one_pool_per_member(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _make_seg_stub_top_half(6),
+        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
     )
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(0.25, upper_is_ethnic=True, lower_is_ethnic=False)
-    canonical = CanonicalOutfit(
-        canonical_index=0, representative=rep,
-        members=[OutfitMember(
-            image_id="img_0", outfit_index=0,
-            person_bbox=(0.0, 0.0, 0.5, 0.5),
-        )],
+    rgb = _make_rgb(200, 200)
+    outfit = _outfit(0.25, color_preset_picks_top3=["ivory", "saffron"])
+    post_items = [
+        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
+        ("img_1", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
+    ]
+    result = extract_canonical_pixels_per_object(
+        post_items, _make_bundle(), load_settings().vision,
+        OutfitDedupConfig(), _FAMILY_MAP,
     )
-    frame_map = {"img_0": _make_rgb(200, 200)}
-    assert _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg) is None
+    assert len(result) == 1
+    canonical, pools = result[0]
+    assert canonical.canonical_index == 0
+    assert len(pools) == 2
+    # 2 members → 2 ObjectPool, 각 5000 px (상단 절반 garment).
+    assert {p.member.image_id for p in pools} == {"img_0", "img_1"}
+    for p in pools:
+        assert isinstance(p, ObjectPool)
+        assert p.rgb_pixels.shape == (5000, 3)
+        assert p.picks == ["ivory", "saffron"]
+        assert (p.skin_drop_primary, p.skin_drop_secondary) == (0, 0)
+        # _make_rgb(200, 200) → H × W = 40_000. frame_area normalize 의 분모.
+        assert p.frame_area == 200 * 200
 
 
-def test_pool_canonical_lower_only_uses_lower_pool(monkeypatch) -> None:
-    # stub 이 lower class(5=skirt) 리턴 — lower-only outfit 은 pool 확보.
+def test_extract_canonical_pixels_per_object_picks_per_member_independent(
+    monkeypatch,
+) -> None:
+    # 같은 dedup component 의 멤버가 각자 부분적으로 다른 picks 를 갖고 있을 때 ObjectPool
+    # 별로 자기 picks 회수. dedup 가 묶었다고 picks 평균/대표 사용 X.
+    # 일부 겹치게 (≥2) 만들어 dedup merge 를 통과시키되 정확히 같지는 않게.
     monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _make_seg_stub_top_half(5),
+        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
     )
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(0.25, upper_is_ethnic=False, lower_is_ethnic=True)
-    canonical = CanonicalOutfit(
-        canonical_index=0, representative=rep,
-        members=[OutfitMember(
-            image_id="img_0", outfit_index=0,
-            person_bbox=(0.0, 0.0, 0.5, 0.5),
-        )],
+    rgb = _make_rgb(200, 200)
+    a = _outfit(0.25, color_preset_picks_top3=["ivory", "saffron", "pool_05"])
+    b = _outfit(0.25, color_preset_picks_top3=["ivory", "saffron"])
+    post_items = [
+        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[a])),
+        ("img_1", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[b])),
+    ]
+    result = extract_canonical_pixels_per_object(
+        post_items, _make_bundle(), load_settings().vision,
+        OutfitDedupConfig(), _FAMILY_MAP,
     )
-    frame_map = {"img_0": _make_rgb(200, 200)}
-    result = _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg)
-    assert result is not None
-    assert result.pooled_pixels.shape == (5000, 3)
+    # garment_type/family 동일 + |top3 ∩ top3| = 2 → dedup 1 canonical.
+    assert len(result) == 1
+    _, pools = result[0]
+    assert len(pools) == 2
+    by_image = {p.member.image_id: p.picks for p in pools}
+    assert by_image["img_0"] == ["ivory", "saffron", "pool_05"]
+    assert by_image["img_1"] == ["ivory", "saffron"]
 
 
-def test_pool_canonical_dress_as_single_uses_dress_pool(monkeypatch) -> None:
-    # stub 이 dress class(7) 리턴 — dress_as_single=True + upper_is_ethnic=True.
+def test_extract_canonical_pixels_per_object_drops_small_outfits(monkeypatch) -> None:
     monkeypatch.setattr(
-        "vision.canonical_extractor.run_segformer", _make_seg_stub_top_half(7),
+        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
     )
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(
-        0.25, dress_as_single=True, upper_is_ethnic=True,
-        lower_garment_type=None, lower_is_ethnic=None,
+    rgb = _make_rgb(200, 200)
+    tiny = _outfit(0.05)  # < min 0.10
+    post_items = [
+        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[tiny])),
+    ]
+    result = extract_canonical_pixels_per_object(
+        post_items, _make_bundle(), load_settings().vision,
+        OutfitDedupConfig(), _FAMILY_MAP,
     )
-    canonical = CanonicalOutfit(
-        canonical_index=0, representative=rep,
-        members=[OutfitMember(
-            image_id="img_0", outfit_index=0,
-            person_bbox=(0.0, 0.0, 0.5, 0.5),
-        )],
-    )
-    frame_map = {"img_0": _make_rgb(200, 200)}
-    result = _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg)
-    assert result is not None
-    assert result.pooled_pixels.shape == (5000, 3)
+    assert result == []
 
 
-def test_pool_canonical_non_ethnic_skips_before_segformer(monkeypatch) -> None:
-    # upper/lower 모두 False → pool_canonical 이 segformer 호출 전에 None 반환.
+def test_extract_canonical_pixels_per_object_preserves_canonical_when_pool_empty(
+    monkeypatch,
+) -> None:
+    # 라벨 보존 invariant — non-ethnic 또는 background-only 면 pools=[] 로 함께 반환.
+    monkeypatch.setattr(
+        "vision.canonical_extractor.run_segformer", _seg_stub_all_background,
+    )
+    rgb = _make_rgb(200, 200)
+    outfit = _outfit(0.25)
+    post_items = [
+        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
+    ]
+    result = extract_canonical_pixels_per_object(
+        post_items, _make_bundle(), load_settings().vision,
+        OutfitDedupConfig(), _FAMILY_MAP,
+    )
+    assert len(result) == 1
+    canonical, pools = result[0]
+    assert canonical.canonical_index == 0
+    assert pools == []
+
+
+def test_extract_canonical_pixels_per_object_non_ethnic_skips_segformer(
+    monkeypatch,
+) -> None:
+    # representative.upper/lower 모두 False → wear_class_ids 빈 → segformer 호출 0.
     called = []
 
     def counting_stub(_bundle, crop_rgb):
@@ -456,15 +410,16 @@ def test_pool_canonical_non_ethnic_skips_before_segformer(monkeypatch) -> None:
         return np.zeros((h, w), dtype=np.int32)
 
     monkeypatch.setattr("vision.canonical_extractor.run_segformer", counting_stub)
-    skin_drop_cfg = _build_skin_drop_config(load_settings().vision)
-    rep = _outfit(0.25, upper_is_ethnic=False, lower_is_ethnic=False)
-    canonical = CanonicalOutfit(
-        canonical_index=0, representative=rep,
-        members=[OutfitMember(
-            image_id="img_0", outfit_index=0,
-            person_bbox=(0.0, 0.0, 0.5, 0.5),
-        )],
+    rgb = _make_rgb(200, 200)
+    outfit = _outfit(0.25, upper_is_ethnic=False, lower_is_ethnic=False)
+    post_items = [
+        ("img_0", rgb, GarmentAnalysis(is_india_ethnic_wear=True, outfits=[outfit])),
+    ]
+    result = extract_canonical_pixels_per_object(
+        post_items, _make_bundle(), load_settings().vision,
+        OutfitDedupConfig(), _FAMILY_MAP,
     )
-    frame_map = {"img_0": _make_rgb(200, 200)}
-    assert _pool_canonical(canonical, frame_map, _make_bundle(), skin_drop_cfg) is None
-    assert called == []  # pool empty → run_segformer 호출 skip (비용 절감)
+    assert len(result) == 1
+    _, pools = result[0]
+    assert pools == []
+    assert called == []

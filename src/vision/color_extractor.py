@@ -28,8 +28,10 @@ class ColorExtractionResult(BaseModel):
     Color 파이프라인 3층 재설계 (2026-04-24, B3a/B3b/B3d):
       - 이전 단일 r/g/b/name/family/silhouette 는 post-level 단일값 금지 원칙 (feedback
         post_level_single_value) + LLM-centric canonical 경로로 전환하면서 제거.
-      - canonicals: Phase 4.5 dedup 결과 CanonicalOutfit (palette 포함) 리스트. adapter
-        가 canonical_extractor → build_canonical_palette 로 채움. Fake 구현은 빈 리스트.
+      - canonicals: Phase 4.5 dedup 결과 CanonicalOutfit (palette + cut_off_share 포함)
+        리스트. adapter 가 canonical_extractor → β-hybrid (per-object Phase 1+2 →
+        Phase 3 통합 weighted KMeans, `aggregate_canonical_palette`) 로 채운다.
+        Fake 구현은 빈 리스트.
       - post_palette: canonicals[*].palette 를 area_ratio × within-share 가중 ΔE76 merge
         해 만든 post 대표 3색.
       - silhouette 은 `canonicals[*].representative.silhouette` 로만 접근 (B3d 제거).

@@ -1,9 +1,9 @@
 """Phase 5 — PipelineBColorExtractor canonical path e2e pinning.
 
-`vision.pipeline_b_adapter` 는 canonical path (LLM BBOX → extract_canonical_pixels →
-canonical 별 build_canonical_palette) 로 재작성됨. B3a/B3b/B3d: ColorExtractionResult 는
-`canonicals: list[CanonicalOutfit]` + `post_palette` 두 필드만 채운다 (silhouette/단일 hex
-모두 B3d 까지 제거).
+`vision.pipeline_b_adapter` 는 canonical path (LLM BBOX → extract_canonical_pixels_per_object
+→ canonical 별 β-hybrid (per-object build_object_palette + aggregate_canonical_palette)) 로
+재작성됨. B3a/B3b/B3d: ColorExtractionResult 는 `canonicals: list[CanonicalOutfit]` +
+`post_palette` 두 필드만 채운다 (silhouette/단일 hex 모두 B3d 까지 제거).
 
 본 테스트는:
   - 이미지 디스크 I/O 없이 `_load_images` / `_resolve_local_paths` 를 monkeypatch 로 주입
@@ -35,12 +35,17 @@ from vision.color_family_preset import (  # noqa: E402
     PresetViews,
     load_preset_views,
 )
+from settings import VideoFrameConfig  # noqa: E402
 from vision.pipeline_b_adapter import (  # noqa: E402
     PipelineBColorExtractor,
+    _encode_jpeg_deterministic,
     _load_images,
+    _load_video_frames,
+    _to_selector_cfg,
 )
+from vision.video_frame_selector import VideoFrameSelectorConfig  # noqa: E402
 from vision.pipeline_b_extractor import SegBundle  # noqa: E402
-from vision.scene_filter import NoopSceneFilter  # noqa: E402
+from vision.scene_filter import FakeSceneFilter, NoopSceneFilter  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -75,6 +80,10 @@ def _make_outfit(
     area_ratio: float = 0.25,
     silhouette=None,
     picks: list[str] | None = None,
+    lower_garment_type: str | None = None,
+    lower_is_ethnic: bool | None = None,
+    fabric: str | None = None,
+    technique: str | None = None,
 ) -> EthnicOutfit:
     side = area_ratio ** 0.5
     return EthnicOutfit(
@@ -82,8 +91,12 @@ def _make_outfit(
         person_bbox_area_ratio=area_ratio,
         upper_garment_type="kurta",
         upper_is_ethnic=True,
+        lower_garment_type=lower_garment_type,
+        lower_is_ethnic=lower_is_ethnic,
         dress_as_single=False,
         silhouette=silhouette,
+        fabric=fabric,
+        technique=technique,
         color_preset_picks_top3=picks or ["pool_00"],
     )
 
@@ -120,6 +133,7 @@ def _build_adapter(
     vision_llm,
     *,
     views: PresetViews | None = None,
+    scene_filter=None,
 ) -> PipelineBColorExtractor:
     if views is None:
         views = load_preset_views(_write_preset(tmp_path))
@@ -132,6 +146,7 @@ def _build_adapter(
         matcher_entries=views.matcher_entries,
         family_map=views.family_map,
         dedup_cfg=OutfitDedupConfig(preset_path=_write_preset(tmp_path)),
+        scene_filter=scene_filter,
     )
 
 
@@ -379,3 +394,297 @@ def test_multiple_posts_independent_results(monkeypatch, tmp_path) -> None:
     assert [r.source_post_id for r in results] == ["p1", "p2"]
     assert all(len(r.canonicals) == 1 for r in results)
     assert all(len(r.canonicals[0].palette) >= 1 for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 (2026-04-25) — SceneFilter v2 (adult-woman-only) gate
+# --------------------------------------------------------------------------- #
+
+def test_scene_filter_stage1_reject_skips_image(monkeypatch, tmp_path) -> None:
+    """drop_rule reason → stage1_reject → LLM 호출 0 + 빈 결과."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True, outfits=[_make_outfit()],
+    )
+    stub_llm = _StubLLM(analysis)
+    scene_filter = FakeSceneFilter(drop_rule=lambda _fid: "stage1_female_low")
+    adapter = _build_adapter(tmp_path, stub_llm, scene_filter=scene_filter)
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+
+    results = adapter.extract_visual([_make_item()])
+    assert results[0].canonicals == []
+    assert stub_llm.calls == []
+
+
+def test_scene_filter_mix_no_yolo_skips_image(monkeypatch, tmp_path) -> None:
+    """stage1_mix_needs_stage2 + detect_people 빈 결과 → image skip + LLM 호출 0."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True, outfits=[_make_outfit()],
+    )
+    stub_llm = _StubLLM(analysis)
+    scene_filter = FakeSceneFilter(forced_stage="stage1_mix_needs_stage2")
+    adapter = _build_adapter(tmp_path, stub_llm, scene_filter=scene_filter)
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter.detect_people",
+        lambda _yolo, _rgb: [],
+    )
+
+    results = adapter.extract_visual([_make_item()])
+    assert results[0].canonicals == []
+    assert stub_llm.calls == []
+
+
+def test_scene_filter_mix_all_bbox_drop_skips_image(monkeypatch, tmp_path) -> None:
+    """mix + classify_persons 모두 fail → frame drop + LLM 호출 0."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True, outfits=[_make_outfit()],
+    )
+    stub_llm = _StubLLM(analysis)
+    scene_filter = FakeSceneFilter(
+        forced_stage="stage1_mix_needs_stage2",
+        bbox_drop_rule=lambda _fid, _idx, _bb: "stage2_female_low",
+    )
+    adapter = _build_adapter(tmp_path, stub_llm, scene_filter=scene_filter)
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter.detect_people",
+        lambda _yolo, _rgb: [(10, 10, 50, 50), (60, 60, 100, 100)],
+    )
+
+    results = adapter.extract_visual([_make_item()])
+    assert results[0].canonicals == []
+    assert stub_llm.calls == []
+
+
+def test_scene_filter_mix_at_least_one_bbox_pass_keeps_image(
+    monkeypatch, tmp_path,
+) -> None:
+    """mix + classify_persons 한 개라도 pass → 풀 이미지 LLM 1회 호출 (crop X)."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True, outfits=[_make_outfit(picks=["pool_00"])],
+    )
+    stub_llm = _StubLLM(analysis)
+    # idx 0 만 fail, idx 1 pass → kept ≥ 1 → frame pass.
+    scene_filter = FakeSceneFilter(
+        forced_stage="stage1_mix_needs_stage2",
+        bbox_drop_rule=lambda _fid, idx, _bb: "stage2_adult_low" if idx == 0 else None,
+    )
+    adapter = _build_adapter(tmp_path, stub_llm, scene_filter=scene_filter)
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter.detect_people",
+        lambda _yolo, _rgb: [(10, 10, 50, 50), (60, 60, 100, 100)],
+    )
+
+    results = adapter.extract_visual([_make_item()])
+    assert len(results[0].canonicals) == 1
+    assert len(stub_llm.calls) == 1
+
+
+def test_outfit_member_palette_filled_per_object(monkeypatch, tmp_path) -> None:
+    """spec §6.5: pool 이 있는 멤버는 OutfitMember.palette + cut_off_share 채워진다.
+
+    canonical 1개 + 멤버 1개 (단일 이미지) → 빨강 픽셀 → 멤버 palette 1+ cluster.
+    canonical_object 행 (row_builder) 이 NULL 적재 갭을 해소했음을 검증."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True,
+        outfits=[_make_outfit(picks=["pool_00"])],
+    )
+    adapter = _build_adapter(tmp_path, _StubLLM(analysis))
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+
+    results = adapter.extract_visual([_make_item()])
+    canonical = results[0].canonicals[0]
+    assert len(canonical.members) >= 1
+    member = canonical.members[0]
+    # B1 §6.5: pool 이 있는 멤버는 palette 채워진다.
+    assert len(member.palette) >= 1
+    assert all(c.hex.startswith("#") for c in member.palette)
+    # 합 invariant — contracts.PaletteCluster 정의.
+    assert abs(sum(c.share for c in member.palette) - 1.0) < 1e-6
+    # cut_off_share ∈ [0, 1].
+    assert 0.0 <= member.cut_off_share <= 1.0
+
+
+# --------------------------------------------------------------------------- #
+# M3.G (2026-04-28) — video frame wiring (JPEG 결정론 + selector cfg + mixed flow)
+# --------------------------------------------------------------------------- #
+
+
+def test_encode_jpeg_deterministic_byte_identical() -> None:
+    """VisionLLMClient LocalJSONCache key = sha256(bytes). 같은 RGB → 같은 bytes 필수.
+
+    PIL 기본 파라미터 (optimize / subsampling / progressive) 가 라이브러리 버전마다
+    달라지면 cache miss 폭주 → 핀: quality=95/optimize=False/subsampling=0/
+    progressive=False/metadata 미주입.
+    """
+    rng = np.random.default_rng(seed=42)
+    rgb = rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8)
+
+    b1 = _encode_jpeg_deterministic(rgb)
+    b2 = _encode_jpeg_deterministic(rgb)
+
+    assert b1 == b2
+    # JPEG SOI marker — encode 가 실제 JPEG 를 만든다 boilerplate 검증.
+    assert b1[:2] == b"\xff\xd8"
+
+
+def test_encode_jpeg_deterministic_distinct_inputs_distinct_bytes() -> None:
+    """같은 bytes 보장이 모든 입력에 대해 동일 결과를 의미하지 않는다 (해시 충돌 방어)."""
+    rgb_red = np.full((32, 32, 3), (230, 30, 40), dtype=np.uint8)
+    rgb_green = np.full((32, 32, 3), (30, 230, 40), dtype=np.uint8)
+    assert _encode_jpeg_deterministic(rgb_red) != _encode_jpeg_deterministic(rgb_green)
+
+
+def test_to_selector_cfg_field_by_field_mapping() -> None:
+    """VideoFrameConfig (Pydantic) → VideoFrameSelectorConfig (frozen dataclass) 6 필드 1:1.
+
+    Pydantic v3 migration 시 `model_dump()` semantics 가 깨질 수 있어 명시적 속성 매핑.
+    """
+    cfg = VideoFrameConfig(
+        n_candidate=33,
+        n_final=11,
+        blur_min=77.5,
+        brightness_range=(20.0, 200.0),
+        scene_corr_max=0.9,
+        histogram_bins=16,
+    )
+    selector = _to_selector_cfg(cfg)
+
+    assert isinstance(selector, VideoFrameSelectorConfig)
+    assert selector.n_candidate == 33
+    assert selector.n_final == 11
+    assert selector.blur_min == 77.5
+    assert selector.brightness_range == (20.0, 200.0)
+    assert selector.scene_corr_max == 0.9
+    assert selector.histogram_bins == 16
+
+
+def test_load_video_frames_skips_unopenable_path(tmp_path) -> None:
+    """존재하지 않거나 cv2 가 못 여는 영상은 log-and-skip — 한 영상 깨져도 post 진행."""
+    bogus = tmp_path / "nonexistent.mp4"
+    out = _load_video_frames([bogus], VideoFrameConfig())
+    assert out == []
+
+
+def test_extract_one_mixes_image_and_video_frames(monkeypatch, tmp_path) -> None:
+    """image + video 동시 입력 → `_analyze_images` 가 양쪽 모두 보고 LLM 호출 횟수 합계.
+
+    Option 1 tuple concat 핀: image (`_load_images`) 결과와 video frame
+    (`_load_video_frames`) 결과 모두 같은 (image_id, bytes, rgb) shape 으로 합쳐
+    `_analyze_images` 한 번 흐름. carousel image+video 혼입 IG 포스트 케이스.
+    """
+    # outfit_dedup 통과 production-grade stub: picks 2+ (color_preset 0.40)
+    # + lower=palazzo (garment_type 0.25 + dress bridging) + technique=block_print (0.10).
+    # similarity = 0.40 + 0.25 + 0.10 = 0.75 ≥ 0.60 threshold.
+    # color_family 0.25 는 dominant family 매칭 시 추가로 들어감 (LAB 동일색이라 자연 통과).
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True,
+        outfits=[_make_outfit(
+            picks=["pool_00", "pool_01"],
+            lower_garment_type="palazzo",
+            lower_is_ethnic=True,
+            fabric="cotton",
+            technique="block_print",
+        )],
+    )
+    stub_llm = _StubLLM(analysis)
+    adapter = _build_adapter(tmp_path, stub_llm)
+
+    rgb_red = np.full((100, 100, 3), VIBRANT_RED_RGB, dtype=np.uint8)
+
+    # _resolve_paths 자체는 (image_paths, video_paths) tuple 반환 — 둘 다 채운다.
+    monkeypatch.setattr(
+        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._resolve_local_paths",
+        lambda _item, _root: [Path("img_A.jpg")],
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._resolve_local_video_paths",
+        lambda _item, _root: [Path("clip.mp4")],
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._load_images",
+        lambda paths: [(p.name, p.name.encode(), rgb_red) for p in paths],
+    )
+    # video frame stub — 영상 1건이 frame 2개 yield 한 척.
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._load_video_frames",
+        lambda paths, cfg: [
+            ("clip_f10", b"clip_f10_bytes", rgb_red),
+            ("clip_f25", b"clip_f25_bytes", rgb_red),
+        ],
+    )
+
+    item = _make_item(image_urls=["img_A.jpg"])
+    results = adapter.extract_visual([item])
+
+    # image 1 + video frame 2 = LLM 3회 호출.
+    assert len(stub_llm.calls) == 3
+    # bytes payload 분기 — image 와 video frame 이 모두 흐름.
+    assert b"img_A.jpg" in stub_llm.calls
+    assert b"clip_f10_bytes" in stub_llm.calls
+    assert b"clip_f25_bytes" in stub_llm.calls
+    # 동일 stub 3 frame → outfit_dedup 가 attribute 기반 (image_id 무관) 으로 1 canonical 병합.
+    # video Reel 20-frame 이 20 canonical 으로 폭발하지 않는 것을 핀.
+    assert len(results[0].canonicals) == 1
+    assert len(results[0].post_palette) >= 1
+
+
+def test_extract_one_video_only_when_no_images(monkeypatch, tmp_path) -> None:
+    """image_urls=[] 인 IG Reel/YT 영상 → video frame 만으로 분석 진행."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True,
+        outfits=[_make_outfit(
+            picks=["pool_00", "pool_01"],
+            lower_garment_type="palazzo",
+            lower_is_ethnic=True,
+            technique="block_print",
+        )],
+    )
+    stub_llm = _StubLLM(analysis)
+    adapter = _build_adapter(tmp_path, stub_llm)
+
+    rgb_red = np.full((100, 100, 3), VIBRANT_RED_RGB, dtype=np.uint8)
+
+    monkeypatch.setattr(
+        "vision.canonical_extractor.run_segformer", _seg_stub_top_half_upper,
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._resolve_local_paths",
+        lambda _item, _root: [],
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._resolve_local_video_paths",
+        lambda _item, _root: [Path("reel.mp4")],
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._load_images",
+        lambda _paths: [],
+    )
+    monkeypatch.setattr(
+        "vision.pipeline_b_adapter._load_video_frames",
+        lambda paths, cfg: [("reel_f5", b"reel_f5_bytes", rgb_red)],
+    )
+
+    item = _make_item(image_urls=[])
+    results = adapter.extract_visual([item])
+
+    assert len(stub_llm.calls) == 1
+    assert len(results[0].canonicals) == 1
+
+
+def test_scene_filter_default_noop_passes_through(monkeypatch, tmp_path) -> None:
+    """scene_filter 인자 None → NoopSceneFilter 디폴트 → stage=disabled, 게이트 우회."""
+    analysis = GarmentAnalysis(
+        is_india_ethnic_wear=True, outfits=[_make_outfit(picks=["pool_00"])],
+    )
+    stub_llm = _StubLLM(analysis)
+    adapter = _build_adapter(tmp_path, stub_llm)  # scene_filter=None
+    _install_stubs(monkeypatch, adapter, [Path("image_A.jpg")])
+
+    results = adapter.extract_visual([_make_item()])
+    assert len(results[0].canonicals) == 1
+    assert len(stub_llm.calls) == 1

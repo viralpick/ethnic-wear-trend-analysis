@@ -1,17 +1,15 @@
-"""Phase 3 canonical outfit pixel pool 추출기 — M3.A Step D Phase 3.
+"""Phase 3 canonical outfit pixel pool 추출기 — β-hybrid per-object entry.
 
 Pipeline B 재설계 (LLM-centric) 에서 BBOX 는 Phase 2 LLM (`VisionLLMClient.extract_garment`)
 이 공급하고, 같은 post 내 동일 의상 병합은 Phase 4.5 (`outfit_dedup.dedup_post`) 가 담당한다.
 이 모듈의 역할은 거기서 나온 CanonicalOutfit 의 members (image_id, outfit_index, person_bbox)
-를 pixel 좌표로 변환해 crop → per-BBOX segformer → 2-layer skin drop → pixel union pool
-을 만드는 것. KMeans (Phase 4) 는 이 pool 을 소비한다.
+를 pixel 좌표로 변환해 crop → per-BBOX segformer → 2-layer skin drop → 멤버 별 ObjectPool
+을 만드는 것. β-hybrid Phase 1 (`build_object_palette`) 가 이 pool 을 소비한다.
 
 설계 원칙:
-- pure function — rgb + analysis 가 입력, pixel ndarray 가 출력. Frame I/O / LLM 호출 /
+- pure function — rgb + analysis 가 입력, ObjectPool list 가 출력. Frame I/O / LLM 호출 /
   캐시는 호출부 (pipeline_b_adapter) 책임.
-- contracts 에는 numpy 노출 X — `CanonicalOutfitPixels` 는 본 모듈 내부 dataclass.
-- legacy `pipeline_b_extractor.extract_instances` 와 공존 — 양쪽 paths 동시에 살아있다가
-  Phase 5 에서 adapter 가 canonical path 로 swap.
+- contracts 에는 numpy 노출 X — `ObjectPool` 은 본 모듈 내부 dataclass.
 """
 from __future__ import annotations
 
@@ -23,7 +21,13 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 from contracts.common import ColorFamily
-from contracts.vision import CanonicalOutfit, EthnicOutfit, GarmentAnalysis, OutfitMember
+from contracts.vision import (
+    CanonicalOutfit,
+    EthnicOutfit,
+    GarmentAnalysis,
+    OutfitMember,
+    is_ethnic_outfit,
+)
 from settings import OutfitDedupConfig, VisionConfig
 from vision.bbox_utils import normalized_xywh_to_pixel_xyxy
 from vision.color_space import SkinDropConfig, drop_skin_2layer
@@ -38,19 +42,25 @@ from vision.segformer_constants import (
 
 
 @dataclass(frozen=True)
-class CanonicalOutfitPixels:
-    """canonical outfit 1개의 pool 된 pixel + 진단 정보.
+class ObjectPool:
+    """β-hybrid 재설계 (per-object) 의 오브젝트 1개 pool.
 
-    pooled_pixels 는 Phase 4 동적 k KMeans 입력. per_image_pixel_counts 는 smoke HTML 용
-    (어느 image 가 몇 픽셀 기여했는지). skin_drop_* 은 2-layer drop 작동 검증용.
+    오브젝트 = 1 OutfitMember (= 1 사진의 한 착장). BBOX 는 person 단위 1개 (Gemini
+    스펙). picks 는 그 사진의 원본 EthnicOutfit `color_preset_picks_top3` — Phase 1
+    β-hybrid 의 picks 입력. canonical 별 List[ObjectPool] 가 Phase 1/2 (per-object
+    좌표 보존 머지) 의 단위.
+
+    `frame_area` 는 멤버가 속한 이미지 frame 의 H×W (raw RGB ndarray 기준). β-hybrid
+    Phase 1 의 weight 가 obj_pixel_count / frame_area × SCALE 로 frame normalize 되어
+    같은 canonical 안에서도 obj 별 frame coverage 비율을 보존한다 (advisor A2 /
+    2026-04-25 사용자 결정).
     """
-    canonical_index: int
-    representative: EthnicOutfit
-    members_meta: list[OutfitMember]
-    pooled_pixels: np.ndarray                  # shape (N, 3), dtype uint8
-    per_image_pixel_counts: dict[str, int]
-    skin_drop_primary_total: int
-    skin_drop_secondary_total: int
+    member: OutfitMember                       # 식별자 (image_id, outfit_index, bbox)
+    rgb_pixels: np.ndarray                     # shape (N, 3), dtype uint8
+    picks: list[str]                           # color_preset_picks_top3 from source outfit
+    frame_area: int                            # 원본 frame 의 H × W
+    skin_drop_primary: int
+    skin_drop_secondary: int
 
 
 def drop_small_outfits(
@@ -73,35 +83,48 @@ def drop_small_outfits(
 
 
 def _select_wear_class_ids(rep: EthnicOutfit) -> frozenset[int]:
-    """B1: canonical representative 의 Gemini ethnic 판정으로 segformer class pool 결정.
+    """B1: Gemini ethnic 판정으로 segformer class pool 결정.
 
-    규칙 (configs/garment_vocab.yaml 기반 매핑을 대체):
-      - dress_as_single=True + upper_is_ethnic=True  → DRESS_CLASS_IDS
-        (dress_as_single 시 upper_is_ethnic 을 dress 전체 ethnic 여부로 재활용)
-      - dress_as_single=True + upper_is_ethnic!=True → frozenset() (non-ethnic dress drop)
-      - 2-piece: upper_is_ethnic=True → UPPER, lower_is_ethnic=True → LOWER (union 가능)
-      - 모두 False/None → frozenset() (pool 제외, 라벨은 상위 canonical 에 보존)
+    규칙 (F-10, 2026-04-26 — segformer 의 의류 type 분리는 신뢰하지 않음):
+      - dress_as_single=True + ethnic              → UPPER + LOWER + DRESS (전신 keep)
+      - 2-piece + 양쪽 ethnic                       → UPPER + LOWER + DRESS (= WEAR_CLASS_IDS)
+      - 2-piece + upper only ethnic                → UPPER + DRESS (segformer 가 saree top
+        같은 ethnic 상의를 dress 로 분류해도 keep)
+      - 2-piece + lower only ethnic                → LOWER + DRESS
+      - 모두 False/None / dress_as_single non-eth  → frozenset() (pool 제외)
 
-    None 은 보수적으로 False 취급 — Gemini 누락 시 pool 확장 방지. A3 pilot 100% fill
-    이지만 방어적. None 발생은 WARNING 으로 가시화 — 실패 숨김 금지 (CLAUDE.md #4).
+    핵심: segformer 의 dress vs upper-clothes 분리는 부정확 (Sridevi saree 의 maroon
+    상의가 upper-clothes 로 분류돼 dress-only pool 에서 96% 손실). 액세서리 (hat/shoe/
+    bag/belt/sunglasses) 는 `WEAR_KEEP` 에서 빠져 자동 drop, skin/hair 는 별도 drop —
+    이 함수는 의류 클래스만 다룬다.
+
+    None 은 보수적으로 False 취급 (`is_ethnic_outfit` 위임). WARNING 으로 가시화
+    (CLAUDE.md #4 실패 숨김 금지).
     """
-    if rep.dress_as_single:
-        if rep.upper_is_ethnic is None:
-            log.warning(
-                "canonical_ethnic_flag_missing dress_as_single=True upper_is_ethnic=None",
-            )
-        return DRESS_CLASS_IDS if rep.upper_is_ethnic else frozenset()
-    if rep.upper_is_ethnic is None or rep.lower_is_ethnic is None:
+    if rep.dress_as_single and rep.upper_is_ethnic is None:
+        log.warning(
+            "canonical_ethnic_flag_missing dress_as_single=True upper_is_ethnic=None",
+        )
+    elif not rep.dress_as_single and (
+        rep.upper_is_ethnic is None or rep.lower_is_ethnic is None
+    ):
         log.warning(
             "canonical_ethnic_flag_missing upper=%s lower=%s — treated as False",
             rep.upper_is_ethnic, rep.lower_is_ethnic,
         )
-    ids: set[int] = set()
-    if rep.upper_is_ethnic:
-        ids.update(UPPER_CLASS_IDS)
-    if rep.lower_is_ethnic:
-        ids.update(LOWER_CLASS_IDS)
-    return frozenset(ids)
+    if not is_ethnic_outfit(rep):
+        return frozenset()
+    if rep.dress_as_single:
+        return UPPER_CLASS_IDS | LOWER_CLASS_IDS | DRESS_CLASS_IDS
+    upper = bool(rep.upper_is_ethnic)
+    lower = bool(rep.lower_is_ethnic)
+    if upper and lower:
+        return UPPER_CLASS_IDS | LOWER_CLASS_IDS | DRESS_CLASS_IDS
+    if upper:
+        # 상의만 ethnic — 하의류 (pants/skirt) drop. dress 는 segformer 가 saree top
+        # 같은 single-piece ethnic 의류를 dress 로 분류해도 빠지지 않게 keep.
+        return UPPER_CLASS_IDS | DRESS_CLASS_IDS
+    return LOWER_CLASS_IDS | DRESS_CLASS_IDS
 
 
 def _build_skin_drop_config(cfg: VisionConfig) -> SkinDropConfig:
@@ -111,6 +134,7 @@ def _build_skin_drop_config(cfg: VisionConfig) -> SkinDropConfig:
         lab_max=tuple(cfg.skin_lab_box.max),
         secondary_drop_threshold_pct=cfg.skin_drop_threshold_pct,
         upper_ceiling_pct=cfg.skin_drop_upper_ceiling,
+        skin_dilate_iterations=cfg.skin_dilate_iterations,
     )
 
 
@@ -139,25 +163,56 @@ def _extract_member_pixels(
     return drop_skin_2layer(crop_rgb, garment_mask, skin_mask, skin_drop_cfg)
 
 
-def _pool_canonical(
+def _build_picks_lookup(
+    filtered_items: list[tuple[str, GarmentAnalysis]],
+) -> dict[tuple[str, int], list[str]]:
+    """filtered (image_id, GarmentAnalysis) → (image_id, outfit_index) → picks.
+
+    `dedup_post` 가 박는 `OutfitMember.outfit_index` 는 **filtered** outfits 기준
+    (drop_small_outfits 거친 후) 이므로 lookup 도 동일 기준으로 build. 빈 picks 도
+    list 로 보존 (Gemini 가 0~3 가변 — `EthnicOutfit.color_preset_picks_top3` 기본
+    `default_factory=list`).
+    """
+    lookup: dict[tuple[str, int], list[str]] = {}
+    for image_id, analysis in filtered_items:
+        for outfit_index, outfit in enumerate(analysis.outfits):
+            lookup[(image_id, outfit_index)] = list(outfit.color_preset_picks_top3)
+    return lookup
+
+
+def _lookup_member_picks(
+    picks_lookup: dict[tuple[str, int], list[str]], member: OutfitMember,
+) -> list[str]:
+    """OutfitMember → 원본 EthnicOutfit 의 picks. miss → raise.
+
+    실패 숨김 금지 (CLAUDE.md #4) — dedup 정합성이 깨졌다는 신호이므로
+    representative.picks 로 silent fallback 하지 않음.
+    """
+    key = (member.image_id, member.outfit_index)
+    if key not in picks_lookup:
+        raise KeyError(
+            f"OutfitMember picks lookup miss: image_id={member.image_id!r} "
+            f"outfit_index={member.outfit_index} — dedup ↔ filtered analysis 정합성 깨짐",
+        )
+    return picks_lookup[key]
+
+
+def _pool_canonical_per_object(
     canonical: CanonicalOutfit,
     frame_rgb_map: dict[str, np.ndarray],
+    picks_lookup: dict[tuple[str, int], list[str]],
     bundle: SegBundle,
     skin_drop_cfg: SkinDropConfig,
-) -> CanonicalOutfitPixels | None:
-    """canonical.members 의 member 별 pixel 을 concat. empty pool → None.
+) -> list[ObjectPool]:
+    """canonical.members 각각 → ObjectPool 1개. 빈 pool member 는 skip.
 
-    B1: wear_class_ids 는 canonical.representative 의 upper/lower_is_ethnic +
-    dress_as_single 로 pool 당 1회 결정. is_ethnic=False 라 pool 이 비면 palette 계산
-    대상에서 제외 (라벨 보존은 상위 CanonicalOutfit 에 이미 있음).
+    wear_class_ids 는 representative 기준 1회 결정 — 같은 canonical 안에서 ethnic
+    분기는 정의상 일치한다.
     """
     wear_class_ids = _select_wear_class_ids(canonical.representative)
     if not wear_class_ids:
-        return None
-    pooled: list[np.ndarray] = []
-    per_image: dict[str, int] = {}
-    primary_total = 0
-    secondary_total = 0
+        return []
+    pools: list[ObjectPool] = []
     for member in canonical.members:
         rgb = frame_rgb_map.get(member.image_id)
         if rgb is None:
@@ -165,35 +220,28 @@ def _pool_canonical(
         cleaned, primary, secondary = _extract_member_pixels(
             rgb, member.person_bbox, bundle, skin_drop_cfg, wear_class_ids,
         )
-        primary_total += primary
-        secondary_total += secondary
         if cleaned.shape[0] == 0:
             continue
-        pooled.append(cleaned)
-        per_image[member.image_id] = (
-            per_image.get(member.image_id, 0) + cleaned.shape[0]
+        h, w = rgb.shape[:2]
+        pools.append(
+            ObjectPool(
+                member=member, rgb_pixels=cleaned,
+                picks=_lookup_member_picks(picks_lookup, member),
+                frame_area=int(h * w),
+                skin_drop_primary=primary, skin_drop_secondary=secondary,
+            ),
         )
-    if not pooled:
-        return None
-    return CanonicalOutfitPixels(
-        canonical_index=canonical.canonical_index,
-        representative=canonical.representative,
-        members_meta=list(canonical.members),
-        pooled_pixels=np.concatenate(pooled, axis=0),
-        per_image_pixel_counts=per_image,
-        skin_drop_primary_total=primary_total,
-        skin_drop_secondary_total=secondary_total,
-    )
+    return pools
 
 
-def extract_canonical_pixels(
+def extract_canonical_pixels_per_object(
     post_items: list[tuple[str, np.ndarray, GarmentAnalysis]],
     bundle: SegBundle,
     cfg: VisionConfig,
     dedup_cfg: OutfitDedupConfig,
     family_map: dict[str, ColorFamily],
-) -> list[tuple[CanonicalOutfit, CanonicalOutfitPixels | None]]:
-    """post 1개 orchestrator — size drop → dedup → canonical 별 pixel pool.
+) -> list[tuple[CanonicalOutfit, list[ObjectPool]]]:
+    """β-hybrid (per-object) 진입점 — post 1개 orchestrator.
 
     Args:
       post_items: [(image_id, rgb_hwc_uint8, GarmentAnalysis), ...]. 호출부가 Frame 로드
@@ -203,20 +251,22 @@ def extract_canonical_pixels(
       dedup_cfg, family_map: Phase 4.5 dedup_post 에 전달.
 
     Returns:
-      list[(CanonicalOutfit, CanonicalOutfitPixels | None)]. `canonical_index` asc 순.
-      pool 이 None (pixels 비거나 non-ethnic) 인 canonical 도 **라벨 보존용으로 함께
-      반환** — B3 adapter 가 `EnrichedContentItem.canonicals` 에 태우기 위함. pool
-      None 은 palette 계산 skip signal (빈 입력을 KMeans 에 먹이지 않음).
+      list[(CanonicalOutfit, list[ObjectPool])]. `canonical_index` asc 순. pool list 가
+      비면 (non-ethnic / 전 멤버 background-only) canonical 은 라벨 보존용으로 함께 반환.
+      pool empty 는 palette 계산 skip signal (빈 입력을 KMeans 에 먹이지 않음).
     """
     frame_rgb_map = {img_id: rgb for img_id, rgb, _ in post_items}
     filtered_items = [
         (img_id, drop_small_outfits(analysis, cfg.min_person_bbox_area_ratio))
         for img_id, _rgb, analysis in post_items
     ]
+    picks_lookup = _build_picks_lookup(filtered_items)
     canonicals = dedup_post(filtered_items, dedup_cfg, family_map)
     skin_drop_cfg = _build_skin_drop_config(cfg)
-    out: list[tuple[CanonicalOutfit, CanonicalOutfitPixels | None]] = []
+    out: list[tuple[CanonicalOutfit, list[ObjectPool]]] = []
     for canonical in canonicals:
-        result = _pool_canonical(canonical, frame_rgb_map, bundle, skin_drop_cfg)
-        out.append((canonical, result))
+        pools = _pool_canonical_per_object(
+            canonical, frame_rgb_map, picks_lookup, bundle, skin_drop_cfg,
+        )
+        out.append((canonical, pools))
     return out

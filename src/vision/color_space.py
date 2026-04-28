@@ -228,16 +228,21 @@ def drop_skin_adaptive_spatial(
 
 @dataclass(frozen=True)
 class SkinDropConfig:
-    """`drop_skin_2layer` 파라미터 번들 — LAB box + 3단 분기 threshold.
+    """`drop_skin_2layer` 파라미터 번들 — LAB box + 3단 분기 threshold + spatial dilate.
 
     numpy-free (tuple[float, float, float]) 로 core 계약 compatible. 기본값은 모듈 기본
     SKIN_LAB_MIN/MAX + secondary 0.5 + ceiling 0.97 — 이전 signature defaults 와 동일.
     settings.VisionConfig 로부터 조립은 호출부 책임 (`canonical_extractor._build_skin_drop_config`).
+
+    skin_dilate_iterations: branch 3 (LAB box drop) spatial-aware 제어. 0 면 box 안 픽셀
+    전체 drop (legacy 단순 분기). 양수면 segformer skin mask 를 N px dilate 한 zone 과
+    LAB box 의 교집합만 drop — 옷 내부 maroon/패턴 보존, 목/손목 경계 leak 만 제거.
     """
     lab_min: tuple[float, float, float] = (16.1, 0.0, -2.6)
     lab_max: tuple[float, float, float] = (72.0, 29.6, 43.7)
     secondary_drop_threshold_pct: float = 0.5
     upper_ceiling_pct: float = 0.97
+    skin_dilate_iterations: int = 4
 
 
 def drop_skin_2layer(
@@ -267,7 +272,10 @@ def drop_skin_2layer(
          계산. 3단 분기:
            - ratio > upper_ceiling → segment 통째 drop
            - ratio > threshold → LAB drop 생략, 전체 보존
-           - 그 이하 → LAB box 안 픽셀만 drop (edge skin leak 제거)
+           - 그 이하 → spatial-aware drop (skin_dilate_iterations>0 시): segformer skin mask
+             N px dilate zone ∩ LAB box 안 픽셀 만 drop. 옷 내부 maroon/패턴 보존, 목/손목
+             경계 leak 만 제거. skin mask 비어있으면 (제품샷) drop 근거 없어 전체 보존.
+             skin_dilate_iterations==0 이면 spatial 비활성 — LAB box 안 전체 drop (legacy).
 
     반환: (cleaned_pixels, primary_drop_count, secondary_drop_count)
       - cleaned_pixels: (N, 3) — KMeans 입력에 그대로 사용 가능.
@@ -285,8 +293,8 @@ def drop_skin_2layer(
     lo = np.asarray(cfg.lab_min, dtype=np.float32)
     hi = np.asarray(cfg.lab_max, dtype=np.float32)
     lab = rgb_to_lab(garment_pixels)
-    inside = np.all((lab >= lo) & (lab <= hi), axis=-1)
-    inside_count = int(inside.sum())
+    inside_flat = np.all((lab >= lo) & (lab <= hi), axis=-1)
+    inside_count = int(inside_flat.sum())
     total = garment_pixels.shape[0]
     drop_ratio = inside_count / total
     if drop_ratio > cfg.upper_ceiling_pct:
@@ -295,8 +303,25 @@ def drop_skin_2layer(
     if drop_ratio > cfg.secondary_drop_threshold_pct:
         # skin-tone garment 보존 — LAB drop 하지 않음.
         return garment_pixels, primary_drop_count, 0
-    cleaned = garment_pixels[~inside]
-    return cleaned, primary_drop_count, inside_count
+    if cfg.skin_dilate_iterations <= 0:
+        # spatial 비활성 — LAB box 안 픽셀 전체 drop (legacy 분기).
+        cleaned = garment_pixels[~inside_flat]
+        return cleaned, primary_drop_count, inside_count
+    if not segformer_skin_mask.any():
+        # skin class 부재 (제품샷 / segformer 가 skin 을 놓친 crop) → drop 근거 없음.
+        # 옷 내부 패턴 보존 위해 전체 유지. 목/손목 leak 잡기는 포기.
+        return garment_pixels, primary_drop_count, 0
+    # spatial-aware drop — skin zone 인접 LAB-box pixel 만 drop.
+    # scipy.ndimage 는 vision extras — lazy import.
+    from scipy.ndimage import binary_dilation
+
+    skin_zone = binary_dilation(segformer_skin_mask, iterations=cfg.skin_dilate_iterations)
+    inside_mask = np.zeros_like(effective_garment)
+    inside_mask[effective_garment] = inside_flat
+    drop_mask = inside_mask & skin_zone
+    secondary_drop_count = int(drop_mask.sum())
+    keep_mask = effective_garment & ~drop_mask
+    return crop_rgb[keep_mask], primary_drop_count, secondary_drop_count
 
 
 def hex_skin_leak(

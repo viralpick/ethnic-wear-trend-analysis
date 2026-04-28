@@ -1,8 +1,11 @@
 """CLIPSceneFilter — 2-stage zero-shot scene + demographic 판정 실 구현 (Phase 1).
 
 Stage 1 (`accept`): frame 전체 embedding 으로 scene / woman / adult softmax 판정. argmax
-완화 — threshold 기반 (stage1_female_min / stage1_adult_min). man 또는 child signal 이
-stage2_mix_threshold 이상이면 stage=stage1_mix_needs_stage2 — BBOX 단위 재판정 지시.
+완화 — threshold 기반 (stage1_female_min / stage1_adult_min). v2 (2026-04-25, adult-woman-
+only 통합): man AND child signal 이 모두 stage2_mix_threshold 이상일 때만
+stage=stage1_mix_needs_stage2 — BBOX 단위 재판정 지시. 둘 중 하나만 켜진 케이스 (성인 여성
++ 성인 남성 만, 성인 여성 + 아동 만) 는 stage1_pass — Gemini v0.6 프롬프트가 비-adult-
+female 검출 제외 방어.
 
 Stage 2 (`classify_persons`): YOLO person BBOX crop 별 CLIP forward → gender/age softmax
 → stage2_female_min / stage2_adult_min 충족 BBOX 만 keep. 작은 BBOX 는 embedding
@@ -109,10 +112,12 @@ class CLIPSceneFilter:
                 scene_scores, gender_scores, age_scores,
             )
 
-        # Stage 1 pass. mix signal (man / child) 있으면 stage2 지시.
+        # Stage 1 pass. 4-way mix (성인 여성 + 성인 남성 + 아동) 모두 감지될 때만 stage2
+        # 지시 — adult-woman-only 통합 (v2). 둘 중 하나만 켜진 케이스 (예: 성인 여성 +
+        # 성인 남성) 는 BBOX 게이트 우회 → Gemini v0.6 프롬프트가 비-adult-female 제외 방어.
         has_mix = (
             male_score >= cfg.stage2_mix_threshold
-            or child_score >= cfg.stage2_mix_threshold
+            and child_score >= cfg.stage2_mix_threshold
         )
         stage = "stage1_mix_needs_stage2" if has_mix else "stage1_pass"
         return FilterVerdict(

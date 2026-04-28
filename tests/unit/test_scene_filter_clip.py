@@ -152,15 +152,19 @@ def test_stage1_adult_low_rejects() -> None:
     assert v.stage == "stage1_reject"
 
 
-def test_stage1_mix_triggers_stage2_when_man_high() -> None:
-    """여성 signal 존재 but 남성 signal 이 mix_threshold 이상 → stage2 지시."""
+def test_stage1_mix_triggers_stage2_only_when_4way() -> None:
+    """v2 (2026-04-25): male AND child 둘 다 mix_threshold 이상일 때만 stage2 지시.
+
+    adult-woman-only 통합 후 BBOX 게이트는 '성인 여성 + 성인 남성 + 아동' 4-way 혼합
+    프레임에서만 트리거. 그 외는 Gemini v0.6 프롬프트가 비-adult-female 제외 방어.
+    """
     cfg = SceneFilterConfig()
     f = _make_stub_filter(cfg)
     _inject_stage1_scores(
         f,
         scene=[0.90, 0.05, 0.05],
-        gender=[0.55, 0.45],  # woman ≥ 0.30 AND man ≥ 0.30 (mix threshold)
-        age=[0.05, 0.95],
+        gender=[0.55, 0.45],  # woman ≥ 0.30 AND man ≥ 0.30
+        age=[0.40, 0.60],     # adult ≥ 0.30 AND child ≥ 0.30
     )
     v = f.accept(np.zeros((10, 10, 3), dtype=np.uint8), "x")
     assert v.passed is True
@@ -168,19 +172,37 @@ def test_stage1_mix_triggers_stage2_when_man_high() -> None:
     assert v.stage == "stage1_mix_needs_stage2"
 
 
-def test_stage1_mix_triggers_stage2_when_child_high() -> None:
-    """child signal 이 mix_threshold 이상 → stage2 지시."""
+def test_stage1_woman_plus_man_only_passes_without_stage2() -> None:
+    """성인 여성 + 성인 남성 (아동 X) — v2 AND 로직에서는 stage2 우회 → stage1_pass.
+
+    이 케이스의 비-adult-female 방어선은 Gemini v0.6 프롬프트.
+    """
     cfg = SceneFilterConfig()
     f = _make_stub_filter(cfg)
     _inject_stage1_scores(
         f,
         scene=[0.90, 0.05, 0.05],
-        gender=[0.85, 0.15],
-        age=[0.40, 0.60],  # adult ≥ 0.30 (pass stage1) AND child ≥ 0.30 (mix)
+        gender=[0.55, 0.45],  # woman + man 둘 다 mix threshold 이상
+        age=[0.05, 0.95],     # adult only, child < threshold
     )
     v = f.accept(np.zeros((10, 10, 3), dtype=np.uint8), "x")
     assert v.passed is True
-    assert v.stage == "stage1_mix_needs_stage2"
+    assert v.stage == "stage1_pass"
+
+
+def test_stage1_woman_plus_child_only_passes_without_stage2() -> None:
+    """성인 여성 + 아동 (성인 남성 X) — v2 AND 로직에서는 stage2 우회 → stage1_pass."""
+    cfg = SceneFilterConfig()
+    f = _make_stub_filter(cfg)
+    _inject_stage1_scores(
+        f,
+        scene=[0.90, 0.05, 0.05],
+        gender=[0.85, 0.15],  # man < threshold
+        age=[0.40, 0.60],     # adult + child 둘 다 threshold 이상
+    )
+    v = f.accept(np.zeros((10, 10, 3), dtype=np.uint8), "x")
+    assert v.passed is True
+    assert v.stage == "stage1_pass"
 
 
 # --------------------------------------------------------------------------- #

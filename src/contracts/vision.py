@@ -85,6 +85,18 @@ class EthnicOutfit(BaseModel):
         min_length=0, max_length=3,
         description="50-color preset 이름 (pool_NN 또는 self name). free-form hex 금지.",
     )
+    outer_layer: str | None = Field(
+        default=None,
+        description="단일 lowercase word — 상의/하의에 더해진 traditional drape 또는 outer "
+        "(dupatta/shawl/stole/jacket/cardigan/nehru/shrug). 없으면 null. "
+        "M3.I P1 styling_combo 파생용 — WITH_DUPATTA/WITH_JACKET 분기. v0.8+.",
+    )
+    is_co_ord_set: bool | None = Field(
+        default=None,
+        description="upper 와 lower 가 같은 fabric/print/색조로 의도적으로 매칭된 'coord set' "
+        "여부. dress_as_single=True 면 null. M3.I P1 styling_combo 파생용 — CO_ORD_SET 분기. "
+        "v0.8+.",
+    )
 
     @field_validator("person_bbox")
     @classmethod
@@ -122,12 +134,48 @@ class OutfitMember(BaseModel):
 
     image_id 는 post 안의 이미지 식별자 (IG carousel index 또는 URL) — 같은 image 내
     outfit 은 절대 병합되지 않으므로 (image_id, outfit_index) 쌍은 canonical 내에서 unique.
+
+    palette 는 BBOX (= 1 object) 단위 픽셀 기반 KMeans top 3 cap. canonical 단위
+    `CanonicalOutfit.palette` 가 group 통합 결과라면, 이 필드는 그 안의 개별 object
+    팔레트로서 검수 페이지의 BBOX 단위 색상 추적에 쓰인다 (spec §6.5 신규).
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     image_id: str
     outfit_index: int = Field(ge=0, description="GarmentAnalysis.outfits 내 원본 index")
     person_bbox: tuple[float, float, float, float]
+    garment_type: str | None = Field(
+        default=None,
+        description="원본 EthnicOutfit.upper_garment_type 의 멤버별 trace. "
+        "dress_as_single=True 면 dress 자체. canonical_object 행의 검수용 — "
+        "canonical 단위 representative 와 다를 수 있어 carry-over 로 보존.",
+    )
+    fabric: str | None = Field(
+        default=None,
+        description="원본 EthnicOutfit.fabric. dedup 후에도 멤버별 변동 검수 가능하게 보존.",
+    )
+    technique: str | None = Field(
+        default=None,
+        description="원본 EthnicOutfit.technique. dedup 후에도 멤버별 변동 검수 가능하게 보존.",
+    )
+    silhouette: Silhouette | None = Field(
+        default=None,
+        description="원본 EthnicOutfit.silhouette. canonical_object 행의 raw silhouette.",
+    )
+    palette: list[PaletteCluster] = Field(
+        default_factory=list,
+        max_length=3,
+        description="object (BBOX) 단위 pixel 기반 palette. B1 canonical_extractor 가 "
+        "BBOX crop → segformer wear classes → KMeans (k=5) → ΔE76≤10 merge → top 3 cap "
+        "후 채운다. 비어 있으면 canonical_extractor 미진입 또는 wear 마스크 0 픽셀.",
+    )
+    cut_off_share: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="object 단위 top 3 cap 후 잘려나간 etc bucket share. "
+        "= 1.0 − Σ(top 3 shares before renormalize). 0.0 = 잔여 없음.",
+    )
 
 
 class CanonicalOutfit(BaseModel):
@@ -154,3 +202,28 @@ class CanonicalOutfit(BaseModel):
         "B1 segformer class 분기 → KMeans → ΔE76 greedy merge → max 3. "
         "Gemini color_preset_picks_top3 는 여기 포함 안 됨 (dedup 전용).",
     )
+    cut_off_share: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="β-hybrid Phase 3 통합 weighted KMeans 의 top_n 절단 잔여. "
+        "= 1.0 − Σ(top_n shares before renormalize at canonical level). 0.0 = 잔여 없음. "
+        "정규화 후 palette share 합은 항상 1.0 이고, 이 필드는 최종 palette 가 얼마나 "
+        "잘라낸 색을 포함하지 않는지를 보여주는 진단 시그널.",
+    )
+
+
+def is_ethnic_outfit(rep: EthnicOutfit) -> bool:
+    """outfit 이 ethnic 의류로 판정됐는지 — None 은 False (보수적).
+
+    canonical_extractor._select_wear_class_ids 의 분기 (dress_as_single 이면 upper 만,
+    2-piece 면 upper OR lower) 와 일치. Single source of truth.
+    """
+    if rep.dress_as_single:
+        return bool(rep.upper_is_ethnic)
+    return bool(rep.upper_is_ethnic) or bool(rep.lower_is_ethnic)
+
+
+def is_canonical_ethnic(canonical: CanonicalOutfit) -> bool:
+    """canonical 의 representative 기준 ethnic 판정 — `is_ethnic_outfit` 위임."""
+    return is_ethnic_outfit(canonical.representative)

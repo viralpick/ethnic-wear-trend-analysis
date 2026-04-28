@@ -3,8 +3,10 @@
 Phase 1 2-stage 재구성 (2026-04-24):
 - Stage 1 (image-level, `accept`): scene fashion 통과 + woman softmax ≥ stage1_female_min +
   adult softmax ≥ stage1_adult_min. 둘 중 하나라도 미달 → stage1_reject (frame skip).
-  통과 시 man 또는 child softmax 가 stage2_mix_threshold 이상이면 stage=stage1_mix_needs_stage2
-  — YOLO person BBOX 별 Stage 2 CLIP 판정 필요. 아니면 stage1_pass.
+  통과 시 v2 (2026-04-25, adult-woman-only 통합): man AND child softmax 가 모두
+  stage2_mix_threshold 이상일 때만 stage=stage1_mix_needs_stage2 — YOLO person BBOX 별
+  Stage 2 CLIP 판정 필요. 그 외는 stage1_pass — Gemini v0.6 프롬프트가 비-adult-female
+  검출 제외 방어.
 - Stage 2 (per-BBOX, `classify_persons`): BBOX crop → CLIP gender/age softmax → adult+female
   조건 충족 BBOX 만 keep.
 
