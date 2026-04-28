@@ -152,6 +152,19 @@ def _render_post_card(row: dict, blob_cache: Path, llm_cache: Path) -> str:
     fabric = row.get("fabric") or "-"
     technique = row.get("technique") or "-"
     cluster_key = row.get("trend_cluster_key") or "-"
+    cluster_shares = row.get("trend_cluster_shares") or {}
+    # ζ (2026-04-28): shares dict 가 multi-entry 면 각 cluster:share 표시 (sorted desc).
+    # single-entry 또는 빈 dict 는 winner key 와 동일 정보라 표시 생략.
+    shares_html = ""
+    if len(cluster_shares) > 1:
+        sorted_shares = sorted(cluster_shares.items(), key=lambda kv: (-kv[1], kv[0]))
+        shares_display = " · ".join(
+            f"{html.escape(k)}={v:.2f}" for k, v in sorted_shares
+        )
+        shares_html = (
+            '<div class="row"><span class="k">trend_cluster_shares</span>'
+            f'<span class="v mono">{shares_display}</span></div>'
+        )
 
     is_youtube = source == "youtube"
     source_badge_cls = "yt" if is_youtube else "ig"
@@ -183,6 +196,7 @@ def _render_post_card(row: dict, blob_cache: Path, llm_cache: Path) -> str:
     <div class="row"><span class="k">fabric</span><span class="v">{html.escape(fabric)}</span></div>
     <div class="row"><span class="k">technique</span><span class="v">{html.escape(technique)}</span></div>
     <div class="row"><span class="k">trend_cluster_key</span><span class="v mono">{html.escape(cluster_key)}</span></div>
+    {shares_html}
   </div>
   <div class="color">
     <div class="swatch" style="background:{hex_code}"></div>

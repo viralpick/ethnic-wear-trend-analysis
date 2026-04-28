@@ -161,6 +161,10 @@ class VLMConfig(BaseModel):
     temperature: float = 0.0
     case2_per_cluster_cap: int = 10
     case1_daily_cap: int = 150
+    # ζ (2026-04-28): Case2 picking share threshold. trend_cluster_shares 의 share 가
+    # 이 값 미만이면 picking 후보에서 제외. 0.0 = 모든 fan-out cluster 후보 (cap 자연
+    # cutoff), 0.10 = G(0.6,0.4)×T(0.5,0.5)×F(0.5,0.5) 분포의 자연 lower bound 대응.
+    case2_picking_min_share: float = 0.10
 
 
 class PaletteConfig(BaseModel):

@@ -5,7 +5,9 @@ ValidationError → 호출자가 해당 필드를 None 으로 떨어뜨린다. f
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from contracts.common import (
     BrandTier,
@@ -72,7 +74,15 @@ class EnrichedContentItem(BaseModel):
 
     # spec §5 — garment_type × technique × fabric 조합. 부분 매칭 시 "unknown" placeholder.
     # 전부 null 이면 "unclassified".
+    # ζ (2026-04-28): trend_cluster_shares 의 max-share derived 대표값. shares 가
+    # canonical source — winner 단독 read 는 fallback 용도.
     trend_cluster_key: str | None = None
+
+    # ζ (2026-04-28): G/T/F cross-product fan-out share dict. winner-only collapse 해소.
+    # N=3 representative 승격 case 는 item_cluster_shares 가 다중 entry 채움 (β2).
+    # N<3 partial 은 {winner_key: 1.0} single-entry. read-cast: 기존 enriched JSON 의
+    # trend_cluster_key 만 있는 경우 _backfill_shares_from_key 가 자동 채움.
+    trend_cluster_shares: dict[str, float] = Field(default_factory=dict)
 
     # 속성명 → 추출 방법. 값이 None 인 속성은 키가 없음 (partial map).
     # 키 예시: "garment_type", "technique", "occasion", "styling_combo", "brand",
@@ -80,3 +90,19 @@ class EnrichedContentItem(BaseModel):
     classification_method_per_attribute: dict[str, ClassificationMethod] = Field(
         default_factory=dict
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backfill_shares_from_key(cls, values: Any) -> Any:
+        """ζ read-cast: 기존 enriched JSON 의 trend_cluster_key → {key: 1.0} 1-entry dict.
+
+        shares 가 명시돼 있으면 그대로 둔다 (write 측 권한 우선). shares 가 없거나
+        비어있고 key 만 있으면 single-entry 로 채워서 read 측 (.items() 순회) 호환.
+        """
+        if not isinstance(values, dict):
+            return values
+        shares = values.get("trend_cluster_shares")
+        key = values.get("trend_cluster_key")
+        if not shares and key:
+            values["trend_cluster_shares"] = {key: 1.0}
+        return values

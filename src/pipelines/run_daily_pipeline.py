@@ -18,6 +18,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from aggregation.item_distribution_builder import enriched_to_item_distribution
+from aggregation.representative_builder import item_cluster_shares
 from attributes.brand_registry import BrandRegistry, load_brand_registry
 from attributes.extract_text_attributes import (
     AttributeExtractionState,
@@ -30,8 +31,8 @@ from attributes.extract_text_attributes_llm import (
     apply_llm_extraction,
 )
 from attributes.unknown_signal_tracker import run_tracker
-from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster, build_exact_key
-from contracts.common import ContentSource, Fabric, GarmentType, Technique
+from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster
+from contracts.common import ContentSource
 from contracts.enriched import EnrichedContentItem
 from exporters.write_json_output import write_enriched
 from loaders.raw_loader import LocalSampleLoader, RawDailyBatch, RawLoader
@@ -93,20 +94,29 @@ def _case1_targets(
 
 
 def _case2_targets(
-    enriched: list[EnrichedContentItem], cap_per_cluster: int
+    enriched: list[EnrichedContentItem],
+    cap_per_cluster: int,
+    min_share: float,
 ) -> list[EnrichedContentItem]:
     """Case2: cluster 당 IG top-engagement 포스트 (spec §7.2).
 
     Color 3층 재설계 (2026-04-24) 로 post-level ColorInfo 제거, "color 아직 없는" 필터
     탈락. B3 에서 post_palette 채우기 루틴으로 재배선 예정.
+
+    ζ (2026-04-28): trend_cluster_shares.items() 순회 — share≥min_share 인 모든
+    cluster 에 picking 후보 등록 (winner-only collapse 해소). N<3 partial 은 write 측에서
+    {winner_key: 1.0} single-entry 로 채워져 자연스럽게 winner 단일 picking 유지.
     """
     by_cluster: dict[str, list[EnrichedContentItem]] = {}
     for item in enriched:
         if item.normalized.source != ContentSource.INSTAGRAM:
             continue
-        if not item.trend_cluster_key or item.trend_cluster_key == UNCLASSIFIED:
-            continue
-        by_cluster.setdefault(item.trend_cluster_key, []).append(item)
+        for cluster_key, share in item.trend_cluster_shares.items():
+            if not cluster_key or cluster_key == UNCLASSIFIED:
+                continue
+            if share < min_share:
+                continue
+            by_cluster.setdefault(cluster_key, []).append(item)
 
     picks: list[EnrichedContentItem] = []
     for cluster_items in by_cluster.values():
@@ -115,35 +125,39 @@ def _case2_targets(
     return picks
 
 
-def _vision_reassign_cluster_key(item: EnrichedContentItem) -> str | None:
-    """canonicals 채워진 후 ItemDistribution top-1 G/T/F 로 cluster_key 재계산 (갭 #3 B).
+def _vision_reassign_cluster_shares(item: EnrichedContentItem) -> dict[str, float]:
+    """canonicals 채워진 후 G/T/F cross-product fan-out share dict 재계산 (ζ + 갭 #3 B).
 
-    text 단계 partial cluster_key 가 vision 결과 reflect 안돼서 representative_key
-    (= ItemDistribution top-1 G/T/F) 와 어긋남 → summary 매칭 실패. 여기서 재할당하면
-    mechanical 하게 representative_key 와 일치 (representative_builder 의 cross-product
-    top-1 이 동일 ItemDistribution 으로부터 나오기 때문).
+    text-level partial 의 single-entry shares (= {winner_key: 1.0}) 를 vision-aware
+    multi-cluster fan-out 으로 확장. representative_builder.item_cluster_shares 와 동일
+    cross-product space — score path (β2) ↔ summary path (β4) ↔ picking path (ζ) 정합.
 
-    안전장치:
-    - canonicals 비어있으면 기존 키 유지 (text-level 결정 보존).
-    - dist 의 G/T/F 한 axis 라도 비면 기존 키 유지 (어차피 N=3 representative 에는 미적재).
-    - top-1 이 enum 멤버에 없는 free-form 값이면 기존 키 유지 (vision 단계 raw 값 방어).
-    - 동률 시 (-pct, value asc) 로 결정론적 tiebreak.
+    N (resolved axis 수) 별 동작:
+    - N=3 (G/T/F 모두 채워짐) → item_cluster_shares cross-product dict (winner-only
+      collapse 해소 ★ ζ 본 목적). multiplier_ratio=1.0.
+    - N<3 (partial) → 기존 shares 유지. assign_shares 가 N<3 일 때 multiplier_ratio 0.5/0.2
+      를 곱해 share 가 작아져 picking_min_share=0.10 threshold 에 걸려 picking 손실
+      방지. text-level winner single-entry ({winner_key: 1.0}) 가 그대로 picking 됨.
+    - canonicals 비어있음 → 기존 shares 유지 (text-level 결정 보존).
     """
     if not item.canonicals:
-        return item.trend_cluster_key
-
+        return item.trend_cluster_shares
     dist = enriched_to_item_distribution(item)
     if not dist.garment_type or not dist.technique or not dist.fabric:
-        return item.trend_cluster_key
+        return item.trend_cluster_shares
+    return item_cluster_shares(dist)
 
-    g_top = min(dist.garment_type.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    t_top = min(dist.technique.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-    f_top = min(dist.fabric.items(), key=lambda kv: (-kv[1], kv[0]))[0]
 
-    try:
-        return build_exact_key(GarmentType(g_top), Technique(t_top), Fabric(f_top))
-    except ValueError:
-        return item.trend_cluster_key
+def _winner_key_from_shares(shares: dict[str, float]) -> str | None:
+    """ζ (2026-04-28): shares dict → winner cluster_key (max share, alpha asc tiebreak).
+
+    trend_cluster_key 는 shares 의 derived 대표값 — score 측은 shares 모두 fan-out 으로
+    가중하지만 summary 매칭 / 단일 cluster reference 가 필요한 경우 (e.g. log message)
+    위해 winner key 를 따로 들고 있다.
+    """
+    if not shares:
+        return None
+    return min(shares.items(), key=lambda kv: (-kv[1], kv[0]))[0]
 
 
 def _apply_extraction_result(
@@ -155,9 +169,9 @@ def _apply_extraction_result(
     Color 3층 재설계 B3a/B3b/B3d (2026-04-24): canonicals + post_palette 반영. post-level
     silhouette 단일값은 제거됨 — canonical silhouette 은 result.canonicals 복사로 자연 전달.
 
-    갭 #3 B (2026-04-27): canonicals 가 채워지면 trend_cluster_key 도 vision-aware 재계산
-    (`_vision_reassign_cluster_key`). text-level partial 가 vision 후 N=3 representative
-    적재로 승격되는 경우, summary 매칭이 끊기지 않게 키를 동기화.
+    ζ (2026-04-28): canonicals 가 채워지면 trend_cluster_shares + trend_cluster_key 둘
+    다 vision-aware 재계산. shares 가 canonical (β2/β3/β4 의 fan-out 입력),
+    trend_cluster_key 는 shares 의 max-share derived 대표값.
     """
     by_id = {r.source_post_id: r for r in results}
     updated: list[EnrichedContentItem] = []
@@ -172,8 +186,11 @@ def _apply_extraction_result(
             "canonicals": list(result.canonicals),
             "post_palette": list(result.post_palette),
         })
+        new_shares = _vision_reassign_cluster_shares(new_item)
+        new_key = _winner_key_from_shares(new_shares) or item.trend_cluster_key
         new_item = new_item.model_copy(update={
-            "trend_cluster_key": _vision_reassign_cluster_key(new_item),
+            "trend_cluster_shares": new_shares,
+            "trend_cluster_key": new_key,
         })
         updated.append(new_item)
     return updated
@@ -190,7 +207,11 @@ def _run_color_extraction(
     )
     enriched = _apply_extraction_result(enriched, results1)
 
-    case2 = _case2_targets(enriched, settings.vlm.case2_per_cluster_cap)
+    case2 = _case2_targets(
+        enriched,
+        cap_per_cluster=settings.vlm.case2_per_cluster_cap,
+        min_share=settings.vlm.case2_picking_min_share,
+    )
     results2 = run_color_extraction([e.normalized for e in case2], extractor)
     enriched = _apply_extraction_result(enriched, results2)
     logger.info("color_extraction case1=%d case2=%d", len(case1), len(case2))
