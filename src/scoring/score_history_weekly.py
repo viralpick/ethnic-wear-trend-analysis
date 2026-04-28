@@ -80,7 +80,7 @@ class WeeklyScoreHistory:
         cluster_key: str,
         target_date: date,
         score: float,
-        post_count: int = 0,
+        post_count: float = 0.0,
         youtube_views_total: float = 0.0,
         hashtag_counts: dict[str, int] | None = None,
         accounts: list[str] | None = None,
