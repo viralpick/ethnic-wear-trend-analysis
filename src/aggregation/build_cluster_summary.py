@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from aggregation.cluster_palette import build_cluster_palette
+from aggregation.item_distribution_builder import enriched_to_item_distribution
+from aggregation.representative_builder import item_cluster_shares
 from contracts.common import (
     ContentSource,
     DataMaturity,
@@ -52,13 +54,25 @@ class ClusterDecision:
 def group_by_cluster(
     items: list[EnrichedContentItem],
 ) -> dict[str, list[EnrichedContentItem]]:
-    """None/unclassified 는 제외. 모두 exact 또는 partial 키 단위로 묶는다."""
+    """G×T×F cross-product fan-out grouping (Phase β3, spec §2.4).
+
+    한 item 의 garment_type / technique / fabric distribution 의 cross-product 결과로
+    share > 0 인 모든 cluster_key 에 그 item 등록. β2 의 _accumulate_share_weighted 와
+    같은 cluster space → score path ↔ summary path align (sparse rep_with_summary 해소).
+
+    N<3 (G/T/F 한 축이라도 비어있는) item 은 item_cluster_shares 가 빈 dict 반환 →
+    어떤 cluster 에도 등장 X (mass preservation 정합). partial(g) 활성화 후엔 N<3 도
+    multiplier 가중 share 로 등장.
+
+    contract `trend_cluster_key` (winner 단일) 는 read 안 함 — ζ 에서 deprecate 예정.
+    """
     grouped: dict[str, list[EnrichedContentItem]] = {}
     for item in items:
-        key = item.trend_cluster_key
-        if not key:
+        shares = item_cluster_shares(enriched_to_item_distribution(item))
+        if not shares:
             continue
-        grouped.setdefault(key, []).append(item)
+        for cluster_key in shares:
+            grouped.setdefault(cluster_key, []).append(item)
     return grouped
 
 
