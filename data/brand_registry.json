@@ -1,0 +1,609 @@
+{
+  "_schema": {
+    "id": "stable internal id (kebab-case, lowercase)",
+    "primary_handle": "canonical IG/YT handle, lowercase",
+    "aliases": "alt handles / channels (lowercase) — empty list 가능",
+    "display_name": "팀 / 노션에 표기할 정식 브랜드명",
+    "category": "marketplace | global_fast_fashion | global_designer | designer | ethnic | jewelry | accessory | retail",
+    "tier": "BrandTier (value | mid | premium_everyday) — best-guess, 검토 후 수정",
+    "country": "ISO-3166-1 alpha-2 (대부분 IN)",
+    "notes": "큐레이션 메모 (검토용)"
+  },
+  "_meta": {
+    "source": "outputs/brand_seed/brand_candidates.csv (M3.F 1차 추출, 2026-04-28)",
+    "curation_date": "2026-04-28",
+    "review_status": "pre_review_applied"
+  },
+  "brands": [
+    {
+      "id": "myntra",
+      "primary_handle": "myntra",
+      "aliases": ["myntrafashion", "myntrakurtasets", "myntrasuit", "myntraf"],
+      "display_name": "Myntra",
+      "category": "marketplace",
+      "tier": "mid",
+      "country": "IN",
+      "notes": "India 최대 fashion marketplace"
+    },
+    {
+      "id": "meesho",
+      "primary_handle": "meeshoapp",
+      "aliases": ["meesho", "meeshofashion", "meeshosuit", "meeshojewellery"],
+      "display_name": "Meesho",
+      "category": "marketplace",
+      "tier": "value",
+      "country": "IN",
+      "notes": "리셀러 기반 가성비 marketplace"
+    },
+    {
+      "id": "amazon-fashion-in",
+      "primary_handle": "amazonfashionin",
+      "aliases": ["amazondotin", "amazonfashion", "amazonfashionx", "amazon", "amazonkurtaset", "amazonkurtasets"],
+      "display_name": "Amazon Fashion India",
+      "category": "marketplace",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "flipkart-fashion",
+      "primary_handle": "flipkartfashionofficial",
+      "aliases": ["flipkart"],
+      "display_name": "Flipkart Fashion",
+      "category": "marketplace",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "hm",
+      "primary_handle": "hm",
+      "aliases": [],
+      "display_name": "H&M India",
+      "category": "global_fast_fashion",
+      "tier": "mid",
+      "country": "SE",
+      "notes": "글로벌 SPA"
+    },
+    {
+      "id": "vero-moda-india",
+      "primary_handle": "veromodaindia",
+      "aliases": [],
+      "display_name": "Vero Moda India",
+      "category": "global_fast_fashion",
+      "tier": "mid",
+      "country": "DK",
+      "notes": ""
+    },
+    {
+      "id": "manish-malhotra",
+      "primary_handle": "manishmalhotraworld",
+      "aliases": [],
+      "display_name": "Manish Malhotra",
+      "category": "designer",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "Bollywood 톱 couturier"
+    },
+    {
+      "id": "anamika-khanna",
+      "primary_handle": "anamikakhanna.in",
+      "aliases": [],
+      "display_name": "Anamika Khanna",
+      "category": "designer",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "aprajita-toor",
+      "primary_handle": "aprajitatoorofficial",
+      "aliases": [],
+      "display_name": "Aprajita Toor",
+      "category": "designer",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "footwear + ethnic"
+    },
+    {
+      "id": "radhika-agrawal-studio",
+      "primary_handle": "radhikaagrawalstudio",
+      "aliases": [],
+      "display_name": "Radhika Agrawal Studio",
+      "category": "designer",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "ridhi-mehra",
+      "primary_handle": "ridhimehraofficial",
+      "aliases": [],
+      "display_name": "Ridhi Mehra",
+      "category": "designer",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "label-meera-designs",
+      "primary_handle": "label.meera.designs",
+      "aliases": [],
+      "display_name": "Label Meera Designs",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "maya-designer-studio",
+      "primary_handle": "maya_designer_studio_",
+      "aliases": [],
+      "display_name": "Maya Designer Studio",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "ryree-by-shreya-deshmukh",
+      "primary_handle": "ryreebyshreyadeshmukh",
+      "aliases": [],
+      "display_name": "Ryree by Shreya Deshmukh",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "punarvika-by-reeshma",
+      "primary_handle": "punarvikabyreeshma",
+      "aliases": [],
+      "display_name": "Punarvika by Reeshma",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "motifs-by-surabhi-didwania",
+      "primary_handle": "motifsbysurabhididwania",
+      "aliases": [],
+      "display_name": "Motifs by Surabhi Didwania",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "sajni-the-designer",
+      "primary_handle": "sajni_thedesigner",
+      "aliases": [],
+      "display_name": "Sajni The Designer",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "anjana-bohra",
+      "primary_handle": "anjanabohra_official",
+      "aliases": [],
+      "display_name": "Anjana Bohra",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "isa-by-dolly-wahal",
+      "primary_handle": "isabydollywahal",
+      "aliases": [],
+      "display_name": "Isa by Dolly Wahal",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "raabta-by-rahul",
+      "primary_handle": "raabtabyrahul",
+      "aliases": [],
+      "display_name": "Raabta by Rahul",
+      "category": "designer",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "magda-butrym",
+      "primary_handle": "magdabutrym",
+      "aliases": [],
+      "display_name": "Magda Butrym",
+      "category": "global_designer",
+      "tier": "premium_everyday",
+      "country": "PL",
+      "notes": "글로벌 럭셔리"
+    },
+    {
+      "id": "lashkaraa",
+      "primary_handle": "lashkaraa",
+      "aliases": [],
+      "display_name": "Lashkaraa",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": "popular ethnic e-commerce"
+    },
+    {
+      "id": "libas",
+      "primary_handle": "libasindia",
+      "aliases": [],
+      "display_name": "Libas",
+      "category": "ethnic",
+      "tier": "value",
+      "country": "IN",
+      "notes": "mass-market ethnic"
+    },
+    {
+      "id": "lajjoo-c",
+      "primary_handle": "lajjooc",
+      "aliases": [],
+      "display_name": "Lajjoo C",
+      "category": "ethnic",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "프리미엄 컨템포러리 ethnic"
+    },
+    {
+      "id": "the-loom",
+      "primary_handle": "theloom.in",
+      "aliases": [],
+      "display_name": "The Loom",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": "큐레이션 패션 스토어"
+    },
+    {
+      "id": "kankshini-studio",
+      "primary_handle": "kankshinistudio",
+      "aliases": [],
+      "display_name": "Kankshini Studio",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "nawab-outfits",
+      "primary_handle": "nawaboutfits",
+      "aliases": [],
+      "display_name": "Nawab Outfits",
+      "category": "ethnic",
+      "tier": "value",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "aikeyah",
+      "primary_handle": "aikeyah",
+      "aliases": [],
+      "display_name": "Aikeyah",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "zohra-india",
+      "primary_handle": "zohra_india",
+      "aliases": [],
+      "display_name": "Zohra India",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "bohame",
+      "primary_handle": "bohameofficials",
+      "aliases": [],
+      "display_name": "Bohame",
+      "category": "ethnic",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "프리미엄 occasion wear"
+    },
+    {
+      "id": "f2-fusion-fashion",
+      "primary_handle": "f2fusionfashion_",
+      "aliases": [],
+      "display_name": "F2 Fusion Fashion",
+      "category": "ethnic",
+      "tier": "value",
+      "country": "IN",
+      "notes": "퓨전 ethnic"
+    },
+    {
+      "id": "begum-pret",
+      "primary_handle": "begumpret",
+      "aliases": [],
+      "display_name": "Begum Pret",
+      "category": "ethnic",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "프리미엄 pret"
+    },
+    {
+      "id": "zimal-by-junaida",
+      "primary_handle": "zimalbyjunaida",
+      "aliases": [],
+      "display_name": "Zimal by Junaida",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "rati-ethnic-store",
+      "primary_handle": "ratiethnicstore",
+      "aliases": [],
+      "display_name": "Rati Ethnic Store",
+      "category": "ethnic",
+      "tier": "value",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "mulmul",
+      "primary_handle": "shopmulmul",
+      "aliases": [],
+      "display_name": "Mulmul",
+      "category": "ethnic",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "프리미엄 코튼 ethnic"
+    },
+    {
+      "id": "morpankhi-boutique",
+      "primary_handle": "morpankhiboutique",
+      "aliases": [],
+      "display_name": "Morpankhi Boutique",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "beautiful-butterflies",
+      "primary_handle": "beautifulbutterflies.in",
+      "aliases": [],
+      "display_name": "Beautiful Butterflies",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "our-chhabi",
+      "primary_handle": "our_chhabi",
+      "aliases": [],
+      "display_name": "Our Chhabi",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "ethnc",
+      "primary_handle": "ethncofficialpk",
+      "aliases": [],
+      "display_name": "Ethnc",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "PK",
+      "notes": "Pakistani ethnic — 검토 시 IN scope 인지 확인"
+    },
+    {
+      "id": "faisal-kurta-design",
+      "primary_handle": "faisal_kurta_design44",
+      "aliases": [],
+      "display_name": "Faisal Kurta Design",
+      "category": "ethnic",
+      "tier": "value",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "jolly-for-her",
+      "primary_handle": "jollyforher",
+      "aliases": [],
+      "display_name": "Jolly For Her",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "aeqeaa",
+      "primary_handle": "aeqeaa",
+      "aliases": [],
+      "display_name": "Aeqeaa",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "chorus-world",
+      "primary_handle": "chorusworld",
+      "aliases": [],
+      "display_name": "Chorus World",
+      "category": "ethnic",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "tribe-by-amrapali",
+      "primary_handle": "tribebyamrapali",
+      "aliases": [],
+      "display_name": "Tribe by Amrapali",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": "Amrapali 의 silver line"
+    },
+    {
+      "id": "shri-paramani-jewels",
+      "primary_handle": "shriparamanijewels",
+      "aliases": [],
+      "display_name": "Shri Paramani Jewels",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "jiza-jewellery-studio",
+      "primary_handle": "jizajewellerystudio",
+      "aliases": [],
+      "display_name": "Jiza Jewellery Studio",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "shree-jewellers",
+      "primary_handle": "shreejewellersofficial",
+      "aliases": [],
+      "display_name": "Shree Jewellers",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "tamannaah-fine-jewellery",
+      "primary_handle": "tamannaahfinejewellery",
+      "aliases": [],
+      "display_name": "Tamannaah Fine Jewellery",
+      "category": "jewelry",
+      "tier": "premium_everyday",
+      "country": "IN",
+      "notes": "셀럽 brand"
+    },
+    {
+      "id": "maya-sanghavi-jewels",
+      "primary_handle": "mayasanghavijewels",
+      "aliases": [],
+      "display_name": "Maya Sanghavi Jewels",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "rasa-silver-jewels",
+      "primary_handle": "rasasilverjewels",
+      "aliases": [],
+      "display_name": "Rasa Silver Jewels",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "sanzany-jewels",
+      "primary_handle": "sanzanyjewels",
+      "aliases": [],
+      "display_name": "Sanzany Jewels",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "raj-jewellery",
+      "primary_handle": "rajjewellery",
+      "aliases": [],
+      "display_name": "Raj Jewellery",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "minerali-store",
+      "primary_handle": "minerali_store",
+      "aliases": [],
+      "display_name": "Minerali Store",
+      "category": "jewelry",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "swarovski",
+      "primary_handle": "swarovski",
+      "aliases": [],
+      "display_name": "Swarovski",
+      "category": "jewelry",
+      "tier": "premium_everyday",
+      "country": "AT",
+      "notes": "글로벌 crystal/jewelry"
+    },
+    {
+      "id": "aquazzura",
+      "primary_handle": "aquazzura",
+      "aliases": [],
+      "display_name": "Aquazzura",
+      "category": "accessory",
+      "tier": "premium_everyday",
+      "country": "IT",
+      "notes": "글로벌 luxury shoes"
+    },
+    {
+      "id": "luxottica",
+      "primary_handle": "luxottica",
+      "aliases": [],
+      "display_name": "Luxottica",
+      "category": "accessory",
+      "tier": "premium_everyday",
+      "country": "IT",
+      "notes": "글로벌 eyewear"
+    },
+    {
+      "id": "her-treasure",
+      "primary_handle": "hertreasure.in",
+      "aliases": [],
+      "display_name": "Her Treasure",
+      "category": "accessory",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "inga-leathers",
+      "primary_handle": "ingaleathers",
+      "aliases": [],
+      "display_name": "Inga Leathers",
+      "category": "accessory",
+      "tier": "mid",
+      "country": "IN",
+      "notes": ""
+    },
+    {
+      "id": "cmr-shopping-mall",
+      "primary_handle": "cmrshoppingmall",
+      "aliases": [],
+      "display_name": "CMR Shopping Mall",
+      "category": "retail",
+      "tier": "mid",
+      "country": "IN",
+      "notes": "Indian retail chain"
+    }
+  ]
+}

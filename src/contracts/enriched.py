@@ -56,7 +56,10 @@ class EnrichedContentItem(BaseModel):
     embellishment_intensity: EmbellishmentIntensity | None = None
     occasion: Occasion | None = None
     styling_combo: StylingCombo | None = None
-    brand: BrandInfo | None = None
+
+    # M3.F brand registry — 한 post 에 여러 brand 가능 (haul / collab / styled-by).
+    # account_handle + caption @mention 모두 dedup 수집. 매칭 0건 시 빈 list.
+    brands: list[BrandInfo] = Field(default_factory=list)
 
     # post-level palette (2026-04-24 신설) — canonicals[*].palette 들을 ΔE76 greedy merge.
     # multi-outfit 전제, max 3 cluster. B3 build_palette 에서 채움.

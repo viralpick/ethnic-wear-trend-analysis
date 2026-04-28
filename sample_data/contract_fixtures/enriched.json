@@ -23,10 +23,12 @@
   "embellishment_intensity": "everyday",
   "occasion": "office",
   "styling_combo": "with_palazzo",
-  "brand": {
-    "name": "Lucknowi Studio",
-    "tier": "mid"
-  },
+  "brands": [
+    {
+      "name": "Lucknowi Studio",
+      "tier": "mid"
+    }
+  ],
   "trend_cluster_key": "kurta_set__chikankari__cotton",
   "classification_method_per_attribute": {
     "garment_type": "rule",

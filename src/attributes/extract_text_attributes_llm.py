@@ -141,6 +141,8 @@ def _merge_llm_result(state: AttributeExtractionState, result: LLMExtractionResu
     if state.styling_combo is None and result.styling_combo is not None:
         state.styling_combo = result.styling_combo
         state.method_per_attribute["styling_combo"] = ClassificationMethod.LLM
-    if state.brand is None and result.brand_mentioned:
-        state.brand = BrandInfo(name=result.brand_mentioned)  # tier 매핑은 후처리
+    # LLM 의 brand_mentioned (free text) 는 rule 단계 brands 가 비어있을 때만 1건 fallback.
+    # tier 미매핑 — 향후 registry 매칭으로 보강 가능.
+    if not state.brands and result.brand_mentioned:
+        state.brands = [BrandInfo(name=result.brand_mentioned)]
         state.method_per_attribute["brand"] = ClassificationMethod.LLM
