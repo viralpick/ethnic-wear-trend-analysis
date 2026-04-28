@@ -17,6 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import product
 
+from clustering.assign_trend_cluster import assign_shares
 from contracts.common import ContentSource
 
 
@@ -165,6 +166,26 @@ def aggregate_representatives(
             member_count=len({r.item_id for r in rows}),
         ))
     return out
+
+
+def item_cluster_shares(item: ItemDistribution) -> dict[str, float]:
+    """Phase α (2026-04-28): item → cluster_key 별 raw share dict (multiplier 없음).
+
+    pipeline_spec §2.4 line 252-255 의 contribution-weighted score 입력용 — 1 item
+    의 G/T/F 분포가 cross-product 으로 여러 cluster_key 에 share 로 fan-out.
+    representative_key 와 cluster_key 는 동일 포맷 (`g__t__f`) 이므로
+    `assign_shares` 위임 — cross-product 로직 single source.
+
+    contribution = share × multiplier × item_base_unit 인데, score 합산은 share
+    만 보면 됨 (multiplier 는 representative 적재 단위, score 는 item 의 representative
+    참여 확률 그대로 가중). 따라서 raw share 만 반환.
+
+    G/T/F 한 distribution 이라도 비면 빈 dict (N<3 정책 — `_item_contributions` /
+    `assign_shares` 와 동일).
+
+    Phase β 에서 build_cluster_summary 가 이 함수로 fan-out 호출 예정.
+    """
+    return assign_shares(item.garment_type, item.technique, item.fabric)
 
 
 def top_evidence_per_source(

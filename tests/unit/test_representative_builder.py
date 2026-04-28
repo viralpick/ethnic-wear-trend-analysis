@@ -17,6 +17,7 @@ from aggregation.representative_builder import (
     RepresentativeContribution,
     aggregate_representatives,
     build_contributions,
+    item_cluster_shares,
     multiplier_for_n,
     representative_key,
     top_evidence_per_source,
@@ -184,3 +185,58 @@ def test_aggregate_deterministic_sort() -> None:
     aggs = aggregate_representatives(build_contributions(items))
     keys = [a.representative_key for a in aggs]
     assert keys == sorted(keys)  # deterministic ascending
+
+
+# --------------------------------------------------------------------------- #
+# Phase α (2026-04-28) — item_cluster_shares (share-weighted summary 입력)
+# --------------------------------------------------------------------------- #
+
+
+def test_item_cluster_shares_matches_spec_cross_product() -> None:
+    item = ItemDistribution(
+        item_id="i1",
+        source=ContentSource.INSTAGRAM,
+        garment_type={"kurta": 0.7, "saree": 0.3},
+        technique={"block_print": 1.0},
+        fabric={"cotton": 0.6, "silk": 0.4},
+    )
+
+    shares = item_cluster_shares(item)
+
+    assert shares == {
+        "kurta__block_print__cotton": 0.7 * 1.0 * 0.6,
+        "kurta__block_print__silk":   0.7 * 1.0 * 0.4,
+        "saree__block_print__cotton": 0.3 * 1.0 * 0.6,
+        "saree__block_print__silk":   0.3 * 1.0 * 0.4,
+    }
+    assert abs(sum(shares.values()) - 1.0) < 1e-9
+
+
+def test_item_cluster_shares_empty_when_n_lt_3() -> None:
+    # build_contributions 와 동일 정책 — N<3 빈 dict.
+    item = ItemDistribution(
+        item_id="i1",
+        source=ContentSource.INSTAGRAM,
+        garment_type={"kurta": 1.0},
+        technique={},
+        fabric={"cotton": 1.0},
+    )
+
+    assert item_cluster_shares(item) == {}
+
+
+def test_item_cluster_shares_no_multiplier_applied() -> None:
+    # build_contributions 의 contribution = share × multiplier(=5.0). raw share 만 반환.
+    item = ItemDistribution(
+        item_id="i1",
+        source=ContentSource.INSTAGRAM,
+        garment_type={"kurta": 1.0},
+        technique={"chikankari": 1.0},
+        fabric={"cotton": 1.0},
+    )
+
+    assert item_cluster_shares(item) == {"kurta__chikankari__cotton": 1.0}
+    # build_contributions 는 동일 input 으로 contribution=5.0 (× multiplier).
+    [contrib] = build_contributions([item])
+    assert contrib.contribution == 5.0
+    assert contrib.match_share == 1.0

@@ -25,7 +25,16 @@ def build_exact_key(
     garment_type: GarmentType, technique: Technique, fabric: Fabric
 ) -> str:
     """spec §5.1 — '{garment_type}__{technique}__{fabric}' 완전 키."""
-    return f"{garment_type.value}__{technique.value}__{fabric.value}"
+    return build_exact_key_strs(garment_type.value, technique.value, fabric.value)
+
+
+def build_exact_key_strs(g: str, t: str, f: str) -> str:
+    """문자열 버전 — 분포 dict 의 key 가 이미 enum.value 인 경우 (assign_shares) 용.
+
+    `build_exact_key` 와 같은 포맷이지만 enum 변환을 거치지 않음. cluster_key 포맷
+    변경 시 두 함수가 동시에 따라간다.
+    """
+    return f"{g}__{t}__{f}"
 
 
 def _build_partial_key(
@@ -116,3 +125,47 @@ def assign_cluster(
 
     # PARTIAL path — weak signal, keep pipeline flowing
     return assign_partial(garment_type, technique, fabric, cluster_totals)
+
+
+# --------------------------------------------------------------------------- #
+# Phase α (2026-04-28): share-weighted assign — N:N path
+# --------------------------------------------------------------------------- #
+# pipeline_spec §2.4 line 252-255: representative score 입력은 contribution-
+# weighted. 1 item 의 G/T/F 분포 dict 가 cross-product 으로 여러 cluster_key 에
+# 부분 share 로 fan-out. winner-takes-all (assign_cluster) 와 평행 — Phase β
+# (build_cluster_summary share-weighted fan-out) 가 wire 할 때까지 호출자 없음.
+
+def assign_shares(
+    garment_dist: dict[str, float],
+    technique_dist: dict[str, float],
+    fabric_dist: dict[str, float],
+    *,
+    min_share: float = 0.0,
+) -> dict[str, float]:
+    """G/T/F 분포 dict → exact cluster_key 별 share dict (cross-product).
+
+    - input 셋 중 하나라도 빈 dict 면 N<3 → 빈 결과 (현 phase 정책 = N=3 만 emit,
+      representative_builder._item_contributions 와 동일).
+    - share = gp × tp × fp. min_share 이하는 drop (default 0 → 0 share 만 drop).
+    - cluster_key 포맷은 `assign_exact` (`build_exact_key`) 와 동일 — string 단위
+      `g__t__f` (enum value 가 이미 들어와 있다고 가정).
+    - 결과 share 합 ≤ 1.0 (input 분포 합 = 1.0 일 때 정확히 1.0).
+    """
+    if not garment_dist or not technique_dist or not fabric_dist:
+        return {}
+
+    out: dict[str, float] = {}
+    for g, gp in garment_dist.items():
+        if gp <= 0.0:
+            continue
+        for t, tp in technique_dist.items():
+            if tp <= 0.0:
+                continue
+            for f, fp in fabric_dist.items():
+                if fp <= 0.0:
+                    continue
+                share = gp * tp * fp
+                if share <= min_share:
+                    continue
+                out[build_exact_key_strs(g, t, f)] = share
+    return out
