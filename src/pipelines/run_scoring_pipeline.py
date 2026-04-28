@@ -33,6 +33,7 @@ from scoring.direction import (
     classify_weekly_direction,
 )
 from scoring.score_history import ScoreHistory
+from scoring.score_history_weekly import WeeklyScoreHistory
 from settings import ScoringConfig, Settings, load_settings
 from utils.logging import get_logger
 
@@ -245,6 +246,8 @@ def score_and_export(
     """공용 진입점 — daily pipeline 에서도 호출."""
     history_path = output_root / "score_history.json"
     history = ScoreHistory(history_path)
+    weekly_history_path = output_root / "score_history_weekly.json"
+    weekly_history = WeeklyScoreHistory(weekly_history_path)
 
     grouped = group_by_cluster(enriched)
     contexts = _build_contexts(grouped, target_date, settings.scoring, history)
@@ -265,22 +268,35 @@ def score_and_export(
     summaries.sort(key=lambda s: -s.score)
 
     # score_history 갱신 후 저장 (다음 실행의 direction + momentum 계산 기반)
+    # weekly_history 도 함께 갱신 — sink 활성화 여부와 무관하게 trajectory 데이터 누적
+    # (Step 7.7 결정: sink_runner 가 자가 update 시 sink 분기에 따라 trajectory 가
+    # 비결정론적이 됨. score_and_export 에서 한 번 update 하면 sink=none 도 누적).
     ctx_by_key = {ctx.cluster_key: ctx for ctx in contexts}
     for summary in summaries:
         ctx = ctx_by_key.get(summary.cluster_key)
         cluster_items = grouped.get(summary.cluster_key, [])
         ig_items = [i for i in cluster_items if i.normalized.source == ContentSource.INSTAGRAM]
+        hashtag_counts = _hashtag_counts(cluster_items)
+        accounts = [
+            i.normalized.account_handle for i in ig_items
+            if i.normalized.account_handle
+        ]
         history.update(
             summary.cluster_key, target_date, summary.score,
             post_count=ctx.post_count_today if ctx else 0,
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
-            hashtag_counts=_hashtag_counts(cluster_items),
-            accounts=[
-                i.normalized.account_handle for i in ig_items
-                if i.normalized.account_handle
-            ],
+            hashtag_counts=hashtag_counts,
+            accounts=accounts,
+        )
+        weekly_history.update_weekly(
+            summary.cluster_key, target_date, summary.score,
+            post_count=ctx.post_count_today if ctx else 0,
+            youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
+            hashtag_counts=hashtag_counts,
+            accounts=accounts,
         )
     history.save()
+    weekly_history.save()
 
     path = write_summaries(
         output_root, target_date, summaries, filename=settings.export.summaries_filename

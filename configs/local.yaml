@@ -2,6 +2,8 @@
 paths:
   sample_data: sample_data
   outputs: outputs
+  # M3.F brand registry — handle/alias → BrandInfo lookup. None 이면 brand 추출 skip.
+  brand_registry: data/brand_registry.json
 
 unknown_signals:
   # spec §4.2 — 3일 rolling window에서 count ≥ 10 이면 리뷰 큐로 올림.
@@ -14,7 +16,8 @@ logging:
 # --------------------------------------------------------------------------- #
 # M3.E — Raw → Normalized 단계의 파생 분류 규칙
 # haul_tags: HASHTAG_TRACKING 중 이 태그가 하나라도 섞이면 HASHTAG_HAUL 로 승격.
-# roadmap seed (5개) + 2026-04-24 실 DB 1,139 post 분포 조사에서 추가 (10개) = 15개.
+# roadmap seed (5) + 4/24 1,139 post 분포 조사 (10) + 4/28 M3.F trend_hashtags
+# 자동 추출 (6: *haul$/*finds$/tryon* substring + ethnic_share≥0.6 + n≥3) = 21개.
 # 모두 lowercase, `#` 없이. 로더 스키마는 ajio/kurta/ethnic haul 미관측이지만 미래 수집 대비 유지.
 # --------------------------------------------------------------------------- #
 normalization:
@@ -34,6 +37,13 @@ normalization:
     - flipkartfinds
     - budgetfinds
     - whatiorderedvswhatigot
+    # 4/28 M3.F 자동 확장 (6)
+    - amazonhaul
+    - tryonhaul
+    - ethnicwearhaul
+    - haulvideo
+    - festivehaul
+    - earringhaul
 
 # --------------------------------------------------------------------------- #
 # Step 3-B (scoring / vlm / palette / export / pipeline) 설정
@@ -156,10 +166,12 @@ vision_llm:
   provider: gemini
   model_id: gemini-2.5-flash
   # 프롬프트 수정 시 반드시 bump — src/vision/prompts.py::PROMPT_VERSION 과 일치해야 함.
-  # v0.4 (Color 3층 재설계 Phase A3): upper_is_ethnic / lower_is_ethnic 필드 추가 +
-  # color_preset_picks_top3 "1~3 동적 pick" 로 완화. cache key 에 prompt_version 포함이라
-  # bump 시 v0.3 cache 자동 무효화.
-  prompt_version: v0.4
+  # v0.8 (2026-04-28, M3.I styling_combo P1 파생): schema 슬롯 2개 추가 —
+  # (1) outer_layer (단일 word: dupatta/shawl/jacket/cardigan/nehru/shrug 등 traditional
+  #     drape 또는 outer 의류, 없으면 null), (2) is_co_ord_set (bool — upper+lower 가
+  #     동일 fabric/print/색조로 의도적으로 매칭된 set 여부). 색 픽 규칙은 v0.7 그대로
+  #     (color regression 방지). v0.7 cache 자동 무효화.
+  prompt_version: v0.8
   # LocalJSONCache 저장 루트. outputs/ 하위 (gitignore 대상).
   cache_dir: outputs/llm_cache
 
@@ -286,3 +298,17 @@ vision:
   #   초과하면 drop (배경 오분류 또는 전체 의류 flat shot).
   min_skin_ratio_for_person: 0.005
   max_garment_ratio_for_person: 0.90
+
+  # M3.G — IG Reel / IG carousel video / YT 영상 frame sampling.
+  # 영상 1건 당 n_candidate 균등 sampling → quality score (Laplacian + brightness gate)
+  # → scene diversity NMS (HSV H+S corr) → top n_final 만 Pipeline B 통과.
+  # 길이 무관 cost 일정: decode 50 × ~10ms ≈ 500ms / 영상.
+  video_frame:
+    n_candidate: 50
+    n_final: 20
+    blur_min: 100.0           # Laplacian variance < 100 = motion blur drop
+    brightness_range: [30.0, 225.0]  # 30 미만 under / 225 초과 over exposure drop
+    # 같은 장면 best frame 중복 차단 (HSV H+S corr ≥ 0.85 = 같은 장면).
+    # 0.85 = 강한 컷 차단 + 같은 의상 다른 각도는 통과 (fashion 영상 typical).
+    scene_corr_max: 0.85
+    histogram_bins: 32

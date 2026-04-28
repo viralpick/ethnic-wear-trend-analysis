@@ -1,7 +1,7 @@
 """StarRocks raw loader — png DB 직접 쿼리로 RawDailyBatch 를 반환.
 
 크리덴셜 (.env 또는 환경 변수):
-  STARROCKS_HOST, STARROCKS_PORT, STARROCKS_USER, STARROCKS_PASSWORD, STARROCKS_DATABASE
+  STARROCKS_HOST, STARROCKS_PORT, STARROCKS_USER, STARROCKS_PASSWORD, STARROCKS_RAW_DATABASE
 
 로드 모드 (--window-mode):
   count: posting_at 오름차순 정렬 후 LIMIT/OFFSET. batch_index = (target_date - collection_start).days.
@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 _HASHTAG_RE = re.compile(r"#\w+")
 _YT_VIDEO_ID_RE = re.compile(r"[?&]v=([\w-]+)")
 
+# IG download_urls 가 image+video 혼입 (jpg/mp4 한 row 안에 섞임 — IG carousel 구조).
+# loader 에서 확장자 기반으로 split. 알려지지 않은 확장자는 image_urls 로 분류 (보수).
+_VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mov", ".webm", ".m4v")
+
 # spec §3.1 C — Bollywood 디코딩 계정 5개 (소문자 handle, @ 제외)
 _BOLLYWOOD_HANDLES: frozenset[str] = frozenset({
     "bollywoodwomencloset",
@@ -61,6 +65,20 @@ def _split_pipe(cell: str) -> list[str]:
     return [x.strip() for x in (cell or "").split("|") if x.strip()]
 
 
+def _split_image_video(urls: list[str]) -> tuple[list[str], list[str]]:
+    """확장자 기반으로 (images, videos) 분리. unknown 확장자는 images 쪽 (보수)."""
+    images: list[str] = []
+    videos: list[str] = []
+    for url in urls:
+        # query string 제거 후 lowercase 비교 (Azure Blob SAS query 등 대응).
+        path = url.split("?", 1)[0].lower()
+        if path.endswith(_VIDEO_EXTENSIONS):
+            videos.append(url)
+        else:
+            images.append(url)
+    return images, videos
+
+
 def _source_type(entry: str, user: str) -> InstagramSourceType:
     if entry == "hashtag":
         return InstagramSourceType.HASHTAG_TRACKING
@@ -71,12 +89,14 @@ def _source_type(entry: str, user: str) -> InstagramSourceType:
 
 def _build_ig_post(row: dict[str, Any]) -> RawInstagramPost | None:
     try:
+        images, videos = _split_image_video(_split_csv(row["download_urls"] or ""))
         return RawInstagramPost(
             post_id=row["id"],
             source_type=_source_type(row["entry"] or "profile", row["user"] or ""),
             account_handle=row["user"] or None,
             account_followers=int(row["follower_count"] or 0),
-            image_urls=_split_csv(row["download_urls"] or ""),
+            image_urls=images,
+            video_urls=videos,
             caption_text=row["content"] or "",
             hashtags=_HASHTAG_RE.findall(row["content"] or ""),
             likes=int(row["like_count"] or 0),
@@ -99,6 +119,9 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
         logger.info("starrocks_yt_skip id=%s reason=no_video_id url=%s", row.get("id"), url[:60])
         return None
     try:
+        # M3.H — YT 도 download_urls 가 mp4. IG 와 달리 video 만 (image 혼입 없음).
+        # 확장자 검사로 video 만 필터 (보수: 알 수 없는 확장자는 drop).
+        _, videos = _split_image_video(_split_csv(row.get("download_urls") or ""))
         return RawYouTubeVideo(
             video_id=match.group(1),
             channel=row["channel"] or "",
@@ -113,6 +136,7 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
             published_at=_parse_yyyymmdd(row["upload_date"])
             if row.get("upload_date")
             else datetime.now(timezone.utc),
+            video_urls=videos,
         )
     except Exception as exc:
         logger.info("starrocks_yt_skip id=%s reason=%s", row.get("id"), exc)
@@ -167,7 +191,7 @@ class StarRocksRawLoader:
             port=int(os.environ.get("STARROCKS_PORT", "9030")),
             user=os.environ["STARROCKS_USER"],
             password=os.environ["STARROCKS_PASSWORD"],
-            database=os.environ.get("STARROCKS_DATABASE", "png"),
+            database=os.environ.get("STARROCKS_RAW_DATABASE", "png"),
             window_mode=window_mode,
             page_size=page_size,
             window_days=window_days,
@@ -225,7 +249,7 @@ class StarRocksRawLoader:
         sql = """
             SELECT id, url, channel, title, description, tags,
                    thumbnail_url, upload_date, view_count, like_count,
-                   comment_count, comments
+                   comment_count, comments, download_urls
             FROM india_ai_fashion_youtube_posting
             WHERE upload_date IS NOT NULL AND upload_date != ''
             ORDER BY upload_date ASC, created_at ASC
@@ -272,7 +296,7 @@ class StarRocksRawLoader:
         sql = """
             SELECT id, url, channel, title, description, tags,
                    thumbnail_url, upload_date, view_count, like_count,
-                   comment_count, comments
+                   comment_count, comments, download_urls
             FROM india_ai_fashion_youtube_posting
             WHERE upload_date >= %s AND upload_date <= %s
             ORDER BY upload_date ASC, created_at ASC

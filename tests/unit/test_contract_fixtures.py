@@ -57,7 +57,7 @@ def test_enriched_fixture_has_text_based_attrs_and_cluster() -> None:
     assert item.embellishment_intensity is not None
     assert item.occasion is not None
     assert item.styling_combo is not None
-    assert item.brand is not None
+    assert item.brands  # M3.F: list (1+ brand)
 
     assert item.trend_cluster_key == "kurta_set__chikankari__cotton"
 

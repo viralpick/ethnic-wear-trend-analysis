@@ -33,6 +33,8 @@ def _find_repo_root(start: Path | None = None) -> Path:
 class Paths(BaseModel):
     sample_data: Path
     outputs: Path
+    # M3.F — brand registry JSON 경로. None 이면 brand 추출 skip (backwards-compat).
+    brand_registry: Path | None = None
 
 
 class UnknownSignalsConfig(BaseModel):
@@ -205,6 +207,34 @@ class DynamicPaletteConfig(BaseModel):
     min_pixels: int = 150
 
 
+class HybridPaletteConfig(BaseModel):
+    """Phase 1 per-object β-hybrid + Phase 3 통합 weighted KMeans 의 임계 묶음.
+
+    Phase 1 (vision/hybrid_palette.py) 의 R3 drop / R1 anchor merge 양쪽이 같은 ΔE76
+    임계를 공유 — pick 과 cluster LAB 의 매칭 임계 ("pick_match" 네이밍).
+
+    R2 재설계 (2026-04-26):
+      - 원색 + share ≥ r2_min_share 면 독립 보존 (Gemini 가 놓친 진짜 색).
+      - 원색 아닌 cluster 는 anchor 로 머지 — Δh ≤ hue_near_deg 면 양방향 OK,
+        그 외에는 "음영의 정의" 강제 (anchor.L > cluster.L AND anchor.chroma > cluster.chroma).
+      - 머지 후보 중 ΔE76 가 r2_merge_deltae76 이내 만 살린다.
+      - 머지 못한 잔여는 etc bucket → aggregator 가 cut_off_share 에 합산.
+
+    default 는 vision/hybrid_palette.py 의 모듈 상수 (R3_DROP_DELTAE76=28.0,
+    R2_MIN_SHARE=0.10, CHROMA_VIVID=15.0, HUE_NEAR_DEG=30.0, R2_MERGE_DELTAE76=40.0) 와
+    일치. settings 가 vision 을 import 하면 격리 규칙 위반이라 hardcode. drift 방지는
+    pinning 테스트 (`test_hybrid_config_default_matches_module_const`).
+
+    2026-04-27: pick_match 25→28 (rani_pink ΔE76=26.2 보더라인 살리려고 사용자 결정).
+    """
+    pick_match_deltae76: float = 28.0
+    r2_min_share: float = 0.10
+    chroma_vivid: float = 15.0
+    hue_near_deg: float = 30.0
+    r2_merge_deltae76: float = 40.0
+    top_n: int = 3
+
+
 class InstanceConfig(BaseModel):
     """phase 3 — (frame × person × garment_class) instance 기반 palette 설정."""
     single_color_max_delta_e: float = 8.0   # instance 내 top chip 간 ΔE 미만이면 단색 판정
@@ -278,12 +308,31 @@ class SceneFilterConfig(BaseModel):
     min_person_bbox_side_px: int = 80
 
 
+class VideoFrameConfig(BaseModel):
+    """영상 frame sampling/scoring 파라미터 (IG Reel / IG carousel video / YT 영상).
+
+    `vision/video_frame_selector.py::VideoFrameSelectorConfig` 와 1:1 매핑. 영상 1건 당
+    n_candidate 균등 sampling → quality score (Laplacian + brightness gate) → scene
+    diversity NMS (HSV H+S corr) → top n_final.
+    """
+    n_candidate: int = 50
+    n_final: int = 20
+    blur_min: float = 100.0
+    brightness_range: tuple[float, float] = (30.0, 225.0)
+    # scene change 임계 (cv2.HISTCMP_CORREL ∈ [-1,1]). 0.85 = 강한 컷 차단 + 같은 의상
+    # 다른 각도는 통과 (fashion 영상 typical).
+    scene_corr_max: float = 0.85
+    histogram_bins: int = 32
+
+
 class VisionConfig(BaseModel):
     skin_lab_box: SkinLabBox
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
     dynamic_palette: DynamicPaletteConfig = DynamicPaletteConfig()
+    hybrid_palette: HybridPaletteConfig = HybridPaletteConfig()
     instance: InstanceConfig = InstanceConfig()
     scene_filter: SceneFilterConfig = SceneFilterConfig()
+    video_frame: VideoFrameConfig = VideoFrameConfig()
     # YOLO person detect 실패 시 전체 이미지를 bbox 로 간주. mirror selfie (거울 셀카) 처럼
     # YOLOv8n 이 OOD 로 놓치는 케이스 방어. segformer 가 skin/background/의류 자체적으로 분리하므로
     # 전체 이미지 → segformer 도 의류 pixel 을 제대로 뽑아낸다. IG 에 거울 셀카가 흔해 기본 True.
@@ -397,6 +446,8 @@ class Settings(BaseSettings):
             self.paths.sample_data = (repo_root / self.paths.sample_data).resolve()
         if not self.paths.outputs.is_absolute():
             self.paths.outputs = (repo_root / self.paths.outputs).resolve()
+        if self.paths.brand_registry is not None and not self.paths.brand_registry.is_absolute():
+            self.paths.brand_registry = (repo_root / self.paths.brand_registry).resolve()
         return self
 
 

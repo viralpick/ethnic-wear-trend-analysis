@@ -50,6 +50,7 @@ def normalize_instagram_post(
         text_blob=text_blob,
         hashtags=list(post.hashtags),
         image_urls=list(post.image_urls),
+        video_urls=list(post.video_urls),
         post_date=post.post_date,
         engagement_raw=engagement,
         account_followers=post.account_followers,
@@ -59,11 +60,15 @@ def normalize_instagram_post(
 
 
 def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
-    """YT: text_blob = title + description + tags, hashtags = tags as #noshape, images = []."""
+    """YT: text_blob = title + description + tags, hashtags = tags as #noshape.
+
+    M3.H — image_urls 는 빈 리스트 (YT 는 thumbnail 만, 본 컬러 추출엔 안 씀).
+    video_urls 는 download_urls 의 mp4 매핑 → VideoFrameSource 가 frame 추출 후
+    Pipeline B 가 IG 와 동일한 흐름으로 처리.
+    """
     text_blob = " ".join([video.title, video.description, *video.tags]).strip()
     tag_tokens = [t for t in (_as_hashtag_token(t) for t in video.tags) if t]
 
-    # spec §7.2 — YouTube 는 컬러 추출 안 함, 이미지 리스트는 비움.
     # engagement 프리-랭킹: view_count 가 dominant signal (추후 scoring 에서 정교화).
     engagement = video.view_count + video.like_count + video.comment_count * 2
 
@@ -73,6 +78,7 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
         text_blob=text_blob,
         hashtags=tag_tokens,
         image_urls=[],
+        video_urls=list(video.video_urls),
         post_date=video.published_at,
         engagement_raw=engagement,
     )
