@@ -56,6 +56,11 @@ class AttributeExtractionState:
     method_per_attribute: dict[str, ClassificationMethod] = field(default_factory=dict)
 
     def to_enriched(self, cluster_key: str | None) -> EnrichedContentItem:
+        # ζ (2026-04-28): text-level partial 단계에서는 winner 단일 cluster_key 만
+        # 알 수 있다 (G/T/F cross-product fan-out 은 vision 후 _apply_extraction_result
+        # 에서 _vision_reassign_cluster_shares 로 채움). single-entry shares 로 시작 →
+        # vision 단계에서 dict 갱신.
+        shares: dict[str, float] = {cluster_key: 1.0} if cluster_key else {}
         return EnrichedContentItem(
             normalized=self.normalized,
             garment_type=self.garment_type,
@@ -66,6 +71,7 @@ class AttributeExtractionState:
             styling_combo=self.styling_combo,
             brands=list(self.brands),
             trend_cluster_key=cluster_key,
+            trend_cluster_shares=shares,
             classification_method_per_attribute=dict(self.method_per_attribute),
         )
 

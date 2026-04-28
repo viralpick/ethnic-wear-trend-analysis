@@ -152,6 +152,10 @@ vlm:
   case2_per_cluster_cap: 10
   # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드).
   case1_daily_cap: 150
+  # ζ (2026-04-28): Case 2 picking 의 share threshold.
+  # trend_cluster_shares 의 share 가 이 값 미만이면 picking 후보 제외 (노이즈 차단).
+  # G/T/F partial 분포 자연 lower bound (0.6×0.5×0.5=0.15 / 0.4×0.5×0.5=0.10) 대응.
+  case2_picking_min_share: 0.10
 
 # --------------------------------------------------------------------------- #
 # Vision LLM (Phase 2) — GeminiVisionLLMClient + LocalJSONCache 설정.

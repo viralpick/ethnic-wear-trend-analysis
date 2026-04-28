@@ -1,15 +1,16 @@
-"""_vision_reassign_cluster_key pinning — 갭 #3 (B).
+"""_vision_reassign_cluster_shares + _winner_key_from_shares pinning — ζ + 갭 #3 (B).
 
-text 단계 partial cluster_key 가 vision 채움 후에도 representative_key 와 어긋나는
-문제 해소. ItemDistribution top-1 G/T/F 로 키를 재합성해서 representative_builder
-가 만드는 representative_key 와 mechanical 하게 일치시킨다.
+ζ (2026-04-28): 기존 winner-only `_vision_reassign_cluster_key` 함수가 share dict 기반
+2-step (shares 재계산 → winner derive) 으로 분리됐다. shares 는 score path / summary path
+의 fan-out 입력 (β2/β4 와 정합), trend_cluster_key 는 max-share derived 대표값.
 
 검증 axes:
-- canonicals 비어있으면 기존 키 유지 (text 결정 보존).
-- vision dist 의 G/T/F 한 axis 라도 비면 기존 키 유지 (어차피 N=3 적재 안됨).
-- text-level partial 가 vision 결과로 exact 키 승격 (canonical EXACT 정합).
-- vision raw 값이 enum 멤버에 없으면 기존 키 유지 (free-form 방어).
-- 동률 시 (-pct, value asc) 결정론적 tiebreak 으로 키 안정.
+- canonicals 비어있으면 shares 보존 (text-level 결정).
+- vision dist 의 G/T/F 한 axis 라도 비면 (N<3) shares 보존 (picking 손실 방지 — assign_shares
+  의 multiplier_ratio 0.5/0.2 가 case2_picking_min_share=0.10 cutoff 에 걸리는 문제).
+- text-level partial → vision N=3 으로 cross-product fan-out (winner-only collapse 해소 ★).
+- shares 의 max-share key 가 winner_key. 동률 시 (-pct, value asc) 결정론적 tiebreak.
+- 빈 shares dict → winner_key = None.
 """
 from __future__ import annotations
 
@@ -26,7 +27,10 @@ from contracts.common import (
 from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
 from contracts.vision import CanonicalOutfit, EthnicOutfit, OutfitMember
-from pipelines.run_daily_pipeline import _vision_reassign_cluster_key
+from pipelines.run_daily_pipeline import (
+    _vision_reassign_cluster_shares,
+    _winner_key_from_shares,
+)
 
 
 def _normalized(post_id: str = "p1") -> NormalizedContentItem:
@@ -77,19 +81,28 @@ def _canonical(outfit: EthnicOutfit) -> CanonicalOutfit:
     )
 
 
-def test_no_canonicals_keeps_existing_key() -> None:
+def _reassigned_key(item: EnrichedContentItem) -> str | None:
+    """test 편의 — 2-step 합성. 기존 _vision_reassign_cluster_key 와 동일 시그니처."""
+    return _winner_key_from_shares(_vision_reassign_cluster_shares(item))
+
+
+def test_no_canonicals_keeps_existing_shares() -> None:
+    """canonicals 비어있음 → shares 보존 (text-level 결정 그대로)."""
     item = EnrichedContentItem(
         normalized=_normalized(),
         garment_type=GarmentType.KURTA_SET,
         canonicals=[],
         trend_cluster_key="kurta_set__unknown__unknown",
+        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
     )
-    assert _vision_reassign_cluster_key(item) == "kurta_set__unknown__unknown"
+    new_shares = _vision_reassign_cluster_shares(item)
+    assert new_shares == {"kurta_set__unknown__unknown": 1.0}
+    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown__unknown"
 
 
 def test_partial_text_promoted_to_exact_after_vision() -> None:
-    # text: garment_type=KURTA_SET (rule), 나머지 None → partial 키.
-    # vision: canonical 1 개로 G/T/F 모두 enum 매핑 가능한 값.
+    # text: garment_type=KURTA_SET (rule), 나머지 None → partial.
+    # vision: canonical 1 개로 G/T/F 모두 enum 매핑 가능한 값 → N=3 cross-product fan-out.
     canonical = _canonical(
         _outfit(upper="kurta_set", fabric="cotton", technique="block_print"),
     )
@@ -101,15 +114,20 @@ def test_partial_text_promoted_to_exact_after_vision() -> None:
             "garment_type": ClassificationMethod.RULE,
         },
         trend_cluster_key="kurta_set__unknown__unknown",
+        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
     )
-    new_key = _vision_reassign_cluster_key(item)
-    assert new_key == build_exact_key(
+    new_shares = _vision_reassign_cluster_shares(item)
+    expected_key = build_exact_key(
         GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
     )
+    # N=3 cross-product 결과: G/T/F 모두 enum 매핑 → 단일 cluster_key (분포가 collapsed)
+    # → shares = {expected_key: 1.0}. multiplier_ratio = 1.0 (N=3).
+    assert new_shares == {expected_key: 1.0}
+    assert _winner_key_from_shares(new_shares) == expected_key
 
 
-def test_vision_axis_missing_keeps_existing_key() -> None:
-    # canonical 의 fabric=None → fabric distribution 비어 N<3 → 기존 키 유지.
+def test_vision_axis_missing_keeps_shares() -> None:
+    """canonical 의 fabric=None → fabric distribution 비어 N<3 → shares 보존."""
     canonical = _canonical(
         _outfit(upper="kurta_set", fabric=None, technique="block_print"),
     )
@@ -121,26 +139,17 @@ def test_vision_axis_missing_keeps_existing_key() -> None:
             "garment_type": ClassificationMethod.RULE,
         },
         trend_cluster_key="kurta_set__unknown__unknown",
+        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
     )
-    assert _vision_reassign_cluster_key(item) == "kurta_set__unknown__unknown"
+    new_shares = _vision_reassign_cluster_shares(item)
+    # N<3 → shares 보존 (picking 손실 방지 — multiplier_ratio 0.5/0.2 곱하면 0.10 cutoff
+    # 에 걸려 picking 후보 0개 됨).
+    assert new_shares == {"kurta_set__unknown__unknown": 1.0}
+    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown__unknown"
 
 
-def test_vision_freeform_value_keeps_existing_key() -> None:
-    # vision 이 enum 멤버에 없는 free-form 값을 채움 → ValueError → 기존 키 유지.
-    canonical = _canonical(
-        _outfit(upper="not_a_real_garment", fabric="cotton", technique="block_print"),
-    )
-    item = EnrichedContentItem(
-        normalized=_normalized(),
-        canonicals=[canonical],
-        trend_cluster_key="unknown__unknown__unknown",
-    )
-    assert _vision_reassign_cluster_key(item) == "unknown__unknown__unknown"
-
-
-def test_text_dominates_when_rule_weight_outweighs_vision() -> None:
-    # text=KURTA_SET (rule weight=6) + vision saree 1 canonical (작은 area).
-    # rule weight 6 > vision share, 따라서 garment top-1 = kurta_set.
+def test_text_rule_weight_dominates_vision() -> None:
+    # text=KURTA_SET (rule weight) + vision 다른 outfit 작은 area → rule 가 winner.
     canonical = _canonical(
         _outfit(
             upper="straight_kurta",
@@ -163,16 +172,20 @@ def test_text_dominates_when_rule_weight_outweighs_vision() -> None:
         trend_cluster_key=build_exact_key(
             GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
         ),
+        trend_cluster_shares={
+            build_exact_key(
+                GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
+            ): 1.0
+        },
     )
-    new_key = _vision_reassign_cluster_key(item)
-    # text rule 가 vision 보다 큼 → kurta_set 유지.
-    assert new_key == build_exact_key(
+    expected_winner = build_exact_key(
         GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
     )
+    assert _reassigned_key(item) == expected_winner
 
 
 def test_vision_overrides_when_text_method_missing() -> None:
-    # text_method 없으면 weight=0 → vision top-1 만 반영.
+    # text_method 없으면 weight=0 → vision top-1 만 winner.
     canonical = _canonical(
         _outfit(upper="anarkali", fabric="georgette", technique="thread_embroidery"),
     )
@@ -184,16 +197,18 @@ def test_vision_overrides_when_text_method_missing() -> None:
         canonicals=[canonical],
         classification_method_per_attribute={},  # method 없음 → text weight=0.
         trend_cluster_key="kurta_set__solid__cotton",
+        trend_cluster_shares={"kurta_set__solid__cotton": 1.0},
     )
-    new_key = _vision_reassign_cluster_key(item)
-    assert new_key == build_exact_key(
+    expected_winner = build_exact_key(
         GarmentType.ANARKALI, Technique.THREAD_EMBROIDERY, Fabric.GEORGETTE
     )
+    assert _reassigned_key(item) == expected_winner
 
 
 def test_tiebreak_is_deterministic_by_value_asc() -> None:
-    # 두 canonical 동률 (같은 area, 같은 n_objects) → garment_type 두 키 share 동일.
-    # tiebreak: (-pct, value asc) → "anarkali" < "kurta_set" 로 anarkali 선택.
+    # 두 canonical 동률 → garment_type 두 키 share 동일.
+    # ζ winner tiebreak: (-share, key_str asc) → "anarkali__..." < "kurta_set__..." 로
+    # anarkali key 가 winner.
     canonical_a = _canonical(
         _outfit(
             upper="kurta_set",
@@ -216,17 +231,27 @@ def test_tiebreak_is_deterministic_by_value_asc() -> None:
         normalized=_normalized(),
         canonicals=[canonical_a, canonical_b],
     )
-    new_key = _vision_reassign_cluster_key(item)
-    # garment_type tiebreak → anarkali. fabric/technique 모두 단일 cotton/block_print.
-    assert new_key == build_exact_key(
+    new_shares = _vision_reassign_cluster_shares(item)
+    # cross-product: 2 garment × 1 technique × 1 fabric = 2 cluster, share=0.5 each.
+    anarkali_key = build_exact_key(
         GarmentType.ANARKALI, Technique.BLOCK_PRINT, Fabric.COTTON
     )
+    kurta_key = build_exact_key(
+        GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
+    )
+    assert set(new_shares.keys()) == {anarkali_key, kurta_key}
+    # winner tiebreak: alpha asc → anarkali (a < k).
+    assert _winner_key_from_shares(new_shares) == anarkali_key
 
 
-def test_returns_none_when_existing_is_none_and_canonicals_empty() -> None:
+def test_winner_key_returns_none_when_shares_empty() -> None:
+    """canonicals 빈데 trend_cluster_shares 도 빈 dict (text 단계도 unclassified) → winner=None."""
     item = EnrichedContentItem(
         normalized=_normalized(),
         canonicals=[],
         trend_cluster_key=None,
+        trend_cluster_shares={},
     )
-    assert _vision_reassign_cluster_key(item) is None
+    new_shares = _vision_reassign_cluster_shares(item)
+    assert new_shares == {}
+    assert _winner_key_from_shares(new_shares) is None
