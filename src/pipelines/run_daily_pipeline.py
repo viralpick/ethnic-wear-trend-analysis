@@ -329,6 +329,12 @@ def run_representative_phase(
         return
 
     target_date = end_date  # week_start_date 계산 + score_history_weekly 갱신 기준
+    # rep phase 는 raw 를 안 읽으므로 enriched.json 도 따로 써둬야 HTML 빌더가
+    # 동일 윈도우 데이터를 읽을 수 있음 (filtered 314 개 등).
+    write_enriched(
+        settings.paths.outputs, target_date, enriched,
+        filename=settings.export.enriched_filename,
+    )
     _, summaries = score_and_export(
         enriched, settings, target_date, settings.paths.outputs
     )
@@ -565,7 +571,7 @@ _LIVE_SINKS: frozenset[str] = frozenset({"starrocks", "starrocks_insert"})
 
 
 def _validate_sink_extractor(
-    sink: str, color_extractor: str, vision_llm: str
+    sink: str, color_extractor: str, vision_llm: str, phase: str = "all",
 ) -> None:
     """`--sink starrocks{,_insert}` + fake 조합 reject (color_extractor / vision_llm 양쪽).
 
@@ -583,6 +589,9 @@ def _validate_sink_extractor(
     """
     if sink not in _LIVE_SINKS:
         return
+    if phase == "representative":
+        # phase=representative 는 raw 안 읽고 enriched JSON 만 쓰므로 extractor/llm 무관.
+        return
     missing: list[str] = []
     if color_extractor != "pipeline_b":
         missing.append("--color-extractor pipeline_b")
@@ -598,7 +607,7 @@ def _validate_sink_extractor(
 
 def main() -> None:
     args = _parse_args()
-    _validate_sink_extractor(args.sink, args.color_extractor, args.vision_llm)
+    _validate_sink_extractor(args.sink, args.color_extractor, args.vision_llm, args.phase)
     if (args.sink in ("starrocks", "starrocks_insert")
             or args.source == "starrocks" or args.blob_cache):
         # raw_loader / blob_downloader / stream_load_writer 모두 from_env() 패턴 —
