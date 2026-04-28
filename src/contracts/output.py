@@ -84,8 +84,10 @@ class TrendClusterSummary(BaseModel):
     drilldown: DrilldownPayload
 
     # 집계 지표 (spec §8.2)
-    post_count_total: int
-    post_count_today: int
+    # 옵션 C (2026-04-29): share-weighted fan-out (β2/β3/β4) 으로 fractional. γ 의
+    # ScoreHistory.post_count + ClusterScoringContext.post_count_today 와 단위 정합.
+    post_count_total: float
+    post_count_today: float
     avg_engagement_rate: float
     total_video_views: int
 

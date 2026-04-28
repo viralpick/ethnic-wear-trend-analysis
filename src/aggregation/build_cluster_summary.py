@@ -52,8 +52,9 @@ class ClusterDecision:
     lifecycle_stage: LifecycleStage
     data_maturity: DataMaturity
     display_name: str
-    post_count_total: int
-    post_count_today: int
+    # 옵션 C (2026-04-29): share-weighted fan-out (β2/β3/β4) 으로 fractional.
+    post_count_total: float
+    post_count_today: float
     avg_engagement_rate: float
     total_video_views: int
     top_video_ids: list[str]

@@ -282,14 +282,15 @@ def _decide_clusters(
             daily_change_pct=daily_change,
             weekly_change_pct=weekly_change,
             lifecycle_stage=classify_lifecycle(
-                total, int(ctx.post_count_total), "flat", settings.scoring.lifecycle
+                total, ctx.post_count_total, "flat", settings.scoring.lifecycle
             ),
             data_maturity=maturity,
             display_name=_display_name(ctx.cluster_key),
-            # Phase γ: ctx.post_count_total float → ClusterDecision int round (presentation
-            # 시점 단일 round; ClusterDecision 은 contract output 호환 int 유지).
-            post_count_total=round(ctx.post_count_total),
-            post_count_today=round(ctx.post_count_today),
+            # 옵션 C (2026-04-29): ClusterDecision / TrendClusterSummary 가 float 화 →
+            # round() 제거. score path / summary path / output contract 모두 같은
+            # share-weighted fan-out 의 fractional mass 를 그대로 보존.
+            post_count_total=ctx.post_count_total,
+            post_count_today=ctx.post_count_today,
             avg_engagement_rate=ctx.avg_engagement_rate,
             total_video_views=int(ctx.youtube_views_total),
             top_video_ids=[
