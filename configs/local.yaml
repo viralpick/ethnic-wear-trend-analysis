@@ -148,10 +148,13 @@ vlm:
   # spec §7 — 안전 기본값. 3-A 의 LLM 과 동일한 discipline.
   seed: 42
   temperature: 0
-  # Case 2: 클러스터당 top-engagement IG 포스트 처리 cap.
-  case2_per_cluster_cap: 10
-  # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드).
-  case1_daily_cap: 150
+  # Case 2: 클러스터당 top-engagement 포스트 처리 cap. M3.G/H 이후 source 별 분리축.
+  # YT 단가 ~4× (영상 1건 ≈ frame 20장 → Gemini 20회). YT 보수적 cap 으로 비용 상한 명시.
+  case2_per_cluster_cap_ig: 10
+  case2_per_cluster_cap_yt: 1
+  # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드, source 별 분리).
+  case1_daily_cap_ig: 150
+  case1_daily_cap_yt: 10
   # ζ (2026-04-28): Case 2 picking 의 share threshold.
   # trend_cluster_shares 의 share 가 이 값 미만이면 picking 후보 제외 (노이즈 차단).
   # G/T/F partial 분포 자연 lower bound (0.6×0.5×0.5=0.15 / 0.4×0.5×0.5=0.10) 대응.

@@ -6,9 +6,10 @@ Step D (2026-04-21) 리네임: 이전 VLMClient / VLMVisualResult / FakeVLMClien
 Pipeline B / 미래 VLM hybrid 모두 이 이름 뒤).
 
 spec §7.2 / §7.3:
-- YouTube 는 이 경로 호출 대상 아님 (type guard).
+- M3.G/H (2026-04-28) 이후 IG/YT 둘 다 이 경로 진입. YT 는 video_urls 의 frame 을
+  `VideoFrameSource` 가 sampling 해 Pipeline B 가 동일 흐름으로 처리.
 - 실 구현체는 `vision.pipeline_b_adapter.PipelineBColorExtractor` (vision extras 필요).
-- FakeColorExtractor 는 테스트 / color 담당자 아닌 환경의 기본값.
+- FakeColorExtractor 는 테스트 / color 담당자 아닌 환경의 기본값. source 무관 빈 결과.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from contracts.common import ContentSource, PaletteCluster
+from contracts.common import PaletteCluster
 from contracts.normalized import NormalizedContentItem
 from contracts.vision import CanonicalOutfit
 from settings import VLMConfig
@@ -56,6 +57,7 @@ class FakeColorExtractor:
 
     용도: snapshot 테스트, color 담당 아닌 환경 (vision extras 미설치) 의 daily CLI 기본값.
     실 값이 필요한 검증은 Pipeline B (vision extras 필요) 또는 per-canonical fixture 로.
+    YT video frame 처리는 PipelineBColorExtractor 만 담당 — Fake 는 source 무관 빈 결과.
     """
 
     def __init__(self, cfg: VLMConfig) -> None:
@@ -64,7 +66,6 @@ class FakeColorExtractor:
     def extract_visual(
         self, items: list[NormalizedContentItem]
     ) -> list[ColorExtractionResult]:
-        _reject_youtube(items)
         return [self._synthesize(item) for item in items]
 
     def _synthesize(self, item: NormalizedContentItem) -> ColorExtractionResult:
@@ -73,21 +74,15 @@ class FakeColorExtractor:
         return ColorExtractionResult(source_post_id=item.source_post_id)
 
 
-def _reject_youtube(items: list[NormalizedContentItem]) -> None:
-    """spec §7.2 type guard — YouTube 는 color 추출 대상이 아니다."""
-    offenders = [i.source_post_id for i in items if i.source != ContentSource.INSTAGRAM]
-    if offenders:
-        raise ValueError(
-            f"ColorExtractor invoked on non-Instagram items: {offenders}. spec §7.2 violation."
-        )
-
-
 def run_color_extraction(
     items: list[NormalizedContentItem],
     extractor: ColorExtractor,
     cap: int | None = None,
 ) -> list[ColorExtractionResult]:
-    """Case 1 / Case 2 공용 entry. cap 이 있으면 앞에서 잘라 호출."""
-    _reject_youtube(items)
+    """Case 1 / Case 2 공용 entry. cap 이 있으면 앞에서 잘라 호출.
+
+    M3.G/H (2026-04-28) 이후 IG/YT 둘 다 진입 가능 — source guard 없음. 호출자 측
+    (`_case1_targets` / `_case2_targets`) 가 source 별 cap 적용 후 합친 batch 를 넘긴다.
+    """
     bounded = items if cap is None else items[:cap]
     return extractor.extract_visual(bounded)
