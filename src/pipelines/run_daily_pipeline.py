@@ -304,6 +304,53 @@ def run_pipeline(
         log_dry_run_summary(writer, counts)
 
 
+def run_item_resync_phase(
+    settings: Settings,
+    *,
+    enriched_glob: str,
+    sink: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> None:
+    """phase=item-resync — enriched JSON 로드 후 item/group/object 만 재적재.
+
+    Gemini / blob / score 모두 호출 X. 신 코드 (vision_normalize 등) 의 enum 값으로
+    item.garment_type_dist 갱신. 새 computed_at 이라 _latest view 가 최신 row 노출.
+
+    start_date / end_date 미지정 시 모든 enriched 재적재.
+    """
+    from pipelines.load_enriched import load_enriched_files, filter_by_date_range
+    from exporters.starrocks.sink_runner import emit_items_only
+
+    pool = load_enriched_files(enriched_glob)
+    if start_date is not None and end_date is not None:
+        enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
+    else:
+        enriched = pool
+    if not enriched:
+        logger.warning(
+            "run_item_resync_phase empty enriched glob=%s start=%s end=%s",
+            enriched_glob, start_date, end_date,
+        )
+        return
+
+    if sink not in ("starrocks", "starrocks_insert", "dry_run"):
+        return
+
+    writer = _build_writer(sink)
+    counts = emit_items_only(enriched, writer)
+    if sink == "dry_run":
+        from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
+        log_dry_run_summary(writer, counts)
+    logger.info(
+        "run_item_resync_phase done enriched=%d item=%d group=%d object=%d",
+        len(enriched),
+        counts.get("item", 0),
+        counts.get("canonical_group", 0),
+        counts.get("canonical_object", 0),
+    )
+
+
 def run_representative_phase(
     settings: Settings,
     *,
@@ -431,9 +478,11 @@ def _parse_args() -> argparse.Namespace:
              "기본 1 (sequential). IO-bound (blob download + Gemini) 라 8~16 권장.",
     )
     parser.add_argument(
-        "--phase", choices=["all", "item", "representative"], default="all",
+        "--phase", choices=["all", "item", "item-resync", "representative"], default="all",
         help="pipeline phase. all=raw→enriched→item+rep 모두, "
              "item=raw→enriched→item/group/object (rep 스킵), "
+             "item-resync=enriched JSON 로드 → item/group/object 만 재적재 (raw + 신규 "
+             "Gemini 호출 0, 새 computed_at 으로 _latest view 갱신), "
              "representative=enriched JSON 로드 → rep 만 적재 (raw 안 읽음).",
     )
     parser.add_argument(
@@ -589,8 +638,8 @@ def _validate_sink_extractor(
     """
     if sink not in _LIVE_SINKS:
         return
-    if phase == "representative":
-        # phase=representative 는 raw 안 읽고 enriched JSON 만 쓰므로 extractor/llm 무관.
+    if phase in ("representative", "item-resync"):
+        # raw 안 읽고 enriched JSON 만 쓰므로 extractor/llm 무관.
         return
     missing: list[str] = []
     if color_extractor != "pipeline_b":
@@ -630,6 +679,20 @@ def main() -> None:
             start_date=start,
             end_date=end,
             sink=args.sink,
+        )
+        return
+
+    if args.phase == "item-resync":
+        if not args.enriched_glob:
+            raise SystemExit("--phase item-resync 는 --enriched-glob 필수")
+        start = datetime.strptime(args.start_date, "%Y-%m-%d").date() if args.start_date else None
+        end = datetime.strptime(args.end_date, "%Y-%m-%d").date() if args.end_date else None
+        run_item_resync_phase(
+            settings,
+            enriched_glob=args.enriched_glob,
+            sink=args.sink,
+            start_date=start,
+            end_date=end,
         )
         return
 
