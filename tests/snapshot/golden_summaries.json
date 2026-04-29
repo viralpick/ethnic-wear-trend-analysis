@@ -4,12 +4,18 @@
     "cluster_key": "kurta_set__chikankari__cotton",
     "display_name": "kurta set / chikankari / cotton",
     "date": "2026-04-21",
-    "score": 60.0,
+    "score": 40.0,
     "score_breakdown": {
       "social": 40.0,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -40,15 +46,64 @@
   },
   {
     "schema_version": "0.1.0",
+    "cluster_key": "anarkali__chikankari__organza",
+    "display_name": "anarkali / chikankari / organza",
+    "date": "2026-04-21",
+    "score": 28.488878278758563,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 13.488878278758563,
+      "cultural": 15.0,
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 0.0,
+        "new_yt_channel_ratio": 1.0
+      }
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "festive_lite": 1.0
+      },
+      "styling_distribution": {},
+      "brand_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_anarkali_festive_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1.0,
+    "post_count_today": 1.0,
+    "avg_engagement_rate": 103400.0,
+    "total_video_views": 103400
+  },
+  {
+    "schema_version": "0.1.0",
     "cluster_key": "kurta_dress__floral_print__rayon",
     "display_name": "kurta dress / floral print / rayon",
     "date": "2026-04-21",
-    "score": 45.32666594195021,
+    "score": 25.32666594195021,
     "score_breakdown": {
       "social": 25.32666594195021,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -81,15 +136,107 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "anarkali__geometric_print__rayon",
-    "display_name": "anarkali / geometric print / rayon",
+    "cluster_key": "kurta_dress__kalamkari__cotton",
+    "display_name": "kurta dress / kalamkari / cotton",
     "date": "2026-04-21",
-    "score": 34.99827879842012,
+    "score": 25.0,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 25.0,
+      "cultural": 0.0,
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 0.0,
+        "new_yt_channel_ratio": 1.0
+      }
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "office": 1.0
+      },
+      "styling_distribution": {},
+      "brand_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_office_haul_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1.0,
+    "post_count_today": 1.0,
+    "avg_engagement_rate": 191640.0,
+    "total_video_views": 191640
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "co_ord__lace_cutwork__linen",
+    "display_name": "co ord / lace cutwork / linen",
+    "date": "2026-04-21",
+    "score": 16.52711518818414,
+    "score_breakdown": {
+      "social": 0.0,
+      "youtube": 16.52711518818414,
+      "cultural": 0.0,
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 0.0,
+        "new_yt_channel_ratio": 1.0
+      }
+    },
+    "daily_direction": "flat",
+    "weekly_direction": "flat",
+    "daily_change_pct": 0.0,
+    "weekly_change_pct": 0.0,
+    "lifecycle_stage": "early",
+    "data_maturity": "bootstrap",
+    "drilldown": {
+      "color_palette": [],
+      "silhouette_distribution": {},
+      "occasion_distribution": {
+        "casual": 1.0
+      },
+      "styling_distribution": {},
+      "brand_distribution": {},
+      "top_posts": [],
+      "top_videos": [
+        "yt_linen_tryon_1"
+      ],
+      "top_influencers": []
+    },
+    "post_count_total": 1.0,
+    "post_count_today": 1.0,
+    "avg_engagement_rate": 126690.0,
+    "total_video_views": 126690
+  },
+  {
+    "schema_version": "0.1.0",
+    "cluster_key": "anarkali__zari_zardosi__jacquard",
+    "display_name": "anarkali / zari zardosi / jacquard",
+    "date": "2026-04-21",
+    "score": 14.99827879842012,
     "score_breakdown": {
       "social": 8.331612131753452,
       "youtube": 0.0,
       "cultural": 6.666666666666668,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -120,15 +267,21 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "ethnic_shirt__mirror_work__polyester_blend",
-    "display_name": "ethnic shirt / mirror work / polyester blend",
+    "cluster_key": "ethnic_shirt__chikankari__velvet",
+    "display_name": "ethnic shirt / chikankari / velvet",
     "date": "2026-04-21",
-    "score": 31.501250135884334,
+    "score": 11.501250135884336,
     "score_breakdown": {
       "social": 11.501250135884336,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -157,52 +310,21 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "anarkali__chikankari__jacquard",
-    "display_name": "anarkali / chikankari / jacquard",
-    "date": "2026-04-21",
-    "score": 28.488878278758563,
-    "score_breakdown": {
-      "social": 0.0,
-      "youtube": 13.488878278758563,
-      "cultural": 15.0,
-      "momentum": 0.0
-    },
-    "daily_direction": "flat",
-    "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
-    "weekly_change_pct": 0.0,
-    "lifecycle_stage": "early",
-    "data_maturity": "bootstrap",
-    "drilldown": {
-      "color_palette": [],
-      "silhouette_distribution": {},
-      "occasion_distribution": {
-        "festive_lite": 1.0
-      },
-      "styling_distribution": {},
-      "brand_distribution": {},
-      "top_posts": [],
-      "top_videos": [
-        "yt_anarkali_festive_1"
-      ],
-      "top_influencers": []
-    },
-    "post_count_total": 1.0,
-    "post_count_today": 1.0,
-    "avg_engagement_rate": 103400.0,
-    "total_video_views": 103400
-  },
-  {
-    "schema_version": "0.1.0",
     "cluster_key": "co_ord__block_print__linen",
     "display_name": "co ord / block print / linen",
     "date": "2026-04-21",
-    "score": 25.496597456245244,
+    "score": 5.496597456245244,
     "score_breakdown": {
       "social": 5.496597456245244,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -231,52 +353,21 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "kurta_dress__gota_patti__cotton",
-    "display_name": "kurta dress / gota patti / cotton",
+    "cluster_key": "tunic__brocade__georgette",
+    "display_name": "tunic / brocade / georgette",
     "date": "2026-04-21",
-    "score": 25.0,
-    "score_breakdown": {
-      "social": 0.0,
-      "youtube": 25.0,
-      "cultural": 0.0,
-      "momentum": 0.0
-    },
-    "daily_direction": "flat",
-    "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
-    "weekly_change_pct": 0.0,
-    "lifecycle_stage": "early",
-    "data_maturity": "bootstrap",
-    "drilldown": {
-      "color_palette": [],
-      "silhouette_distribution": {},
-      "occasion_distribution": {
-        "office": 1.0
-      },
-      "styling_distribution": {},
-      "brand_distribution": {},
-      "top_posts": [],
-      "top_videos": [
-        "yt_office_haul_1"
-      ],
-      "top_influencers": []
-    },
-    "post_count_total": 1.0,
-    "post_count_today": 1.0,
-    "avg_engagement_rate": 191640.0,
-    "total_video_views": 191640
-  },
-  {
-    "schema_version": "0.1.0",
-    "cluster_key": "tunic__chikankari__georgette",
-    "display_name": "tunic / chikankari / georgette",
-    "date": "2026-04-21",
-    "score": 21.320143493858026,
+    "score": 1.320143493858028,
     "score_breakdown": {
       "social": 1.320143493858028,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -305,15 +396,21 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "kurta_set__digital_print__chanderi",
-    "display_name": "kurta set / digital print / chanderi",
+    "cluster_key": "kurta_set__sequin_work__linen",
+    "display_name": "kurta set / sequin work / linen",
     "date": "2026-04-21",
-    "score": 20.273942819871724,
+    "score": 0.2739428198717252,
     "score_breakdown": {
       "social": 0.2739428198717252,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -342,15 +439,21 @@
   },
   {
     "schema_version": "0.1.0",
-    "cluster_key": "co_ord__lace_cutwork__chanderi",
-    "display_name": "co ord / lace cutwork / chanderi",
+    "cluster_key": "co_ord__lace_cutwork__silk",
+    "display_name": "co ord / lace cutwork / silk",
     "date": "2026-04-21",
-    "score": 20.09392325252745,
+    "score": 0.09392325252744863,
     "score_breakdown": {
       "social": 0.09392325252744863,
       "youtube": 0.0,
       "cultural": 0.0,
-      "momentum": 20.0
+      "momentum": 0.0,
+      "momentum_components": {
+        "post_growth": 0.0,
+        "hashtag_velocity": 0.0,
+        "new_ig_account_ratio": 1.0,
+        "new_yt_channel_ratio": 0.0
+      }
     },
     "daily_direction": "flat",
     "weekly_direction": "flat",
@@ -376,42 +479,5 @@
     "post_count_today": 1.0,
     "avg_engagement_rate": 259.2,
     "total_video_views": 0
-  },
-  {
-    "schema_version": "0.1.0",
-    "cluster_key": "co_ord__lace_cutwork__linen",
-    "display_name": "co ord / lace cutwork / linen",
-    "date": "2026-04-21",
-    "score": 16.52711518818414,
-    "score_breakdown": {
-      "social": 0.0,
-      "youtube": 16.52711518818414,
-      "cultural": 0.0,
-      "momentum": 0.0
-    },
-    "daily_direction": "flat",
-    "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
-    "weekly_change_pct": 0.0,
-    "lifecycle_stage": "early",
-    "data_maturity": "bootstrap",
-    "drilldown": {
-      "color_palette": [],
-      "silhouette_distribution": {},
-      "occasion_distribution": {
-        "casual": 1.0
-      },
-      "styling_distribution": {},
-      "brand_distribution": {},
-      "top_posts": [],
-      "top_videos": [
-        "yt_linen_tryon_1"
-      ],
-      "top_influencers": []
-    },
-    "post_count_total": 1.0,
-    "post_count_today": 1.0,
-    "avg_engagement_rate": 126690.0,
-    "total_video_views": 126690
   }
 ]

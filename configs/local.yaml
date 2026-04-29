@@ -131,11 +131,15 @@ scoring:
         - "#akshayatritiya2026"
         - "#goldethnic"
 
-  # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 + new_account_ratio × 0.3.
+  # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 +
+  # new_ig_account_ratio × 0.15 + new_yt_channel_ratio × 0.15. B-2 (M3.G/H 후):
+  # new_account_ratio 0.3 을 IG/YT 분리 시그널로 균등 분배. score_breakdown 의
+  # momentum_components 에서 sub-signal 별 영향 추적 가능.
   momentum_factor_weights:
     post_growth: 0.4
     hashtag_velocity: 0.3
-    new_account_ratio: 0.3
+    new_ig_account_ratio: 0.15
+    new_yt_channel_ratio: 0.15
   momentum_window_days: 7
   new_account_window_days: 90  # 이 기간 내 미등장 계정을 new로 간주
 
@@ -148,10 +152,13 @@ vlm:
   # spec §7 — 안전 기본값. 3-A 의 LLM 과 동일한 discipline.
   seed: 42
   temperature: 0
-  # Case 2: 클러스터당 top-engagement IG 포스트 처리 cap.
-  case2_per_cluster_cap: 10
-  # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드).
-  case1_daily_cap: 150
+  # Case 2: 클러스터당 top-engagement 포스트 처리 cap. M3.G/H 이후 source 별 분리축.
+  # YT 단가 ~4× (영상 1건 ≈ frame 20장 → Gemini 20회). YT 보수적 cap 으로 비용 상한 명시.
+  case2_per_cluster_cap_ig: 5
+  case2_per_cluster_cap_yt: 1
+  # Case 1: 하루 전체 미분류 포스트 처리 cap (비용 가드, source 별 분리).
+  case1_daily_cap_ig: 50
+  case1_daily_cap_yt: 10
   # ζ (2026-04-28): Case 2 picking 의 share threshold.
   # trend_cluster_shares 의 share 가 이 값 미만이면 picking 후보 제외 (노이즈 차단).
   # G/T/F partial 분포 자연 lower bound (0.6×0.5×0.5=0.15 / 0.4×0.5×0.5=0.10) 대응.

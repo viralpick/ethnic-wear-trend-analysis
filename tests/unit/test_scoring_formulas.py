@@ -33,7 +33,8 @@ def _ctx(cluster_key: str, **overrides: float | int) -> ClusterScoringContext:
         "cultural_bollywood_presence": 0.0,
         "momentum_post_growth": 0.0,
         "momentum_hashtag_velocity": 0.0,
-        "momentum_new_account_ratio": 0.0,
+        "momentum_new_ig_account_ratio": 0.0,
+        "momentum_new_yt_channel_ratio": 0.0,
         "post_count_total": 0,
         "post_count_today": 0,
         "avg_engagement_rate": 0.0,
@@ -62,7 +63,8 @@ def _cfg() -> ScoringConfig:
         cultural_bollywood_bonus=0.3,
         cultural_festivals=[],
         momentum_factor_weights=MomentumFactorWeights(
-            post_growth=0.4, hashtag_velocity=0.3, new_account_ratio=0.3
+            post_growth=0.4, hashtag_velocity=0.3,
+            new_ig_account_ratio=0.15, new_yt_channel_ratio=0.15,
         ),
         momentum_window_days=7,
         data_maturity=DataMaturityConfig(bootstrap_below_days=3, full_from_days=7),
@@ -88,10 +90,10 @@ def test_score_cultural_weighted_sum() -> None:
 
 
 def test_score_momentum_weighted_sum() -> None:
-    # 0.5 × 0.4 + 0.2 × 0.3 + 0.1 × 0.3 = 0.2 + 0.06 + 0.03 = 0.29
+    # 0.5 × 0.4 + 0.2 × 0.3 + 0.1 × 0.15 + 0.05 × 0.15 = 0.2 + 0.06 + 0.015 + 0.0075 = 0.2825
     ctx = _ctx("c1", momentum_post_growth=0.5, momentum_hashtag_velocity=0.2,
-               momentum_new_account_ratio=0.1)
-    assert score_momentum.compute(ctx, _cfg()) == pytest.approx(0.29)
+               momentum_new_ig_account_ratio=0.1, momentum_new_yt_channel_ratio=0.05)
+    assert score_momentum.compute(ctx, _cfg()) == pytest.approx(0.2825)
 
 
 def test_score_momentum_safe_growth_zero_denominator() -> None:

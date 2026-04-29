@@ -83,45 +83,66 @@ def _assign_clusters(
 
 
 def _case1_targets(
-    enriched: list[EnrichedContentItem], cap: int
+    enriched: list[EnrichedContentItem], cap_ig: int, cap_yt: int
 ) -> list[EnrichedContentItem]:
-    """Case1: IG, garment_type 가 여전히 None 인 아이템 (spec §7.2)."""
-    candidates = [
+    """Case1: garment_type 미분류 post 중 source 별 cap 적용 (spec §7.2 + M3.G/H).
+
+    M3.G/H (2026-04-28) 에서 IG/YT 둘 다 vision 흐름에 진입. cap 은 source 별로 분리해
+    YT 단가 (~4×, 영상 1건 ≈ frame 20장) 의 비용 상한을 명시한다.
+    """
+    ig = [
         e for e in enriched
         if e.normalized.source == ContentSource.INSTAGRAM and e.garment_type is None
     ]
-    return candidates[:cap]
+    yt = [
+        e for e in enriched
+        if e.normalized.source == ContentSource.YOUTUBE and e.garment_type is None
+    ]
+    return ig[:cap_ig] + yt[:cap_yt]
 
 
 def _case2_targets(
     enriched: list[EnrichedContentItem],
-    cap_per_cluster: int,
+    cap_per_cluster_ig: int,
+    cap_per_cluster_yt: int,
     min_share: float,
 ) -> list[EnrichedContentItem]:
-    """Case2: cluster 당 IG top-engagement 포스트 (spec §7.2).
+    """Case2: cluster 당 source 별 top-engagement 포스트 (spec §7.2 + M3.G/H).
 
     Color 3층 재설계 (2026-04-24) 로 post-level ColorInfo 제거, "color 아직 없는" 필터
-    탈락. B3 에서 post_palette 채우기 루틴으로 재배선 예정.
+    탈락. B3 에서 post_palette 채우기 루틴으로 재배선.
 
     ζ (2026-04-28): trend_cluster_shares.items() 순회 — share≥min_share 인 모든
     cluster 에 picking 후보 등록 (winner-only collapse 해소). N<3 partial 은 write 측에서
     {winner_key: 1.0} single-entry 로 채워져 자연스럽게 winner 단일 picking 유지.
+
+    M3.G/H (2026-04-28): IG/YT 둘 다 picking. source 별 cluster bucket + 별도 cap.
+    YT 단가 ~4× 라 YT cap 보수적 (default 1) — 분리 cap 으로 비용 상한 명시.
     """
-    by_cluster: dict[str, list[EnrichedContentItem]] = {}
+    by_cluster_ig: dict[str, list[EnrichedContentItem]] = {}
+    by_cluster_yt: dict[str, list[EnrichedContentItem]] = {}
     for item in enriched:
-        if item.normalized.source != ContentSource.INSTAGRAM:
+        source = item.normalized.source
+        if source == ContentSource.INSTAGRAM:
+            target = by_cluster_ig
+        elif source == ContentSource.YOUTUBE:
+            target = by_cluster_yt
+        else:
             continue
         for cluster_key, share in item.trend_cluster_shares.items():
             if not cluster_key or cluster_key == UNCLASSIFIED:
                 continue
             if share < min_share:
                 continue
-            by_cluster.setdefault(cluster_key, []).append(item)
+            target.setdefault(cluster_key, []).append(item)
 
     picks: list[EnrichedContentItem] = []
-    for cluster_items in by_cluster.values():
+    for cluster_items in by_cluster_ig.values():
         cluster_items.sort(key=lambda i: -i.normalized.engagement_raw)
-        picks.extend(cluster_items[:cap_per_cluster])
+        picks.extend(cluster_items[:cap_per_cluster_ig])
+    for cluster_items in by_cluster_yt.values():
+        cluster_items.sort(key=lambda i: -i.normalized.engagement_raw)
+        picks.extend(cluster_items[:cap_per_cluster_yt])
     return picks
 
 
@@ -201,17 +222,20 @@ def _run_color_extraction(
     extractor: ColorExtractor,
     settings: Settings,
 ) -> list[EnrichedContentItem]:
-    case1 = _case1_targets(enriched, settings.vlm.case1_daily_cap)
-    results1 = run_color_extraction(
-        [e.normalized for e in case1], extractor, cap=settings.vlm.case1_daily_cap
+    case1 = _case1_targets(
+        enriched,
+        cap_ig=settings.vlm.case1_daily_cap_ig,
+        cap_yt=settings.vlm.case1_daily_cap_yt,
     )
+    results1 = run_color_extraction([e.normalized for e in case1], extractor)
     enriched = _apply_extraction_result(enriched, results1)
 
     # Defensive read — case2_picking_min_share 가 인스턴스에 없는 환경 (Pydantic
     # frozen + yaml partial override 의 미해소 이슈) 대비. 기본값은 VLMConfig 정의와 동일.
     case2 = _case2_targets(
         enriched,
-        cap_per_cluster=settings.vlm.case2_per_cluster_cap,
+        cap_per_cluster_ig=settings.vlm.case2_per_cluster_cap_ig,
+        cap_per_cluster_yt=settings.vlm.case2_per_cluster_cap_yt,
         min_share=getattr(settings.vlm, "case2_picking_min_share", 0.10),
     )
     results2 = run_color_extraction([e.normalized for e in case2], extractor)

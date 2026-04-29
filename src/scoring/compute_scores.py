@@ -5,7 +5,7 @@ learned / 휴리스틱 re-ranker 일절 없음 (user mandate: explainable from r
 """
 from __future__ import annotations
 
-from contracts.output import ScoreBreakdown
+from contracts.output import MomentumComponents, ScoreBreakdown
 from scoring import score_cultural, score_momentum, score_social, score_youtube
 from scoring.cluster_context import ClusterScoringContext
 from scoring.normalize import apply_normalization
@@ -19,7 +19,11 @@ def _scale(normalized: list[float], weight_cap: float) -> list[float]:
 def score_clusters(
     contexts: list[ClusterScoringContext], cfg: ScoringConfig
 ) -> dict[str, ScoreBreakdown]:
-    """클러스터 배치 → cluster_key: ScoreBreakdown."""
+    """클러스터 배치 → cluster_key: ScoreBreakdown.
+
+    B-2 (M3.G/H 후): MomentumComponents 로 sub-signal raw 가시화. score_breakdown
+    의 momentum 합산은 그대로, IG/YT 신규 entity 시그널을 breakdown 에서 분리 추적.
+    """
     if not contexts:
         return {}
 
@@ -40,11 +44,17 @@ def score_clusters(
             youtube=youtube_scaled[i],
             cultural=cultural_scaled[i],
             momentum=momentum_scaled[i],
+            momentum_components=MomentumComponents(
+                post_growth=ctx.momentum_post_growth,
+                hashtag_velocity=ctx.momentum_hashtag_velocity,
+                new_ig_account_ratio=ctx.momentum_new_ig_account_ratio,
+                new_yt_channel_ratio=ctx.momentum_new_yt_channel_ratio,
+            ),
         )
         for i, ctx in enumerate(contexts)
     }
 
 
 def total_score(breakdown: ScoreBreakdown) -> float:
-    """ScoreBreakdown 의 4 필드 합 (0~100)."""
+    """ScoreBreakdown 의 4 필드 합 (0~100). momentum_components 는 raw 시그널 가시화용."""
     return breakdown.social + breakdown.youtube + breakdown.cultural + breakdown.momentum

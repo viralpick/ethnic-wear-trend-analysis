@@ -36,6 +36,7 @@ from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
 from contracts.output import (
     DrilldownPayload,
+    MomentumComponents,
     ScoreBreakdown,
     TrendClusterSummary,
 )
@@ -161,7 +162,11 @@ def _summary(
         date=_FIXED_DATE,
         score=score,
         score_breakdown=ScoreBreakdown(
-            social=30.0, youtube=20.0, cultural=10.0, momentum=20.0
+            social=30.0, youtube=20.0, cultural=10.0, momentum=20.0,
+            momentum_components=MomentumComponents(
+                post_growth=0.5, hashtag_velocity=0.2,
+                new_ig_account_ratio=0.1, new_yt_channel_ratio=0.0,
+            ),
         ),
         daily_direction=Direction.UP,
         weekly_direction=Direction.UP,

@@ -133,7 +133,8 @@ def _make_scoring_cfg() -> ScoringConfig:
         cultural_festival_boost=1.5,
         cultural_bollywood_bonus=0.3,
         momentum_factor_weights=MomentumFactorWeights(
-            post_growth=0.4, hashtag_velocity=0.3, new_account_ratio=0.3
+            post_growth=0.4, hashtag_velocity=0.3,
+            new_ig_account_ratio=0.15, new_yt_channel_ratio=0.15,
         ),
         momentum_window_days=7,
         data_maturity=DataMaturityConfig(bootstrap_below_days=3, full_from_days=7),

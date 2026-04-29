@@ -12,11 +12,15 @@ from settings import ScoringConfig
 
 
 def compute(cluster_ctx: ClusterScoringContext, cfg: ScoringConfig) -> float:
+    """B-2 (M3.G/H 후): new_account_ratio 0.3 → new_ig 0.15 + new_yt 0.15 분리.
+    weighted sum 은 동일 의미 (raw → minmax → weight) 유지, sub-signal 만 분리.
+    """
     w = cfg.momentum_factor_weights
     return (
         cluster_ctx.momentum_post_growth * w.post_growth
         + cluster_ctx.momentum_hashtag_velocity * w.hashtag_velocity
-        + cluster_ctx.momentum_new_account_ratio * w.new_account_ratio
+        + cluster_ctx.momentum_new_ig_account_ratio * w.new_ig_account_ratio
+        + cluster_ctx.momentum_new_yt_channel_ratio * w.new_yt_channel_ratio
     )
 
 
