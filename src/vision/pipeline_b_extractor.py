@@ -80,6 +80,15 @@ def load_models(
     """
     dev = _pick_device(device)
     yolo = YOLO("yolov8n.pt")
+    # Thread-safety pre-warm — ultralytics YOLO 의 첫 predict() 가 lazy 하게 setup_model
+    # → fuse() (delattr 'bn') 호출. multi-thread 가 첫 predict 를 동시에 부르면 delattr
+    # 가 두 번 일어나 'Conv' object has no attribute 'bn' AttributeError 발생
+    # (vision-workers > 1 race). 32×32 dummy 으로 미리 1 회 predict 해서 fuse 끝낸 후
+    # thread pool 진입.
+    import numpy as np  # noqa: I001 — vision extras
+    _warmup = np.zeros((32, 32, 3), dtype=np.uint8)
+    yolo.predict(_warmup, classes=[0], conf=0.5, verbose=False)
+
     seg_processor = SegformerImageProcessor.from_pretrained("mattmdjaga/segformer_b2_clothes")
     seg_model = SegformerForSemanticSegmentation.from_pretrained("mattmdjaga/segformer_b2_clothes")
     seg_model.eval()
