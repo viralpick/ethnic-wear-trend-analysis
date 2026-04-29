@@ -118,7 +118,48 @@ def _resolve_video_local_path(url: str) -> Path | None:
     return cached if cached.exists() else None
 
 
+def _hex_text_color(hex_v: str) -> str:
+    """배경 hex 의 luminance 기준 contrast 색상 (white/black) 결정."""
+    if not hex_v or not hex_v.startswith("#") or len(hex_v) < 7:
+        return "#000"
+    try:
+        r = int(hex_v[1:3], 16); g = int(hex_v[3:5], 16); b = int(hex_v[5:7], 16)
+    except ValueError:
+        return "#000"
+    # ITU-R BT.601 luminance
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    return "#fff" if lum < 130 else "#000"
+
+
+def _color_bar(palette: list[dict[str, Any]]) -> str:
+    """비율 기반 horizontal bar — 각 segment 너비 = share, hex + % 표기."""
+    if not palette:
+        return '<span class="muted">no palette</span>'
+    total = sum(max(c.get("share", 0.0), 0.0) for c in palette)
+    if total <= 0:
+        return '<span class="muted">no palette</span>'
+    segs = []
+    for c in palette:
+        share = max(c.get("share", 0.0), 0.0)
+        if share <= 0:
+            continue
+        hex_v = c.get("hex", "#000")
+        family = c.get("family", "")
+        pct = share / total * 100
+        text_color = _hex_text_color(hex_v)
+        segs.append(
+            f'<div class="palette-seg" '
+            f'style="width:{pct:.2f}%;background:{_esc(hex_v)};color:{text_color}" '
+            f'title="{_esc(hex_v)} share={share*100:.1f}% family={_esc(family)}">'
+            f'<span class="palette-hex">{_esc(hex_v)}</span>'
+            f'<span class="palette-pct">{share*100:.0f}%</span>'
+            f'</div>'
+        )
+    return f'<div class="palette-bar">{"".join(segs)}</div>'
+
+
 def _color_chips(palette: list[dict[str, Any]]) -> str:
+    """legacy chip 표시 — canonical detail 등 좁은 영역용. 메인 palette 는 _color_bar 사용."""
     if not palette:
         return '<span class="muted">no palette</span>'
     chips = []
@@ -322,42 +363,144 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
 </article>'''
 
 
-def _render_cluster_card(s: dict[str, Any]) -> str:
+def _item_thumbnail_src(item: dict[str, Any], html_dir: Path) -> tuple[str, str] | None:
+    """item 의 첫 thumbnail (IG=image[0], YT=video frame[0]) 와 source 라벨 반환.
+    None 이면 thumbnail 생성 실패 (blob cache 없음 등).
+    """
+    n = item["normalized"]
+    src = n.get("source", "")
+    image_urls = n.get("image_urls") or []
+    video_urls = n.get("video_urls") or []
+    # IG: image 우선
+    for url in image_urls:
+        path_only = url.split("?", 1)[0]
+        basename = Path(urlparse(path_only).path).name
+        if not basename:
+            continue
+        cached = _IMG_CACHE / basename
+        if cached.exists():
+            try:
+                rel = str(cached.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
+                return rel, src
+            except ValueError:
+                return cached.as_uri(), src
+    # YT: video → frame thumb
+    thumbs_dir = html_dir / "_video_thumbs"
+    for url in video_urls:
+        local = _resolve_video_local_path(url)
+        if local is None:
+            continue
+        thumbs = _extract_video_thumbs(local, thumbs_dir, n_frames=3)
+        if thumbs:
+            try:
+                rel = str(thumbs[0].resolve().relative_to(html_dir.resolve())).replace("\\", "/")
+                return rel, src
+            except ValueError:
+                return thumbs[0].as_uri(), src
+    return None
+
+
+def _render_contributor_thumb(
+    item: dict[str, Any], share: float, html_dir: Path,
+) -> str:
+    """contributor item 1 개를 thumbnail + share % badge 로 렌더 (cluster card 안)."""
+    pid = item["normalized"].get("source_post_id", "")
+    handle = item["normalized"].get("account_handle") or "—"
+    src = item["normalized"].get("source", "?")
+    pct = share * 100
+    thumb = _item_thumbnail_src(item, html_dir)
+    if thumb is None:
+        # thumbnail 없으면 placeholder
+        return (
+            f'<a href="#post-{_esc(pid)}" class="contrib-thumb no-thumb" '
+            f'title="@{_esc(handle)} · {pct:.1f}% contribution · {_esc(pid)}">'
+            f'<div class="thumb-placeholder">{_esc(src)[:2].upper()}</div>'
+            f'<span class="contrib-badge">{pct:.1f}%</span>'
+            f'</a>'
+        )
+    src_path, src_label = thumb
+    return (
+        f'<a href="#post-{_esc(pid)}" class="contrib-thumb" '
+        f'title="@{_esc(handle)} · {pct:.1f}% contribution · {_esc(pid)}">'
+        f'<img src="{_esc(src_path)}" loading="lazy" alt="" />'
+        f'<span class="contrib-badge src-{_esc(src_label)}">{pct:.1f}%</span>'
+        f'</a>'
+    )
+
+
+def _render_cluster_card(
+    s: dict[str, Any],
+    contributors: list[tuple[dict[str, Any], float]] | None,
+    html_dir: Path,
+    *,
+    top_n_thumb: int = 5,
+) -> str:
+    """cluster card — top contributor thumbnail 스트립 + 펼치기 가능한 전체 contributor 리스트."""
     drill = s.get("drilldown") or {}
     breakdown = s.get("score_breakdown") or {}
     breakdown_html = "".join(
         f'<tr><td>{_esc(k)}</td><td class="num">{v:.2f}</td></tr>'
         for k, v in breakdown.items()
     )
-    palette_html = _color_chips(drill.get("color_palette") or [])
-    top_posts = drill.get("top_posts") or []
-    top_videos = drill.get("top_videos") or []
+    palette_html = _color_bar(drill.get("color_palette") or [])
     top_inf = drill.get("top_influencers") or []
-    top_posts_html = "".join(
-        f'<li><a href="https://www.instagram.com/p/{_esc(p)}/" target="_blank">'
-        f'<code>{_esc(p)}</code></a></li>'
-        for p in top_posts[:5]
-    ) or '<li class="muted">∅</li>'
-    top_videos_html = "".join(
-        f'<li><a href="https://www.youtube.com/watch?v={_esc(v)}" target="_blank">'
-        f'<code>{_esc(v)}</code></a></li>'
-        for v in top_videos[:5]
-    ) or '<li class="muted">∅</li>'
     top_inf_html = "".join(
         f'<li><a href="https://www.instagram.com/{_esc(h)}/" target="_blank">@{_esc(h)}</a></li>'
         for h in top_inf[:5]
     ) or '<li class="muted">∅</li>'
+
+    contributors = contributors or []
+    n_contrib = len(contributors)
+    # contribution share normalize 후 desc 정렬 (이미 desc 라 가정하지만 방어)
+    contributors = sorted(contributors, key=lambda t: -t[1])
+
+    # IG/YT 분리해서 각 4개씩 thumbnail 표시 (1 item = 1 thumbnail)
+    ig_contribs = [(it, sh) for it, sh in contributors
+                   if it["normalized"].get("source") == "instagram"]
+    yt_contribs = [(it, sh) for it, sh in contributors
+                   if it["normalized"].get("source") == "youtube"]
+    ig_thumbs = "".join(
+        _render_contributor_thumb(it, sh, html_dir) for it, sh in ig_contribs[:top_n_thumb]
+    ) or '<span class="muted">∅</span>'
+    yt_thumbs = "".join(
+        _render_contributor_thumb(it, sh, html_dir) for it, sh in yt_contribs[:top_n_thumb]
+    ) or '<span class="muted">∅</span>'
+
+    # 펼치기: 모든 contributor (IG+YT 합산) share desc 정렬
+    full_list_rows = []
+    for it, sh in contributors:
+        n = it["normalized"]
+        pid = n.get("source_post_id", "")
+        handle = n.get("account_handle") or "—"
+        src = n.get("source", "?")
+        eng = n.get("engagement_raw", 0)
+        full_list_rows.append(
+            f'<tr>'
+            f'<td class="num">{sh*100:.1f}%</td>'
+            f'<td><span class="badge src-{_esc(src)}">{_esc(src[:2].upper())}</span></td>'
+            f'<td><a href="#post-{_esc(pid)}">@{_esc(handle)}</a></td>'
+            f'<td><code class="post-id">{_esc(pid)}</code></td>'
+            f'<td class="num"><small>eng={eng:,}</small></td>'
+            f'</tr>'
+        )
+    full_list_html = (
+        f'<table class="contrib-table"><thead>'
+        f'<tr><th>share</th><th>src</th><th>@handle</th><th>post_id</th><th>engagement</th></tr>'
+        f'</thead><tbody>{"".join(full_list_rows)}</tbody></table>'
+    ) if full_list_rows else '<span class="muted">∅</span>'
+
     return f'''
 <article class="cluster">
   <header>
     <span class="cluster-key"><code>{_esc(s.get("cluster_key"))}</code></span>
     <span class="score">{s.get("score", 0):.1f}</span>
     <span class="muted">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))} · {_esc(s.get("lifecycle_stage"))}</span>
+    <span class="muted">{n_contrib} contributors</span>
   </header>
   <div class="cluster-body">
-    <section>
-      <h4>display_name</h4>
-      <div>{_esc(s.get("display_name"))}</div>
+    <section class="full-row">
+      <h4>color_palette</h4>
+      {palette_html}
     </section>
     <section>
       <h4>breakdown</h4>
@@ -368,22 +511,24 @@ def _render_cluster_card(s: dict[str, Any]) -> str:
       <div>total={s.get("post_count_total", 0):.1f} · today={s.get("post_count_today", 0):.1f} · views={s.get("total_video_views", 0):,}</div>
     </section>
     <section>
-      <h4>color_palette</h4>
-      {palette_html}
-    </section>
-    <section>
-      <h4>top_posts (IG)</h4>
-      <ul>{top_posts_html}</ul>
-    </section>
-    <section>
-      <h4>top_videos (YT)</h4>
-      <ul>{top_videos_html}</ul>
-    </section>
-    <section>
       <h4>top_influencers</h4>
       <ul>{top_inf_html}</ul>
     </section>
-    <section>
+    <section class="full-row">
+      <h4>top contributors — Instagram (top {top_n_thumb})</h4>
+      <div class="contrib-strip">{ig_thumbs}</div>
+    </section>
+    <section class="full-row">
+      <h4>top contributors — YouTube (top {top_n_thumb})</h4>
+      <div class="contrib-strip">{yt_thumbs}</div>
+    </section>
+    <section class="full-row">
+      <details class="contributors-detail">
+        <summary>모든 contributor 펼치기 ({n_contrib}건, share desc) ▼</summary>
+        {full_list_html}
+      </details>
+    </section>
+    <section class="full-row">
       <h4>distributions</h4>
       <div class="dist-grid">
         <div><b>silhouette</b>{_dist_table(drill.get("silhouette_distribution") or {})}</div>
@@ -476,20 +621,105 @@ table.dist td:first-child { font-family: ui-monospace, monospace; }
 
 a { color: #2a5db8; text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* week selector */
+.week-selector-bar { background: #2a5db8; color: #fff; padding: 8px 12px;
+                     border-radius: 6px; margin-bottom: 12px;
+                     position: sticky; top: 0; z-index: 100; }
+.week-selector-bar select { font-size: 13px; padding: 4px 8px;
+                            border: 1px solid #fff; border-radius: 3px;
+                            background: #fff; color: #222; }
+
+.week-block { margin-top: 12px; }
+
+.cluster-body section.full-row { grid-column: 1 / -1; }
+
+/* palette horizontal bar */
+.palette-bar { display: flex; height: 36px; border-radius: 4px; overflow: hidden;
+               border: 1px solid rgba(0,0,0,0.1); width: 100%; }
+.palette-seg { display: flex; flex-direction: column; align-items: center;
+               justify-content: center; font-family: ui-monospace, monospace;
+               font-size: 10px; line-height: 1.2; min-width: 0; padding: 2px;
+               overflow: hidden; cursor: help; }
+.palette-hex { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+               max-width: 100%; }
+.palette-pct { font-weight: bold; }
+
+/* contributor thumbnail strip */
+.contrib-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.contrib-thumb { position: relative; display: inline-block; width: 90px;
+                 height: 90px; border-radius: 6px; overflow: hidden;
+                 border: 2px solid transparent; transition: transform 0.15s; }
+.contrib-thumb:hover { transform: scale(1.05); border-color: #2a5db8; }
+.contrib-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.contrib-thumb.no-thumb .thumb-placeholder { display: flex;
+                 width: 100%; height: 100%; align-items: center;
+                 justify-content: center; background: #ddd; color: #666;
+                 font-weight: bold; font-size: 14px; }
+.contrib-badge { position: absolute; bottom: 2px; right: 2px;
+                 background: rgba(0,0,0,0.75); color: #fff;
+                 padding: 1px 4px; border-radius: 3px; font-size: 10px;
+                 font-weight: bold; }
+.contrib-badge.src-instagram { border-bottom: 2px solid #e1306c; }
+.contrib-badge.src-youtube { border-bottom: 2px solid #ff0000; }
+
+/* full contributor list expander */
+.contributors-detail { background: #fafafa; border-radius: 4px;
+                       padding: 6px 10px; cursor: pointer; }
+.contributors-detail summary { font-size: 12px; font-weight: 500;
+                               color: #2a5db8; cursor: pointer; }
+.contributors-detail[open] summary { margin-bottom: 8px; }
+table.contrib-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+table.contrib-table th { text-align: left; padding: 4px 6px;
+                         border-bottom: 1px solid #ccc; background: #eef; }
+table.contrib-table td { padding: 3px 6px; border-bottom: 1px dotted #ddd;
+                         vertical-align: middle; }
+table.contrib-table tr:hover { background: #f0f7ff; }
 """
 
 
-def build_html(
-    enriched: list[dict[str, Any]], summaries: list[dict[str, Any]], html_dir: Path
+def _build_cluster_contributors(
+    enriched: list[dict[str, Any]],
+) -> dict[str, list[tuple[dict[str, Any], float]]]:
+    """cluster_key → [(item, share), ...] (share desc 정렬). enriched.trend_cluster_shares 활용."""
+    from collections import defaultdict
+    out: dict[str, list[tuple[dict[str, Any], float]]] = defaultdict(list)
+    for it in enriched:
+        shares = it.get("trend_cluster_shares") or {}
+        for ck, sh in shares.items():
+            if sh > 0:
+                out[ck].append((it, sh))
+    for ck in out:
+        out[ck].sort(key=lambda t: -t[1])
+    return dict(out)
+
+
+def _build_week_section(
+    week_idx: int,
+    label: str,
+    enriched: list[dict[str, Any]],
+    summaries: list[dict[str, Any]],
+    html_dir: Path,
 ) -> str:
-    # cluster_key 기준 그룹 정렬 (검수 시 "같은 cluster post 모아보기" 편의)
+    """주차별 section — id prefix `w<idx>-` 로 anchor 충돌 방지."""
     sorted_enriched = sorted(
         enriched,
-        key=lambda it: (it.get("trend_cluster_key") or "~~~", it["normalized"].get("source_post_id", "")),
+        key=lambda it: (it.get("trend_cluster_key") or "~~~",
+                        it["normalized"].get("source_post_id", "")),
     )
-    posts_html = "\n".join(_render_post_card(item, html_dir) for item in sorted_enriched)
+    contributors_map = _build_cluster_contributors(enriched)
+
+    # post id prefix 처리 — render_post_card 가 id="post-X" 사용 → 문자열 치환으로 prefix
+    posts_html_raw = "\n".join(_render_post_card(item, html_dir) for item in sorted_enriched)
+    posts_html = posts_html_raw.replace('id="post-', f'id="w{week_idx}-post-')
+
     sorted_summaries = sorted(summaries, key=lambda s: -s.get("score", 0))
-    clusters_html = "\n".join(_render_cluster_card(s) for s in sorted_summaries)
+    clusters_html_raw = "\n".join(
+        _render_cluster_card(s, contributors_map.get(s.get("cluster_key", "")), html_dir)
+        for s in sorted_summaries
+    )
+    # cluster card 안의 #post-X anchor 도 prefix 치환
+    clusters_html = clusters_html_raw.replace('href="#post-', f'href="#w{week_idx}-post-')
 
     n_items = len(enriched)
     n_clusters = len(summaries)
@@ -504,55 +734,94 @@ def build_html(
         f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in distinct_clusters
     )
 
+    return f"""
+<section class="week-block" data-week="{week_idx}">
+  <div class="summary-bar">
+    <span><b>{label}</b></span>
+    <span><b>{n_items}</b> items (IG <b>{n_ig}</b> / YT <b>{n_yt}</b>)</span>
+    <span><b>{n_clusters}</b> clusters</span>
+    <span><b>{n_canonicals}</b> canonicals</span>
+    <span><b>{n_with_palette}</b> with palette</span>
+    <span><b>{n_with_brand}</b> with brand</span>
+  </div>
+
+  <div class="filter-bar">
+    <label>cluster filter:
+      <select class="cluster-filter" data-week="{week_idx}" onchange="filterPosts({week_idx})">
+        <option value="">(all)</option>
+        {cluster_options}
+      </select>
+    </label>
+    <label>source:
+      <select class="source-filter" data-week="{week_idx}" onchange="filterPosts({week_idx})">
+        <option value="">(all)</option>
+        <option value="instagram">instagram</option>
+        <option value="youtube">youtube</option>
+      </select>
+    </label>
+    <label>id 검색: <input class="id-search" data-week="{week_idx}" type="search" placeholder="post_id 일부" oninput="filterPosts({week_idx})"></label>
+    <span class="filter-count muted" data-week="{week_idx}"></span>
+  </div>
+
+  <h2>Trend Clusters (score desc)</h2>
+  <div class="cluster-list">{clusters_html}</div>
+
+  <h2>Items ({n_items})</h2>
+  <div class="post-list">{posts_html}</div>
+</section>"""
+
+
+def build_multi_week_html(
+    weeks: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]],
+    html_dir: Path,
+) -> str:
+    """여러 주차 single HTML — selector 로 토글.
+
+    weeks: [(label, enriched, summaries), ...] — label 은 화면 표시용 ("2026-04-20 ~ 2026-04-26").
+    """
+    if not weeks:
+        raise ValueError("weeks must be non-empty")
+    sections = "\n".join(
+        _build_week_section(idx, label, enr, summ, html_dir)
+        for idx, (label, enr, summ) in enumerate(weeks)
+    )
+    options = "".join(
+        f'<option value="{idx}">{_esc(label)}</option>'
+        for idx, (label, _, _) in enumerate(weeks)
+    )
     return f"""<!DOCTYPE html>
 <html lang="ko"><head>
 <meta charset="utf-8">
-<title>분석 검수 — {n_items} items / {n_clusters} clusters</title>
+<title>분석 검수 — {len(weeks)} weeks</title>
 <style>{_CSS}</style>
 </head><body>
 
-<h1>분석 검수 (M3.A Step E 1단계 정적 HTML)</h1>
+<h1>분석 검수 (M3.A Step E — multi-week)</h1>
 
-<div class="summary-bar">
-  <span><b>{n_items}</b> items</span>
-  <span>(IG <b>{n_ig}</b> / YT <b>{n_yt}</b>)</span>
-  <span><b>{n_clusters}</b> trend clusters</span>
-  <span><b>{n_canonicals}</b> canonicals</span>
-  <span><b>{n_with_palette}</b> with palette</span>
-  <span><b>{n_with_brand}</b> with brand</span>
-</div>
-
-<div class="filter-bar">
-  <label>cluster filter:
-    <select id="cluster-filter" onchange="filterPosts()">
-      <option value="">(all)</option>
-      {cluster_options}
+<div class="week-selector-bar">
+  <label>주차 선택:
+    <select id="week-selector" onchange="showWeek(this.value)">
+      {options}
     </select>
   </label>
-  <label>source:
-    <select id="source-filter" onchange="filterPosts()">
-      <option value="">(all)</option>
-      <option value="instagram">instagram</option>
-      <option value="youtube">youtube</option>
-    </select>
-  </label>
-  <label>id 검색: <input id="id-search" type="search" placeholder="post_id 일부" oninput="filterPosts()"></label>
-  <span id="filter-count" class="muted"></span>
 </div>
 
-<h2>Trend Clusters (score desc)</h2>
-<div class="cluster-list">{clusters_html}</div>
-
-<h2>Items ({n_items})</h2>
-<div id="post-list">{posts_html}</div>
+{sections}
 
 <script>
-function filterPosts() {{
-  const ck = document.getElementById('cluster-filter').value;
-  const src = document.getElementById('source-filter').value;
-  const q = document.getElementById('id-search').value.trim().toLowerCase();
+function showWeek(idx) {{
+  document.querySelectorAll('section.week-block').forEach(el => {{
+    el.style.display = (String(el.dataset.week) === String(idx)) ? '' : 'none';
+  }});
+}}
+function filterPosts(weekIdx) {{
+  const root = document.querySelector(`section.week-block[data-week="${{weekIdx}}"]`);
+  if (!root) return;
+  const ck = root.querySelector('.cluster-filter').value;
+  const src = root.querySelector('.source-filter').value;
+  const q = root.querySelector('.id-search').value.trim().toLowerCase();
   let shown = 0;
-  document.querySelectorAll('article.post').forEach(el => {{
+  root.querySelectorAll('article.post').forEach(el => {{
     const okCk = !ck || el.dataset.cluster === ck;
     const okSrc = !src || el.dataset.source === src;
     const okQ = !q || el.id.toLowerCase().includes(q);
@@ -560,33 +829,75 @@ function filterPosts() {{
     el.style.display = visible ? '' : 'none';
     if (visible) shown++;
   }});
-  document.getElementById('filter-count').textContent = `(${{shown}} 표시)`;
+  root.querySelector('.filter-count').textContent = `(${{shown}} 표시)`;
 }}
-filterPosts();
+// 초기: 첫 주만 표시 + 모든 주에 filterPosts 1회 호출
+showWeek(0);
+document.querySelectorAll('section.week-block').forEach(el => {{
+  filterPosts(el.dataset.week);
+}});
 </script>
 
 </body></html>"""
 
 
+def build_html(
+    enriched: list[dict[str, Any]], summaries: list[dict[str, Any]], html_dir: Path
+) -> str:
+    """단일 주차 HTML (backwards compat). 내부적으로 multi-week 1 entry 로 빌드."""
+    return build_multi_week_html([("(single)", enriched, summaries)], html_dir)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--enriched", type=Path, default=_REPO / "outputs" / "enriched.json")
-    parser.add_argument("--summaries", type=Path, default=_REPO / "outputs" / "summaries.json")
+    parser.add_argument("--enriched", type=Path, default=None,
+                        help="단일 주차 모드: enriched.json 경로")
+    parser.add_argument("--summaries", type=Path, default=None,
+                        help="단일 주차 모드: summaries.json 경로")
+    parser.add_argument("--weeks", type=str, default=None,
+                        help="multi-week 모드: end_date 콤마 구분 "
+                             "(예: 2026-04-26,2026-04-19,2026-04-12). 각 date 의 "
+                             "outputs/<DATE>/{enriched,summaries}.json 사용.")
     parser.add_argument("--output", type=Path, default=_REPO / "outputs" / "review.html")
     args = parser.parse_args()
 
-    if not args.enriched.exists():
-        raise SystemExit(f"enriched not found: {args.enriched}")
-    if not args.summaries.exists():
-        raise SystemExit(f"summaries not found: {args.summaries}")
-
-    with args.enriched.open() as f:
-        enriched = json.load(f)
-    with args.summaries.open() as f:
-        summaries = json.load(f)
-
     html_dir = args.output.parent
     html_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.weeks:
+        from datetime import date as Date, timedelta
+        weeks: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+        for end_str in [s.strip() for s in args.weeks.split(",") if s.strip()]:
+            end_date = Date.fromisoformat(end_str)
+            start_date = end_date - timedelta(days=6)
+            label = f"{start_date} ~ {end_date}"
+            enr_path = _REPO / "outputs" / end_str / "enriched.json"
+            sum_path = _REPO / "outputs" / end_str / "summaries.json"
+            if not enr_path.exists() or not sum_path.exists():
+                print(f"WARN: skip {label} — {enr_path} or {sum_path} missing")
+                continue
+            with enr_path.open() as f: enr = json.load(f)
+            with sum_path.open() as f: summ = json.load(f)
+            weeks.append((label, enr, summ))
+        if not weeks:
+            raise SystemExit("--weeks 결과 빈 list. 각 date 의 enriched/summaries 확인")
+        html = build_multi_week_html(weeks, html_dir)
+        args.output.write_text(html, encoding="utf-8")
+        total_items = sum(len(e) for _, e, _ in weeks)
+        total_clusters = sum(len(s) for _, _, s in weeks)
+        print(f"Wrote {args.output} — {len(weeks)} weeks / {total_items} items / {total_clusters} clusters")
+        return 0
+
+    # 단일 주차 모드 (하위 호환)
+    enriched_path = args.enriched or (_REPO / "outputs" / "enriched.json")
+    summaries_path = args.summaries or (_REPO / "outputs" / "summaries.json")
+    if not enriched_path.exists():
+        raise SystemExit(f"enriched not found: {enriched_path}")
+    if not summaries_path.exists():
+        raise SystemExit(f"summaries not found: {summaries_path}")
+
+    with enriched_path.open() as f: enriched = json.load(f)
+    with summaries_path.open() as f: summaries = json.load(f)
     html = build_html(enriched, summaries, html_dir)
     args.output.write_text(html, encoding="utf-8")
     print(f"Wrote {args.output} — {len(enriched)} items / {len(summaries)} clusters")
