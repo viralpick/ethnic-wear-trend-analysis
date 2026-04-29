@@ -119,8 +119,9 @@ def test_text_with_no_method_drops_to_vision_only() -> None:
     )
     dist = enriched_to_item_distribution(item)
 
-    # text 가중치 0 + vision group 1개 → 100% vision value (= upper_garment_type).
-    assert dist.garment_type == {"kurta": 1.0}
+    # text 가중치 0 + vision group 1개 → 100% vision value (vision_normalize 매핑됨).
+    # raw "kurta" → STRAIGHT_KURTA, raw "block_print" → BLOCK_PRINT (직접).
+    assert dist.garment_type == {"straight_kurta": 1.0}
     assert dist.fabric == {"cotton": 1.0}
     assert dist.technique == {"block_print": 1.0}
 
@@ -138,9 +139,10 @@ def test_vision_only_uses_upper_garment_type_not_lower() -> None:
     )
     dist = enriched_to_item_distribution(item)
 
-    assert "kurta" in dist.garment_type
+    # raw "kurta" → STRAIGHT_KURTA, raw "palazzo" 는 lower 라 garment 에 미반영.
+    assert "straight_kurta" in dist.garment_type
     assert "palazzo" not in dist.garment_type
-    assert dist.garment_type == {"kurta": 1.0}
+    assert dist.garment_type == {"straight_kurta": 1.0}
 
 
 def test_text_and_vision_combine_with_weighted_sum() -> None:
@@ -161,9 +163,10 @@ def test_text_and_vision_combine_with_weighted_sum() -> None:
     dist = enriched_to_item_distribution(item)
 
     # 두 키 모두 등장 + 합 = 1.0 + text(rule=6) > vision share.
-    assert set(dist.garment_type.keys()) == {"kurta_set", "saree"}
+    # raw "saree" → CASUAL_SAREE 매핑.
+    assert set(dist.garment_type.keys()) == {"kurta_set", "casual_saree"}
     assert abs(sum(dist.garment_type.values()) - 1.0) < 1e-9
-    assert dist.garment_type["kurta_set"] > dist.garment_type["saree"]
+    assert dist.garment_type["kurta_set"] > dist.garment_type["casual_saree"]
 
 
 def test_no_text_no_canonicals_returns_empty_distributions() -> None:
@@ -181,10 +184,13 @@ def test_no_text_no_canonicals_returns_empty_distributions() -> None:
 
 def test_canonical_with_none_value_drops_silently() -> None:
     # representative.upper_garment_type=None → garment_type group 자연 drop.
-    # 같은 canonical 의 fabric="cotton" 은 fabric distribution 에 들어감.
+    # upper=None 이면 upper_is_ethnic 도 False/None 이라 case D 아닌 단순 drop.
     canonical = _canonical(
         0,
-        outfit=_outfit(upper=None, lower=None, fabric="cotton", technique=None),
+        outfit=_outfit(
+            upper=None, lower=None, fabric="cotton", technique=None,
+            upper_is_ethnic=None, lower_is_ethnic=None,
+        ),
     )
     item = EnrichedContentItem(
         normalized=_normalized("p_none"),
@@ -192,8 +198,9 @@ def test_canonical_with_none_value_drops_silently() -> None:
     )
     dist = enriched_to_item_distribution(item)
 
+    # canonical 자체가 비-ethnic (둘 다 None) 이라 is_canonical_ethnic=False → 전체 drop.
     assert dist.garment_type == {}
-    assert dist.fabric == {"cotton": 1.0}
+    assert dist.fabric == {}
     assert dist.technique == {}
 
 
@@ -231,8 +238,10 @@ def test_two_canonicals_share_by_group_to_item_contrib() -> None:
     )
     dist = enriched_to_item_distribution(item)
 
-    assert dist.garment_type == {"kurta": 1.0}
+    # 둘 다 raw "kurta" → STRAIGHT_KURTA 로 합쳐짐.
+    assert dist.garment_type == {"straight_kurta": 1.0}
     # fabric 은 2 키 모두 등장, 큰 canonical 이 더 큰 share.
+    # silk 은 enum 신규 추가됨.
     assert set(dist.fabric.keys()) == {"silk", "cotton"}
     assert dist.fabric["silk"] > dist.fabric["cotton"]
     assert abs(sum(dist.fabric.values()) - 1.0) < 1e-9
@@ -261,10 +270,10 @@ def test_non_ethnic_canonical_excluded_from_distribution() -> None:
     )
     dist = enriched_to_item_distribution(item)
 
-    # ethnic canonical 1개만 contribution
-    assert dist.garment_type == {"kurta": 1.0}
+    # ethnic canonical 1개만 contribution. raw "kurta" → STRAIGHT_KURTA.
+    assert dist.garment_type == {"straight_kurta": 1.0}
     assert dist.fabric == {"cotton": 1.0}
-    # 비-ethnic canonical 의 t_shirt / denim 누락 확인
+    # 비-ethnic canonical 의 t_shirt / denim 누락 확인 (denim 은 enum 외라 어차피 drop)
     assert "t_shirt" not in dist.garment_type
     assert "denim" not in dist.fabric
 
@@ -298,6 +307,7 @@ def test_dress_as_single_non_ethnic_excluded() -> None:
         canonicals=[eth_dress, non_eth_dress],
     )
     dist = enriched_to_item_distribution(item)
+    # raw "anarkali" → ANARKALI, "silk" → SILK (신규 enum).
     assert dist.garment_type == {"anarkali": 1.0}
     assert dist.fabric == {"silk": 1.0}
 

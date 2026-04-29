@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from aggregation.distribution_builder import GroupSnapshot, build_distribution
 from aggregation.representative_builder import ItemDistribution
+from aggregation.vision_normalize import (
+    normalize_fabric,
+    normalize_garment_for_cluster,
+    normalize_technique,
+)
 from attributes.derive_styling_from_vision import derive_styling_from_outfit
 from contracts.common import Silhouette
 from contracts.enriched import EnrichedContentItem
@@ -43,24 +48,38 @@ _canonical_area_ratio = canonical_mean_area_ratio
 
 
 def _group_snapshot_for_garment(canonical: CanonicalOutfit) -> GroupSnapshot:
+    """case D drop + Gemini raw → GarmentType enum 매핑 (vision_normalize 위임).
+
+    upper_is_ethnic=False (case D — t_shirt+palazzo 등) 또는 매핑 외 단어 (`top`,
+    `crop_top`, `kurti` 외 등) 면 value=None → distribution 에서 자연 제외.
+    """
+    enum_value = normalize_garment_for_cluster(canonical.representative)
     return GroupSnapshot(
-        value=canonical.representative.upper_garment_type,
+        value=enum_value.value if enum_value else None,
         n_objects=len(canonical.members),
         mean_area_ratio=_canonical_area_ratio(canonical),
     )
 
 
 def _group_snapshot_for_fabric(canonical: CanonicalOutfit) -> GroupSnapshot:
+    """Gemini raw → Fabric enum 매핑. silk/organza/satin/net/velvet 신규 enum 포함.
+    매핑 외 (knit/denim/lace 등) → None.
+    """
+    enum_value = normalize_fabric(canonical.representative)
     return GroupSnapshot(
-        value=canonical.representative.fabric,
+        value=enum_value.value if enum_value else None,
         n_objects=len(canonical.members),
         mean_area_ratio=_canonical_area_ratio(canonical),
     )
 
 
 def _group_snapshot_for_technique(canonical: CanonicalOutfit) -> GroupSnapshot:
+    """Gemini raw → Technique enum 매핑. embroidery→THREAD_EMBROIDERY, plain→SOLID,
+    sequins/zardosi/ikat 등 7 신규 enum 포함. 매핑 외 (crochet/batik 등) → None.
+    """
+    enum_value = normalize_technique(canonical.representative)
     return GroupSnapshot(
-        value=canonical.representative.technique,
+        value=enum_value.value if enum_value else None,
         n_objects=len(canonical.members),
         mean_area_ratio=_canonical_area_ratio(canonical),
     )

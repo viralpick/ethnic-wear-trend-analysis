@@ -180,10 +180,10 @@ def test_build_item_row_full_distribution() -> None:
     assert row["posted_at"] == "2026-04-27 06:00:00"
     assert row["schema_version"] == SCHEMA_VERSION
 
-    # text + vision distribution 채워짐.
+    # text + vision distribution 채워짐. raw "kurta" → STRAIGHT_KURTA enum 매핑됨.
     assert row["garment_type_dist"] is not None
     assert "kurta_set" in row["garment_type_dist"]
-    assert "kurta" in row["garment_type_dist"]
+    assert "straight_kurta" in row["garment_type_dist"]
     assert abs(sum(row["garment_type_dist"].values()) - 1.0) < 1e-9
 
     # silhouette vision-only.

@@ -43,7 +43,8 @@ class GarmentType(StrEnum):
 
 
 class Fabric(StrEnum):
-    # spec §4.1 ② — 소재
+    # spec §4.1 ② — 소재. Gemini vision 출력 빈도 기준 5개 추가 (2026-04-29):
+    # silk(333), organza(109), satin(105), net(60), velvet(24).
     COTTON = "cotton"
     COTTON_BLEND = "cotton_blend"
     LINEN = "linen"
@@ -57,10 +58,16 @@ class Fabric(StrEnum):
     KHADI = "khadi"
     POLYESTER_BLEND = "polyester_blend"
     JACQUARD = "jacquard"
+    SILK = "silk"
+    ORGANZA = "organza"
+    SATIN = "satin"
+    NET = "net"
+    VELVET = "velvet"
 
 
 class Technique(StrEnum):
-    # spec §4.1 ③ — 기법/장식
+    # spec §4.1 ③ — 기법/장식. Gemini vision 출력 빈도 기준 7개 추가 (2026-04-29):
+    # sequin_work, ikat, brocade, beadwork, bandhani, zari_zardosi, kalamkari.
     SOLID = "solid"
     SELF_TEXTURE = "self_texture"
     CHIKANKARI = "chikankari"
@@ -75,6 +82,13 @@ class Technique(StrEnum):
     PINTUCK = "pintuck"
     LACE_CUTWORK = "lace_cutwork"
     GOTA_PATTI = "gota_patti"
+    SEQUIN_WORK = "sequin_work"
+    IKAT = "ikat"
+    BROCADE = "brocade"
+    BEADWORK = "beadwork"
+    BANDHANI = "bandhani"
+    ZARI_ZARDOSI = "zari_zardosi"
+    KALAMKARI = "kalamkari"
 
 
 class EmbellishmentIntensity(StrEnum):
