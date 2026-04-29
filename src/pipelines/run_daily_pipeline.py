@@ -358,16 +358,28 @@ def run_representative_phase(
     start_date: date,
     end_date: date,
     sink: str,
+    dedup_by_url: bool = False,
 ) -> None:
-    """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → score → representative 적재.
+    """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → (optional) url dedup
+    → score → representative 적재.
 
     target_date 는 end_date 사용 (week_start_date / trajectory 조회 기준).
+    dedup_by_url=True: raw DB url 기준 동일 post 중 engagement 최대 1건만 keep (cluster
+    점수 inflate 방지).
     """
-    from pipelines.load_enriched import load_enriched_files, filter_by_date_range
+    from pipelines.load_enriched import (  # noqa: I001
+        dedup_by_raw_url,
+        filter_by_date_range,
+        load_enriched_files,
+        load_raw_post_urls,
+    )
     from exporters.starrocks.sink_runner import emit_representatives_only
 
     pool = load_enriched_files(enriched_glob)
     enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
+    if dedup_by_url and enriched:
+        post_urls = load_raw_post_urls()
+        enriched = dedup_by_raw_url(enriched, post_urls)
     if not enriched:
         logger.warning(
             "run_representative_phase empty after filter glob=%s start=%s end=%s",
@@ -498,6 +510,11 @@ def _parse_args() -> argparse.Namespace:
         "--enriched-glob", type=str, default=None,
         help="--phase representative: enriched.json 글롭 패턴. "
              "예: outputs/backfill/page_*_enriched.json",
+    )
+    parser.add_argument(
+        "--dedup-by-url", action="store_true",
+        help="--phase representative: raw DB url 기준 동일 post 중 1 건만 keep "
+             "(cluster score inflate 방지).",
     )
     return parser.parse_args()
 
@@ -679,6 +696,7 @@ def main() -> None:
             start_date=start,
             end_date=end,
             sink=args.sink,
+            dedup_by_url=args.dedup_by_url,
         )
         return
 
