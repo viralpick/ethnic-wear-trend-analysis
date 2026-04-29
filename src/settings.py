@@ -165,10 +165,10 @@ class VLMConfig(BaseModel):
     temperature: float = 0.0
     # M3.G/H 이후 IG/YT 둘 다 vision 흐름에 진입. cap 은 source 별 분리축 — YT 단가가
     # 더 비쌈 (영상 1건 ≈ frame 20장 = Gemini 호출 20회, IG 1건 ≈ image 1~10장).
-    # 분리 cap 으로 IG 처리량 보존하면서 YT 비용 상한 명시.
-    case2_per_cluster_cap_ig: int = 10
+    # 분리 cap 으로 IG / YT 비용 상한 각각 명시.
+    case2_per_cluster_cap_ig: int = 5
     case2_per_cluster_cap_yt: int = 1
-    case1_daily_cap_ig: int = 150
+    case1_daily_cap_ig: int = 50
     case1_daily_cap_yt: int = 10
     # ζ (2026-04-28): Case2 picking share threshold. trend_cluster_shares 의 share 가
     # 이 값 미만이면 picking 후보에서 제외. 0.0 = 모든 fan-out cluster 후보 (cap 자연

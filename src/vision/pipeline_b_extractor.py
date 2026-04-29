@@ -7,7 +7,8 @@ duplicate 그룹으로 묶어 sub-linear weight 로 top-k 선별.
 이 모듈은 top-level 로 torch / transformers / ultralytics 를 import. vision extras 미설치
 시 ImportError — core 코드는 **절대 top-level import 금지** (ColorExtractor Protocol 뒤 DI).
 
-spec §4.1 ④ / §7 대응. spec §7.2 의 YT 경계는 frame_source 레이어에서 강제.
+spec §4.1 ④ / §7 대응. M3.G/H (2026-04-28) 이후 IG/YT 모두 frame_source 통해 동일
+흐름으로 처리 — 이전 §7.2 의 "YT 는 thumbnail 만" 가정은 폐기됨.
 """
 from __future__ import annotations
 
