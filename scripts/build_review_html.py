@@ -22,6 +22,12 @@ from urllib.parse import urlparse
 _REPO = Path(__file__).resolve().parents[1]
 _IMG_CACHE = _REPO / "sample_data" / "image_cache"
 
+# src/ import — enriched.trend_cluster_shares 가 옛 raw 키 (PR #31 vision_normalize 전)
+# 일 수 있어 HTML 빌드 시 enriched_to_item_distribution + item_cluster_shares 로
+# 신 normalize 적용한 share 를 재계산. summaries cluster_key 와 일치 보장.
+import sys as _sys
+_sys.path.insert(0, str(_REPO / "src"))
+
 
 def _esc(s: Any) -> str:
     return html_mod.escape(str(s)) if s is not None else ""
@@ -681,11 +687,26 @@ table.contrib-table tr:hover { background: #f0f7ff; }
 def _build_cluster_contributors(
     enriched: list[dict[str, Any]],
 ) -> dict[str, list[tuple[dict[str, Any], float]]]:
-    """cluster_key → [(item, share), ...] (share desc 정렬). enriched.trend_cluster_shares 활용."""
+    """cluster_key → [(item, share), ...] (share desc 정렬).
+
+    enriched.json 의 `trend_cluster_shares` 가 PR #31 (vision_normalize) 이전 raw 키
+    (`blouse__embroidery__...`) 일 수 있어 신 normalize 로 재계산. src/ 의
+    enriched_to_item_distribution + item_cluster_shares 호출. summaries 의
+    cluster_key (정규화된 enum 값) 와 일치 보장.
+    """
     from collections import defaultdict
+    from aggregation.item_distribution_builder import enriched_to_item_distribution
+    from aggregation.representative_builder import item_cluster_shares
+    from contracts.enriched import EnrichedContentItem
+
     out: dict[str, list[tuple[dict[str, Any], float]]] = defaultdict(list)
     for it in enriched:
-        shares = it.get("trend_cluster_shares") or {}
+        try:
+            model = EnrichedContentItem.model_validate(it)
+        except Exception:
+            continue
+        item_dist = enriched_to_item_distribution(model)
+        shares = item_cluster_shares(item_dist)
         for ck, sh in shares.items():
             if sh > 0:
                 out[ck].append((it, sh))
