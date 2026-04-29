@@ -65,6 +65,10 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
     M3.H — image_urls 는 빈 리스트 (YT 는 thumbnail 만, 본 컬러 추출엔 안 씀).
     video_urls 는 download_urls 의 mp4 매핑 → VideoFrameSource 가 frame 추출 후
     Pipeline B 가 IG 와 동일한 흐름으로 처리.
+
+    B-2 (M3.G/H 후): YT channel 을 account_handle 에 매핑 — momentum sub-signal
+    `new_yt_channel_ratio` 추적의 entity 식별자. IG handle 과 단위가 다르지만 동일
+    필드로 흐른 뒤 score_history bucket 의 accounts/channels 분리 list 로 누적된다.
     """
     text_blob = " ".join([video.title, video.description, *video.tags]).strip()
     tag_tokens = [t for t in (_as_hashtag_token(t) for t in video.tags) if t]
@@ -81,6 +85,7 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
         video_urls=list(video.video_urls),
         post_date=video.published_at,
         engagement_raw=engagement,
+        account_handle=video.channel or None,
     )
 
 

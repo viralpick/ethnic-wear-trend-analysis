@@ -19,6 +19,20 @@ from contracts.common import (
 )
 
 
+class MomentumComponents(BaseModel):
+    """Momentum sub-signal raw 값 — score_breakdown.momentum 의 분해 추적용 (B-2).
+
+    M3.J + M3.G/H (2026-04-29): IG/YT 신규 entity 시그널을 분리해 breakdown 에서
+    개별 추적. 합산은 ScoreBreakdown.momentum 필드 (weighted sum), 여기는 raw 값만.
+    """
+    model_config = ConfigDict(frozen=True)
+
+    post_growth: float                  # (오늘 - 7일평균) / 7일평균
+    hashtag_velocity: float             # 주간 hashtag 사용량 증가율
+    new_ig_account_ratio: float         # 0~1, IG handle 신규 비율
+    new_yt_channel_ratio: float         # 0~1, YT channel 신규 비율
+
+
 class ScoreBreakdown(BaseModel):
     """
     purpose: 종합 스코어 0~100 의 4개 팩터 분해 (spec §9.1~§9.2)
@@ -32,6 +46,8 @@ class ScoreBreakdown(BaseModel):
     youtube: float     # 0~25
     cultural: float    # 0~15
     momentum: float    # 0~20
+    # B-2 (M3.G/H 후): momentum sub-signal raw 가시화. weighted sum 은 momentum 필드.
+    momentum_components: MomentumComponents
 
 
 class DrilldownPayload(BaseModel):

@@ -8,7 +8,13 @@
     "social": 0.0,
     "youtube": 0.0,
     "cultural": 0.0,
-    "momentum": 0.0
+    "momentum": 0.0,
+    "momentum_components": {
+      "post_growth": 0.0,
+      "hashtag_velocity": 0.0,
+      "new_ig_account_ratio": 0.0,
+      "new_yt_channel_ratio": 0.0
+    }
   },
   "daily_direction": "flat",
   "weekly_direction": "flat",

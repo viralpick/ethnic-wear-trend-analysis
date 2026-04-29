@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS representative_weekly (
     display_name               VARCHAR(255)  NULL,
     granularity                VARCHAR(16)   NOT NULL  COMMENT 'weekly 고정',
     score_total                DOUBLE        NULL      COMMENT '§9.2 0~100',
-    score_breakdown            JSON          NULL      COMMENT '{social, youtube, cultural, momentum}',
+    score_breakdown            JSON          NULL      COMMENT '{social, youtube, cultural, momentum, momentum_components: {post_growth, hashtag_velocity, new_ig_account_ratio, new_yt_channel_ratio}}',
     lifecycle_stage            VARCHAR(16)   NULL      COMMENT 'early|growth|maturity|decline',
     weekly_change_pct          DOUBLE        NULL      COMMENT '직전 주 대비 %',
     weekly_direction           VARCHAR(8)    NULL      COMMENT 'up|flat|down',

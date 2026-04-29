@@ -131,11 +131,15 @@ scoring:
         - "#akshayatritiya2026"
         - "#goldethnic"
 
-  # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 + new_account_ratio × 0.3.
+  # spec §9.2 Momentum — post_growth × 0.4 + hashtag_velocity × 0.3 +
+  # new_ig_account_ratio × 0.15 + new_yt_channel_ratio × 0.15. B-2 (M3.G/H 후):
+  # new_account_ratio 0.3 을 IG/YT 분리 시그널로 균등 분배. score_breakdown 의
+  # momentum_components 에서 sub-signal 별 영향 추적 가능.
   momentum_factor_weights:
     post_growth: 0.4
     hashtag_velocity: 0.3
-    new_account_ratio: 0.3
+    new_ig_account_ratio: 0.15
+    new_yt_channel_ratio: 0.15
   momentum_window_days: 7
   new_account_window_days: 90  # 이 기간 내 미등장 계정을 new로 간주
 

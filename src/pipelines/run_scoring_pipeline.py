@@ -217,8 +217,18 @@ def _build_contexts(
             item for item, _ in grouped.get(key, [])
             if item.normalized.source == ContentSource.INSTAGRAM
         ]
-        accounts = [
+        cluster_yt_items = [
+            item for item, _ in grouped.get(key, [])
+            if item.normalized.source == ContentSource.YOUTUBE
+        ]
+        ig_accounts = [
             item.normalized.account_handle for item in cluster_ig_items
+            if item.normalized.account_handle
+        ]
+        # B-2 (M3.G/H 후): YT channel 을 별도 sub-signal 로 분리. normalize_content 가
+        # video.channel 을 account_handle 에 매핑하므로 동일 필드에서 source 분기로 추출.
+        yt_channels = [
+            item.normalized.account_handle for item in cluster_yt_items
             if item.normalized.account_handle
         ]
         window_counts = history.get_post_count_history(
@@ -236,8 +246,11 @@ def _build_contexts(
                 cultural_bollywood_presence=a.bollywood_count,
                 momentum_post_growth=_post_growth(a.post_count_today, window_counts),
                 momentum_hashtag_velocity=history.get_hashtag_velocity(key, target_date),
-                momentum_new_account_ratio=history.get_new_account_ratio(
-                    key, target_date, cfg.new_account_window_days, accounts
+                momentum_new_ig_account_ratio=history.get_new_ig_account_ratio(
+                    key, target_date, cfg.new_account_window_days, ig_accounts
+                ),
+                momentum_new_yt_channel_ratio=history.get_new_yt_channel_ratio(
+                    key, target_date, cfg.new_account_window_days, yt_channels
                 ),
                 post_count_total=history.get_total_post_count(key) + a.post_count_today,
                 post_count_today=a.post_count_today,
@@ -341,9 +354,15 @@ def score_and_export(
         ctx = ctx_by_key.get(summary.cluster_key)
         cluster_items = [item for item, _ in grouped.get(summary.cluster_key, [])]
         ig_items = [i for i in cluster_items if i.normalized.source == ContentSource.INSTAGRAM]
+        yt_items = [i for i in cluster_items if i.normalized.source == ContentSource.YOUTUBE]
         hashtag_counts = _hashtag_counts(cluster_items)
         accounts = [
             i.normalized.account_handle for i in ig_items
+            if i.normalized.account_handle
+        ]
+        # B-2 (M3.G/H 후): YT channel 도 history 에 누적 (new_yt_channel_ratio 추적용).
+        channels = [
+            i.normalized.account_handle for i in yt_items
             if i.normalized.account_handle
         ]
         # Phase γ: history schema float 마이그 후 share-weighted post_count 직접 적재.
@@ -355,6 +374,7 @@ def score_and_export(
             youtube_views_total=ctx.youtube_views_total if ctx else 0.0,
             hashtag_counts=hashtag_counts,
             accounts=accounts,
+            channels=channels,
         )
         weekly_history.update_weekly(
             summary.cluster_key, target_date, summary.score,

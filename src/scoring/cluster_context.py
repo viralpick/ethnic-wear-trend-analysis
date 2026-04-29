@@ -36,9 +36,11 @@ class ClusterScoringContext(BaseModel):
     cultural_bollywood_presence: float    # bollywood_decode 소스 post 수 (or 0/1 시그널).
 
     # --- Momentum (spec §9.2 Momentum) ---
-    momentum_post_growth: float           # (오늘 - 7일평균) / 7일평균. denom 0 이면 0.
-    momentum_hashtag_velocity: float      # 주간 증가율.
-    momentum_new_account_ratio: float     # 0~1.
+    momentum_post_growth: float                # (오늘 - 7일평균) / 7일평균. denom 0 이면 0.
+    momentum_hashtag_velocity: float           # 주간 증가율.
+    # B-2 (M3.G/H 후): IG/YT 신규 entity 시그널 분리 (sub-signal).
+    momentum_new_ig_account_ratio: float       # 0~1, IG handle 신규 비율.
+    momentum_new_yt_channel_ratio: float       # 0~1, YT channel 신규 비율.
 
     # --- 라이프사이클 / 방향성 / maturity 판정용 ---
     post_count_total: float               # Phase γ: history schema 마이그 후 float (β2 mixed precision round 제거)

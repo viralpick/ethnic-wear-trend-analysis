@@ -127,9 +127,13 @@ class CulturalFestival(BaseModel):
 
 
 class MomentumFactorWeights(BaseModel):
+    """spec §9.2 Momentum sub-weights. B-2 (M3.G/H 후): new_account_ratio 0.3 을
+    new_ig_account_ratio + new_yt_channel_ratio 로 분리. default 0.15 + 0.15 균등.
+    """
     post_growth: float
     hashtag_velocity: float
-    new_account_ratio: float
+    new_ig_account_ratio: float
+    new_yt_channel_ratio: float
 
 
 class DataMaturityConfig(BaseModel):
