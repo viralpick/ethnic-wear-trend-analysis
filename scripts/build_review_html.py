@@ -78,8 +78,19 @@ def _esc(s: Any) -> str:
     return html_mod.escape(str(s)) if s is not None else ""
 
 
+def _rel_path(target: Path, base: Path) -> str:
+    """target 을 base 기준 상대 경로로 (`..` 사용 가능). HTTP 서버 호환.
+
+    Path.relative_to 는 descendant 만 지원 (sample_data/image_cache 가
+    outputs/weekly_review 의 자손이 아니라 ValueError → file:// fallback 시
+    ngrok HTTP 접근 깨짐). os.path.relpath 는 `..` 으로 cross-tree 처리 가능.
+    """
+    import os as _os
+    return _os.path.relpath(str(target.resolve()), str(base.resolve())).replace("\\", "/")
+
+
 def _resolve_media_src(url: str, html_dir: Path) -> str:
-    """blob 캐시 (이미지/영상) 있으면 상대 경로, 아니면 원본 URL 반환."""
+    """blob 캐시 (이미지/영상) 있으면 상대 경로 (`..` 포함 OK), 아니면 원본 URL 반환."""
     if not url:
         return ""
     path_only = url.split("?", 1)[0]
@@ -88,10 +99,7 @@ def _resolve_media_src(url: str, html_dir: Path) -> str:
         return url
     cached = _IMG_CACHE / basename
     if cached.exists():
-        try:
-            return str(cached.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
-        except ValueError:
-            return cached.as_uri()
+        return _rel_path(cached, html_dir)
     return url
 
 
@@ -119,6 +127,83 @@ def _ffprobe_duration(video_path: Path) -> float | None:
         return float(out.stdout.strip()) if out.returncode == 0 else None
     except Exception:
         return None
+
+
+def _ffprobe_fps(video_path: Path) -> float | None:
+    """ffprobe 로 영상 fps (frame rate) 반환. r_frame_rate "30/1" 형태 → 30.0."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0:
+            return None
+        s = out.stdout.strip()
+        if "/" in s:
+            num, den = s.split("/")
+            den_f = float(den)
+            return float(num) / den_f if den_f != 0 else None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _selected_video_frames(
+    item: dict[str, Any], video_path: Path, thumbs_dir: Path, *, max_n: int = 5,
+) -> list[Path]:
+    """item.canonicals[*].members[*].image_id 에서 video_path.stem 매칭하는
+    global_idx 추출 → 균등 분포 max_n 개 선택 → ffmpeg 으로 idx/fps 시점 frame 추출.
+
+    canonical 에 등장한 frame 이 0 개면 빈 list (호출자가 fallback 처리).
+    """
+    import subprocess
+    stem = video_path.stem
+    indices: set[int] = set()
+    for c in item.get("canonicals", []):
+        for m in (c.get("members") or []):
+            iid = m.get("image_id") or ""
+            prefix = f"{stem}_f"
+            if iid.startswith(prefix):
+                tail = iid[len(prefix):]
+                try:
+                    indices.add(int(tail))
+                except ValueError:
+                    continue
+    if not indices:
+        return []
+    sorted_idx = sorted(indices)
+    if len(sorted_idx) <= max_n:
+        chosen = sorted_idx
+    else:
+        # 균등 분포 — 첫/끝 포함, 중간 균등
+        step = (len(sorted_idx) - 1) / (max_n - 1) if max_n > 1 else 0
+        chosen = [sorted_idx[round(i * step)] for i in range(max_n)]
+
+    fps = _ffprobe_fps(video_path)
+    if fps is None or fps <= 0:
+        return []
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    out: list[Path] = []
+    for idx in chosen:
+        ts = idx / fps
+        thumb_path = thumbs_dir / f"{stem}_sel{idx}.jpg"
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            out.append(thumb_path)
+            continue
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{ts:.3f}", "-i", str(video_path),
+                 "-frames:v", "1", "-q:v", "3", str(thumb_path)],
+                capture_output=True, timeout=15,
+            )
+            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+                out.append(thumb_path)
+        except Exception:
+            continue
+    return out
 
 
 def _extract_video_thumbs(
@@ -340,10 +425,7 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
             )
             continue
         for thumb in thumbs:
-            try:
-                rel = str(thumb.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
-            except ValueError:
-                rel = thumb.as_uri()
+            rel = _rel_path(thumb, html_dir)
             media_html += (
                 f'<img src="{_esc(rel)}" loading="lazy" tabindex="0" '
                 f'alt="video frame" class="media-img video-thumb" />'
@@ -423,40 +505,58 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
 
 
 def _item_thumbnail_src(item: dict[str, Any], html_dir: Path) -> tuple[str, str] | None:
-    """item 의 첫 thumbnail (IG=image[0], YT=video frame[0]) 와 source 라벨 반환.
-    None 이면 thumbnail 생성 실패 (blob cache 없음 등).
+    """item 의 첫 thumbnail 1개. _item_media_srcs[0] 의 alias."""
+    media = _item_media_srcs(item, html_dir, max_n=1)
+    return media[0] if media else None
+
+
+def _item_media_srcs(
+    item: dict[str, Any], html_dir: Path, *, max_n: int = 5,
+) -> list[tuple[str, str]]:
+    """item 의 media 최대 max_n 개 — IG 는 image_urls 첫 N 장, YT 는 영상 frame
+    균등 분포 N 개 (1/(N+1) ~ N/(N+1) 위치). image+video mix 면 image 우선.
+
+    각 entry: (src_path, src_label "instagram"|"youtube"). blob 캐시 없는 URL 은 skip.
     """
     n = item["normalized"]
     src = n.get("source", "")
     image_urls = n.get("image_urls") or []
     video_urls = n.get("video_urls") or []
-    # IG: image 우선
+    out: list[tuple[str, str]] = []
+
+    # IG: image 우선 (post 내 등장 순서)
     for url in image_urls:
+        if len(out) >= max_n:
+            break
         path_only = url.split("?", 1)[0]
         basename = Path(urlparse(path_only).path).name
         if not basename:
             continue
         cached = _IMG_CACHE / basename
         if cached.exists():
-            try:
-                rel = str(cached.resolve().relative_to(html_dir.resolve())).replace("\\", "/")
-                return rel, src
-            except ValueError:
-                return cached.as_uri(), src
-    # YT: video → frame thumb
-    thumbs_dir = html_dir / "_video_thumbs"
-    for url in video_urls:
-        local = _resolve_video_local_path(url)
-        if local is None:
-            continue
-        thumbs = _extract_video_thumbs(local, thumbs_dir, n_frames=3)
-        if thumbs:
-            try:
-                rel = str(thumbs[0].resolve().relative_to(html_dir.resolve())).replace("\\", "/")
-                return rel, src
-            except ValueError:
-                return thumbs[0].as_uri(), src
-    return None
+            out.append((_rel_path(cached, html_dir), src))
+
+    # YT/Reel: 분석 시 선택된 frame 우선 → fallback 으로 균등 분포
+    if len(out) < max_n:
+        thumbs_dir = html_dir / "_video_thumbs"
+        for url in video_urls:
+            if len(out) >= max_n:
+                break
+            local = _resolve_video_local_path(url)
+            if local is None:
+                continue
+            remaining = max_n - len(out)
+            # 1차: canonical 에 등장한 selected frame (분석 파이프라인이 실제 사용한 frame)
+            selected = _selected_video_frames(item, local, thumbs_dir, max_n=remaining)
+            # 2차 fallback: selected 0 개면 25%/50%/75% 균등 추출
+            thumbs = selected or _extract_video_thumbs(
+                local, thumbs_dir, n_frames=remaining,
+            )
+            for thumb in thumbs:
+                if len(out) >= max_n:
+                    break
+                out.append((_rel_path(thumb, html_dir), src))
+    return out
 
 
 def _render_contributor_thumb(
@@ -487,8 +587,11 @@ def _render_contributor_thumb(
     )
 
 
-def _cluster_summary_body(s: dict[str, Any]) -> str:
-    """cluster summary 공통 body — 카드/디테일 양쪽 재사용."""
+def _cluster_summary_body(
+    s: dict[str, Any], *, extra_html: str = "", extra_html_bottom: str = "",
+) -> str:
+    """cluster summary 공통 body — 카드/디테일 양쪽 재사용.
+    extra_html: color_palette 직후 삽입. extra_html_bottom: 가장 마지막 (distributions 후)."""
     drill = s.get("drilldown") or {}
     breakdown = s.get("score_breakdown") or {}
     breakdown_html = "".join(
@@ -507,6 +610,7 @@ def _cluster_summary_body(s: dict[str, Any]) -> str:
       <h4>color_palette</h4>
       {palette_html}
     </section>
+    {extra_html}
     <section>
       <h4>breakdown</h4>
       <table class="dist">{breakdown_html}</table>
@@ -528,6 +632,7 @@ def _cluster_summary_body(s: dict[str, Any]) -> str:
         <div><b>brand</b>{_dist_table(drill.get("brand_distribution") or {})}</div>
       </div>
     </section>
+    {extra_html_bottom}
   </div>'''
 
 
@@ -536,23 +641,71 @@ def _render_cluster_card(
     contributors: list[tuple[dict[str, Any], float]] | None,
     html_dir: Path,
     *,
-    top_n_thumb: int = 5,
+    top_n_thumb: int = 3,
 ) -> str:
-    """cluster summary card (클릭하면 detail 로 이동) — list view 용."""
+    """cluster summary card (클릭하면 detail 로 이동) — list view 용.
+    상단에 IG/YT 각 top N 의 thumbnail 1장씩 표시 (검수 시 cluster 성격 빠른 파악).
+    """
     contributors = contributors or []
     n_contrib = len(contributors)
     cluster_key = s.get("cluster_key", "")
+
+    # IG/YT contributor 분리 + top N 의 1장 thumbnail
+    contributors_sorted = sorted(contributors, key=lambda t: -t[1])
+    ig = [(it, sh) for it, sh in contributors_sorted
+          if it["normalized"].get("source") == "instagram"][:top_n_thumb]
+    yt = [(it, sh) for it, sh in contributors_sorted
+          if it["normalized"].get("source") == "youtube"][:top_n_thumb]
+
+    def _mini_thumb(item: dict[str, Any], share: float, label: str) -> str:
+        thumb_info = _item_thumbnail_src(item, html_dir)
+        pct = share * 100
+        if thumb_info:
+            src_path, src = thumb_info
+            return (
+                f'<div class="cluster-mini-thumb" '
+                f'title="{_esc(label)} · {pct:.1f}%">'
+                f'<img src="{_esc(src_path)}" loading="lazy" alt="" />'
+                f'<span class="cluster-mini-badge src-{_esc(src)}">{pct:.1f}%</span>'
+                f'</div>'
+            )
+        return (
+            f'<div class="cluster-mini-thumb no-thumb" title="{_esc(label)}">'
+            f'<div class="cluster-mini-placeholder">·</div></div>'
+        )
+
+    ig_thumbs = "".join(
+        _mini_thumb(it, sh, f'@{it["normalized"].get("account_handle") or "—"}')
+        for it, sh in ig
+    ) or '<span class="muted small">∅</span>'
+    yt_thumbs = "".join(
+        _mini_thumb(it, sh, f'@{it["normalized"].get("account_handle") or "—"}')
+        for it, sh in yt
+    ) or '<span class="muted small">∅</span>'
+
+    contrib_strip_html = (
+        f'<section class="full-row cluster-mini-strip">'
+        f'<h4>Top Contributors ({n_contrib} contributors · IG / YT × top 3 · 클릭 상세)</h4>'
+        f'<div class="mini-strip-row"><span class="mini-label">IG</span>{ig_thumbs}</div>'
+        f'<div class="mini-strip-row"><span class="mini-label">YT</span>{yt_thumbs}</div>'
+        f'</section>'
+    )
+
     return f'''
 <article class="cluster cluster-summary" data-cluster-key="{_esc(cluster_key)}"
          onclick="showClusterDetail(this.dataset.weekIdx, this.dataset.clusterKey)"
          data-week-idx="{{week_idx}}">
   <header>
-    <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
-    <span class="score">{s.get("score", 0):.1f}</span>
-    <span class="muted">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))} · {_esc(s.get("lifecycle_stage"))}</span>
-    <span class="muted">{n_contrib} contributors</span>
+    <div class="cluster-title-row">
+      <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
+    </div>
+    <div class="cluster-meta-row">
+      <span class="score">{s.get("score", 0):.1f}</span>
+      <span class="meta-pill direction">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))}</span>
+      <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
+    </div>
   </header>
-  {_cluster_summary_body(s)}
+  {_cluster_summary_body(s, extra_html=contrib_strip_html)}
 </article>'''
 
 
@@ -570,11 +723,13 @@ def _render_compact_contributor(
     palette = item.get("post_palette") or []
     canonicals = item.get("canonicals") or []
 
-    # thumbnail
-    thumb_info = _item_thumbnail_src(item, html_dir)
-    if thumb_info:
-        src_path, _ = thumb_info
-        thumb_html = f'<img src="{_esc(src_path)}" loading="lazy" tabindex="0" class="contrib-card-img" alt="" />'
+    # thumbnail grid (최대 5장 — IG image / YT frame 균등 분포)
+    media = _item_media_srcs(item, html_dir, max_n=5)
+    if media:
+        thumb_html = "".join(
+            f'<img src="{_esc(p)}" loading="lazy" tabindex="0" class="contrib-card-img" alt="" />'
+            for p, _ in media
+        )
     else:
         thumb_html = f'<div class="contrib-card-img-placeholder">{_esc(src[:2].upper())}</div>'
 
@@ -641,10 +796,15 @@ def _render_cluster_detail(
     <button class="back-btn" onclick="showClusterList({week_idx})">← cluster 목록으로</button>
   </div>
   <header>
-    <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
-    <span class="score">{s.get("score", 0):.1f}</span>
-    <span class="muted">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))} · {_esc(s.get("lifecycle_stage"))}</span>
-    <span class="muted">{n_contrib} contributors</span>
+    <div class="cluster-title-row">
+      <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
+    </div>
+    <div class="cluster-meta-row">
+      <span class="score">{s.get("score", 0):.1f}</span>
+      <span class="meta-pill direction">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))}</span>
+      <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
+      <span class="muted">{n_contrib} contributors</span>
+    </div>
   </header>
   {_cluster_summary_body(s)}
   <h3 class="contrib-section-title">Contributors ({n_contrib}, share desc)</h3>
@@ -675,18 +835,34 @@ small { color: #888; font-size: 0.85em; }
               border: 1px solid #ccc; border-radius: 3px; }
 .filter-bar input { width: 200px; }
 
-.cluster-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }
+.cluster-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 12px; }
 
 .post-id { font-size: 10px; color: #999; font-family: ui-monospace, monospace;
            background: transparent; padding: 0; }
 
 .cluster, .post { background: #fff; border-radius: 6px; padding: 12px 16px;
                   margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.cluster header, .post header { display: flex; gap: 12px; align-items: baseline;
-                                 margin-bottom: 8px; padding-bottom: 6px;
-                                 border-bottom: 1px solid #eee; }
-.cluster .score { font-size: 16px; font-weight: bold; color: #d35400; }
-.cluster .cluster-key { flex: 1; }
+.post header { display: flex; gap: 12px; align-items: baseline;
+               margin-bottom: 8px; padding-bottom: 6px;
+               border-bottom: 1px solid #eee; }
+.cluster header { margin-bottom: 10px; padding-bottom: 8px;
+                  border-bottom: 1px solid #eee; }
+.cluster-title-row { margin-bottom: 8px; }
+.cluster-meta-row { display: flex; gap: 8px; font-size: 12px;
+                    flex-wrap: wrap; align-items: center; }
+.cluster .score { font-size: 20px; font-weight: bold; color: #d35400;
+                  background: rgba(211,84,0,0.08); padding: 2px 10px;
+                  border-radius: 4px; }
+.cluster .cluster-key { display: block; }
+.cluster .cluster-key code { display: inline-block; font-size: 14px;
+                              font-weight: bold; background: #fff3cd;
+                              color: #1f3a68; padding: 4px 10px;
+                              border-radius: 4px; border: 1px solid #ffd966;
+                              word-break: break-all; line-height: 1.4; }
+.meta-pill { padding: 2px 8px; border-radius: 10px; font-size: 11px;
+             font-weight: 500; border: 1px solid #ddd; background: #fafafa; }
+.meta-pill.direction { color: #2a5db8; border-color: #c5d6f0; background: #eff4fc; }
+.meta-pill.lifecycle { color: #6b3aa0; border-color: #d8c5f0; background: #f4eefc; }
 
 .cluster-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .cluster-body section { font-size: 12px; }
@@ -790,6 +966,33 @@ a:hover { text-decoration: underline; }
                          box-shadow: 0 4px 12px rgba(42,93,184,0.15); }
 .cluster-summary:active { transform: translateY(0); }
 
+/* cluster summary 의 mini thumbnail strip (IG/YT top N) — 카드 하단 별도 섹션 */
+.cluster-mini-strip { background: #fafafa; padding: 8px 10px;
+                      border-radius: 4px; margin-top: 4px; }
+.cluster-mini-strip h4 { margin-top: 0; }
+.mini-strip-row { display: flex; gap: 8px; align-items: center;
+                  margin-bottom: 6px; }
+.mini-strip-row:last-child { margin-bottom: 0; }
+.mini-label { font-size: 11px; font-weight: bold; color: #555;
+              min-width: 30px; text-align: center;
+              border: 1px solid #ccc; border-radius: 4px; padding: 2px 6px;
+              background: #fff; flex-shrink: 0; }
+.mini-label[data-src="ig"] { border-color: #e1306c; color: #e1306c; }
+.cluster-mini-thumb { position: relative; width: 100px; height: 100px;
+                      border-radius: 6px; overflow: hidden; flex-shrink: 0;
+                      box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.cluster-mini-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.cluster-mini-badge { position: absolute; bottom: 2px; right: 2px;
+                      background: rgba(0,0,0,0.75); color: #fff;
+                      font-size: 11px; font-weight: bold;
+                      padding: 1px 5px; border-radius: 3px; }
+.cluster-mini-badge.src-instagram { border-bottom: 2px solid #e1306c; }
+.cluster-mini-badge.src-youtube { border-bottom: 2px solid #ff0000; }
+.cluster-mini-placeholder { display: flex; width: 100%; height: 100%;
+                             align-items: center; justify-content: center;
+                             background: #ddd; color: #aaa; font-size: 18px; }
+.muted.small { font-size: 10px; }
+
 /* cluster detail nav */
 .cluster-detail { background: #fff; border-radius: 6px; padding: 16px 20px;
                   margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
@@ -803,24 +1006,30 @@ a:hover { text-decoration: underline; }
 
 /* compact contributor card (cluster detail 안) */
 .contrib-cards-list { display: grid;
-                      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+                      grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
                       gap: 12px; margin-top: 12px; }
 .contrib-card { background: #fafafa; border-radius: 6px;
-                padding: 10px; display: grid;
-                grid-template-columns: 160px 1fr; gap: 12px;
-                border-left: 3px solid #2a5db8; }
-.contrib-card-thumb { width: 160px; height: 160px; }
-.contrib-card-img { width: 100%; height: 100%; object-fit: cover;
-                    border-radius: 4px; cursor: zoom-in; transition: transform 0.15s; }
-.contrib-card-img:hover { transform: scale(1.03); }
+                padding: 10px; display: flex; flex-direction: column;
+                gap: 8px; border-left: 3px solid #2a5db8; }
+/* thumb area — 최대 5장 grid */
+.contrib-card-thumb { display: grid;
+                      grid-template-columns: repeat(5, 1fr);
+                      gap: 4px; }
+.contrib-card-img { width: 100%; aspect-ratio: 1; object-fit: cover;
+                    border-radius: 4px; cursor: zoom-in;
+                    transition: transform 0.15s; }
+.contrib-card-img:hover { transform: scale(1.05); z-index: 5;
+                          position: relative; }
 .contrib-card-img:focus { position: fixed; top: 50%; left: 50%;
                           transform: translate(-50%,-50%); width: 90vw;
-                          height: 90vh; object-fit: contain; z-index: 1000;
-                          background: rgba(0,0,0,0.9); cursor: zoom-out;
-                          outline: none; }
-.contrib-card-img-placeholder { display: flex; width: 100%; height: 100%;
+                          height: 90vh; aspect-ratio: auto; object-fit: contain;
+                          z-index: 1000; background: rgba(0,0,0,0.9);
+                          cursor: zoom-out; outline: none; }
+.contrib-card-img-placeholder { grid-column: 1 / -1;
+                                display: flex; height: 80px;
                                 align-items: center; justify-content: center;
-                                background: #ddd; color: #666; font-weight: bold; }
+                                background: #ddd; color: #666; font-weight: bold;
+                                border-radius: 4px; }
 .contrib-card-body { display: flex; flex-direction: column; gap: 4px;
                      min-width: 0; }
 .contrib-card-header { display: flex; gap: 6px; flex-wrap: wrap;
@@ -835,6 +1044,41 @@ a:hover { text-decoration: underline; }
 /* post-link icon */
 .post-link { color: #2a5db8; }
 """
+
+
+def _dedup_enriched_by_url(
+    enriched: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """raw DB url 기준 dedup — 같은 url 가진 item 들 중 engagement_raw 최대값 1건만 유지.
+
+    view 단 dedup 만 적용 (rep summaries 는 이미 산출됨, 별도 재계산 안 함).
+    url 미존재 (raw DB lookup 실패) item 은 전부 keep — 가짜 dedup 방지.
+    """
+    from collections import defaultdict
+    post_urls = _load_post_urls()
+    by_url: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    no_url: list[dict[str, Any]] = []
+    for it in enriched:
+        pid = it["normalized"].get("source_post_id", "")
+        url = post_urls.get(pid)
+        if url:
+            by_url[url].append(it)
+        else:
+            no_url.append(it)
+    out: list[dict[str, Any]] = list(no_url)
+    n_dups = 0
+    for url, items in by_url.items():
+        if len(items) > 1:
+            n_dups += len(items) - 1
+        items.sort(
+            key=lambda it: -(it["normalized"].get("engagement_raw") or 0)
+        )
+        out.append(items[0])
+    print(
+        f"  dedup_by_url: {len(enriched)} → {len(out)} "
+        f"(dropped {n_dups} url-duplicates, {len(no_url)} kept w/o url lookup)"
+    )
+    return out
 
 
 def _build_cluster_contributors(
@@ -876,6 +1120,10 @@ def _build_week_section(
     html_dir: Path,
 ) -> str:
     """주차별 section — Clusters tab + Items tab 구조. id prefix `w<idx>-` 로 anchor 충돌 방지."""
+    # view-단 dedup: raw url 기준 동일 post 중 engagement 최대 1건만 keep.
+    # rep summaries 는 dedup 적용 X (이미 산출, 영향 평가 후 별도 재계산 결정).
+    print(f"[week {week_idx} {label}]")
+    enriched = _dedup_enriched_by_url(enriched)
     sorted_enriched = sorted(
         enriched,
         key=lambda it: (it.get("trend_cluster_key") or "~~~",
