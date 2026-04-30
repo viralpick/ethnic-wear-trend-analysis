@@ -212,6 +212,13 @@ def make_drilldown(
         (build_styling_combo_distribution(item), share)
         for item, share in items_with_share
     ]
+    # Phase 2 (2026-04-30): technique 도 cluster drilldown distribution. item 의
+    # technique distribution (text + vision blend, item_distribution_builder) × cluster
+    # share 합산 → 정규화.
+    techniques_with_share = [
+        (enriched_to_item_distribution(item).technique, share)
+        for item, share in items_with_share
+    ]
 
     return DrilldownPayload(
         color_palette=build_cluster_palette([
@@ -220,6 +227,7 @@ def make_drilldown(
         silhouette_distribution=_share_weighted_distribution(silhouettes_with_share),
         occasion_distribution=_share_weighted_distribution(occasions_with_share),
         styling_distribution=_share_weighted_dict_aggregate(stylings_with_share),
+        technique_distribution=_share_weighted_dict_aggregate(techniques_with_share),
         # 로직 C: log-scale 균등 분배 → threshold/top-N → 정규화. 빈 결과 시 빈 dict.
         brand_distribution=compute_brand_distribution(items_with_share),
         top_posts=_top_posts(items_with_share, top_post_limit),

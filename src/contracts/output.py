@@ -63,6 +63,10 @@ class DrilldownPayload(BaseModel):
     silhouette_distribution: DistributionMap
     occasion_distribution: DistributionMap
     styling_distribution: DistributionMap
+    # Phase 2 (2026-04-30): cluster_key 가 g__f 로 단순화되면서 technique 은 cluster
+    # 의 drilldown distribution 으로만 노출. share-weighted vote (item 의 technique
+    # distribution × cluster share 합산 → 정규화). 빈 dict = 미기여.
+    technique_distribution: DistributionMap = {}
     # 로직 C (2026-04-29) — log-scale 균등 분배 + threshold/top-N cap. 합=1.0 또는 빈 dict.
     # insertion order = share desc (JSON 직렬화 시 순서 보존).
     brand_distribution: DistributionMap = {}
