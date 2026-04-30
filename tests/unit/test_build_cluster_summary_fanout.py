@@ -35,7 +35,7 @@ def _normalized(post_id: str) -> NormalizedContentItem:
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 27),
-        engagement_raw=100,
+        engagement_raw_count=100,
         account_handle=None,
         account_followers=1000,
     )

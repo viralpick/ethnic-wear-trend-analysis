@@ -65,7 +65,7 @@ def _make_item(
         hashtags=[],
         image_urls=image_urls or ["image_A.jpg"],
         post_date=datetime(2026, 4, 24, tzinfo=timezone.utc),
-        engagement_raw=100,
+        engagement_raw_count=100,
     )
 
 

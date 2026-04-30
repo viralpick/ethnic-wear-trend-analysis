@@ -14,5 +14,7 @@
     "https://example.com/ig/fixture/1_b.jpg"
   ],
   "post_date": "2026-04-20T09:15:00Z",
-  "engagement_raw": 59580
+  "engagement_raw_count": 59580,
+  "engagement_score": 0.05958,
+  "account_followers": 1000000
 }

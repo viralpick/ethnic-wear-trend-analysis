@@ -142,7 +142,7 @@ def build_item_row(
         "occasion": _enum_value(enriched.occasion),
         "brands_mentioned": _brands_to_json(enriched.brands),
         "color_palette": _palette_to_json(enriched.post_palette) or None,
-        "engagement_raw": normalized.engagement_raw,
+        "engagement_raw": normalized.engagement_raw_count,
         "account_handle": normalized.account_handle,
         "account_follower_count": normalized.account_followers or None,
         "schema_version": SCHEMA_VERSION,

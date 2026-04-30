@@ -1,9 +1,27 @@
-"""Raw (IG/YT) → NormalizedContentItem 변환 (spec §5.2 전처리 단계)."""
+"""Raw (IG/YT) → NormalizedContentItem 변환 (spec §5.2 전처리 단계).
+
+Engagement Score (rate-based, 2026-04-30 sync 결정):
+- IG: likes / max(followers, 100) × 1 + comments / max(followers, 100) × 2
+- YT: like_count / max(subscriber, 100) × 1 + comment_count / max(subscriber, 100) × 2
+  + view_count 는 절대량 (engagement_raw_count) 으로만 보존
+- saves 항목 raw DB 미수집 → 제외
+- min_followers=100 — 작은 계정 viral 보존 + zero-division/huge-inflation 차단
+"""
 from __future__ import annotations
 
 from contracts.common import ContentSource, InstagramSourceType
 from contracts.normalized import NormalizedContentItem
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
+
+_MIN_FOLLOWERS = 100  # rate normalize lower bound (2026-04-30 sync)
+
+
+def _engagement_score(likes: int, comments: int, followers: int | None) -> float:
+    """rate-based engagement: likes/F × 1 + comments/F × 2. F = max(followers, 100)."""
+    f = max(followers or 0, _MIN_FOLLOWERS)
+    like_rate = likes / f
+    comment_rate = comments / f
+    return like_rate * 1.0 + comment_rate * 2.0
 
 
 def _as_hashtag_token(tag: str) -> str:
@@ -41,8 +59,12 @@ def normalize_instagram_post(
     if post.hashtags:
         text_blob = f"{text_blob} {' '.join(post.hashtags)}".strip()
 
-    # spec §9.2 공식의 단순 합 (단, influencer_weight 없이). scoring 에서 raw 로부터 재계산.
-    engagement = post.likes + post.comments_count * 2 + (post.saves or 0) * 3
+    # rate-based engagement score (2026-04-30 sync). saves 는 raw DB 미수집 → 제외.
+    # 절대량 합산은 별도 engagement_raw_count 로 보존 (top N 정렬용).
+    engagement_score = _engagement_score(
+        post.likes, post.comments_count, post.account_followers,
+    )
+    engagement_raw_count = post.likes + post.comments_count * 2
 
     return NormalizedContentItem(
         source=ContentSource.INSTAGRAM,
@@ -52,7 +74,8 @@ def normalize_instagram_post(
         image_urls=list(post.image_urls),
         video_urls=list(post.video_urls),
         post_date=post.post_date,
-        engagement_raw=engagement,
+        engagement_score=engagement_score,
+        engagement_raw_count=engagement_raw_count,
         account_followers=post.account_followers,
         ig_source_type=_classify_ig_source_type(post, haul_tags).value,
         account_handle=post.account_handle,
@@ -73,8 +96,14 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
     text_blob = " ".join([video.title, video.description, *video.tags]).strip()
     tag_tokens = [t for t in (_as_hashtag_token(t) for t in video.tags) if t]
 
-    # engagement 프리-랭킹: view_count 가 dominant signal (추후 scoring 에서 정교화).
-    engagement = video.view_count + video.like_count + video.comment_count * 2
+    # rate-based engagement: like/sub × 1 + comment/sub × 2. saves 미수집 → 제외.
+    # view_count 는 절대량 (engagement_raw_count) 으로만 보존 (rate 의미 약함, 노출 ≠ 호응).
+    engagement_score = _engagement_score(
+        video.like_count, video.comment_count, video.channel_follower_count,
+    )
+    engagement_raw_count = (
+        video.view_count + video.like_count + video.comment_count * 2
+    )
 
     return NormalizedContentItem(
         source=ContentSource.YOUTUBE,
@@ -84,7 +113,9 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
         image_urls=[],
         video_urls=list(video.video_urls),
         post_date=video.published_at,
-        engagement_raw=engagement,
+        engagement_score=engagement_score,
+        engagement_raw_count=engagement_raw_count,
+        account_followers=video.channel_follower_count,
         account_handle=video.channel or None,
     )
 

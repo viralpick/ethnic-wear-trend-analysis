@@ -76,7 +76,7 @@ def _normalized(
         hashtags=["#kurta"],
         image_urls=["https://example.com/img.jpg"],
         post_date=datetime(2026, 4, 26, 12, 0, 0),
-        engagement_raw=4321,
+        engagement_raw_count=4321,
         account_followers=1500,
         account_handle=handle,
     )

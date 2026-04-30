@@ -40,7 +40,7 @@ def test_normalized_fixture_validates() -> None:
     )
 
     assert item.source.value == "instagram"
-    assert item.engagement_raw == 59580
+    assert item.engagement_raw_count == 59580
 
 
 def test_enriched_fixture_has_text_based_attrs_and_cluster() -> None:

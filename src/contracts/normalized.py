@@ -42,9 +42,17 @@ class NormalizedContentItem(BaseModel):
     # IG: post_date, YT: published_at
     post_date: datetime
 
-    # 간단한 가중 인게이지먼트 신호 (후속 단계 프리-랭킹용). 정확한 social score 는 §9.2 공식을
-    # raw 에서 재계산한다 — 여기 값은 "hint" 일 뿐.
-    engagement_raw: int
+    # Engagement Score (rate-based, 2026-04-30 sync 결정):
+    #   engagement_score = (likes / max(followers, 100)) × 1
+    #                    + (comments / max(followers, 100)) × 2
+    # YT 는 channel_follower_count 사용. saves 는 raw DB 미수집 → 제외.
+    # 절대량 (likes/views/comments) 자체 정렬이 필요한 경우 (예: top_posts in cluster
+    # drilldown) 는 engagement_raw_count 를 별도 사용.
+    engagement_score: float = 0.0
+
+    # 절대량 합산 (top N 정렬, 영상 view_count 부각 등). IG: likes + comments*2,
+    # YT: view_count + like_count + comment_count*2. 옛 engagement_raw 의미 유지.
+    engagement_raw_count: int = 0
 
     # IG 전용 scoring 입력 — YT 는 None / 0 (§9.2 Social / Cultural 계산에 직접 사용).
     account_followers: int = 0

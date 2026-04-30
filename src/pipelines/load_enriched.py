@@ -114,7 +114,7 @@ def dedup_by_raw_url(
     items: list[EnrichedContentItem],
     post_urls: dict[str, str],
 ) -> list[EnrichedContentItem]:
-    """raw DB url 기준 dedup — 동일 url 가진 item 중 engagement_raw 최대 1건만 keep.
+    """raw DB url 기준 dedup — 동일 url 가진 item 중 engagement_raw_count 최대 1건만 keep.
 
     rep phase 에서 enriched 내 url 중복 (re-crawl 등) 으로 cluster 점수 inflate 방지.
     url 미매핑 (post_id 가 raw DB lookup 실패) item 은 모두 유지 (가짜 dedup 방지).
@@ -135,7 +135,7 @@ def dedup_by_raw_url(
     for url, group in by_url.items():
         if len(group) > 1:
             dropped += len(group) - 1
-        group.sort(key=lambda it: -(it.normalized.engagement_raw or 0))
+        group.sort(key=lambda it: -(it.normalized.engagement_raw_count or 0))
         out.append(group[0])
     logger.info(
         "dedup_by_raw_url in=%d out=%d dropped=%d no_url=%d",
