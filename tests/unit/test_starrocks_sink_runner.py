@@ -124,7 +124,7 @@ def _canonical(index: int, outfit: EthnicOutfit) -> CanonicalOutfit:
 def _enriched(
     post_id: str,
     *,
-    cluster_key: str = "kurta_set__block_print__cotton",
+    cluster_key: str = "kurta_set__cotton",
     garment_type: GarmentType | None = GarmentType.KURTA_SET,
     fabric: Fabric | None = Fabric.COTTON,
     technique: Technique | None = Technique.BLOCK_PRINT,
@@ -152,7 +152,7 @@ def _enriched(
 
 
 def _summary(
-    cluster_key: str = "kurta_set__block_print__cotton",
+    cluster_key: str = "kurta_set__cotton",
     *,
     score: float = 80.0,
 ) -> TrendClusterSummary:
@@ -211,16 +211,11 @@ def populated_weekly_history(tmp_path: Path) -> Path:
 
     path = tmp_path / "score_history_weekly.json"
     history = WeeklyScoreHistory(path)
-    history.update_weekly(
-        "kurta_set__block_print__cotton",
-        _FIXED_DATE,
-        80.0,
-        post_count=2,
-    )
+    history.update_weekly("kurta_set__cotton", _FIXED_DATE, 80.0, post_count=2)
     history.save()
     # sanity
     raw = json.loads(path.read_text())
-    assert iso_week_key(_FIXED_DATE) in raw["kurta_set__block_print__cotton"]
+    assert iso_week_key(_FIXED_DATE) in raw["kurta_set__cotton"]
     return path
 
 
@@ -289,10 +284,8 @@ def test_emit_representative_row_pulls_from_summary(populated_weekly_history) ->
     assert len(rep_rows) == 1
     row = rep_rows[0]
 
-    assert row["representative_key"] == "kurta_set__block_print__cotton"
-    assert row["representative_id"] == representative_id(
-        "kurta_set__block_print__cotton"
-    )
+    assert row["representative_key"] == "kurta_set__cotton"
+    assert row["representative_id"] == representative_id("kurta_set__cotton")
     assert row["score_total"] == 88.5
     assert row["lifecycle_stage"] == LifecycleStage.GROWTH.value
     assert row["weekly_direction"] == Direction.UP.value
@@ -329,12 +322,12 @@ def test_emit_writes_effective_item_count_pin(populated_weekly_history) -> None:
 
 
 def test_emit_effective_item_count_partial_n_proportional(populated_weekly_history) -> None:
-    """N<3 item 은 multiplier-scaled 비율로만 분모 기여 (1=0.2 / 2=0.5 / 3=1.0)."""
+    """N<2 item 은 multiplier-scaled 비율로만 분모 기여 (1=0.4 / 2=1.0)."""
     writer = FakeStarRocksWriter()
     enriched = [
-        _enriched("p1"),  # N=3 → 1.0
-        _enriched("p2", fabric=None),  # N=2 → 0.5
-        _enriched("p3", fabric=None, technique=None),  # N=1 → 0.2
+        _enriched("p1"),  # G/F resolved → 1.0
+        _enriched("p2", fabric=None),  # garment only → 0.4
+        _enriched("p3", fabric=None, technique=None),  # garment only → 0.4
     ]
 
     emit_to_starrocks(
@@ -347,9 +340,7 @@ def test_emit_effective_item_count_partial_n_proportional(populated_weekly_histo
     )
 
     rep_rows = writer.batches[REPRESENTATIVE_TABLE]
-    # 1.0 + 0.5 + 0.2 = 1.7. 단, p2/p3 는 N<3 이라 representative contribution 0
-    # → only p1 의 cluster 가 emit, 그 row 에 batch 분모 = 1.7.
-    assert all(row["effective_item_count"] == pytest.approx(1.7) for row in rep_rows)
+    assert all(row["effective_item_count"] == pytest.approx(1.8) for row in rep_rows)
 
 
 def test_emit_distribution_keys_pin(populated_weekly_history) -> None:
@@ -402,8 +393,7 @@ def test_emit_partial_cluster_representative_partial_activation(populated_weekly
 
     text + vision 양쪽 technique=None → ItemDistribution 의 technique dict 가 빈
     상태 (N=2). 이전엔 representative emit 안 됐으나, partial 활성화 후 unknown
-    placeholder 로 partial cluster (`kurta_set__unknown__cotton`) emit 됨.
-    multiplier=2.5 (N=2).
+    technique 누락이어도 G/F exact representative (`kurta_set__cotton`) emit 됨.
     """
     writer = FakeStarRocksWriter()
     # technique=None + canonical 의 representative.technique=None 양쪽 모두 비움.
@@ -435,7 +425,7 @@ def test_emit_partial_cluster_representative_partial_activation(populated_weekly
             "garment_type": ClassificationMethod.RULE,
             "fabric": ClassificationMethod.RULE,
         },
-        trend_cluster_key="kurta_set__unknown__cotton",
+        trend_cluster_key="kurta_set__cotton",
     )
     counts = emit_to_starrocks(
         enriched=[enriched_partial],
@@ -449,8 +439,7 @@ def test_emit_partial_cluster_representative_partial_activation(populated_weekly
     assert counts[ITEM_TABLE] == 1
     assert counts[REPRESENTATIVE_TABLE] == 1
     rep_row = writer.batches[REPRESENTATIVE_TABLE][0]
-    # representative_key 가 partial 형태로 적재.
-    assert "unknown" in rep_row["representative_key"]
+    assert rep_row["representative_key"] == "kurta_set__cotton"
 
 
 def test_emit_trajectory_length_is_12(populated_weekly_history) -> None:

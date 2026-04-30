@@ -20,38 +20,37 @@ from itertools import product
 from clustering.assign_trend_cluster import assign_shares
 from contracts.common import ContentSource
 
+# G__F 2축 (2026-04-30 sync): N=2 (G+F) → 2.5x, N=1 (G or F) → 1.0x.
+# representative 적재 권장은 N=2 (둘 다 resolved). N=1 partial 도 emit 시 multiplier 작아 자연 weight ↓.
 _MULTIPLIER_BY_N: dict[int, float] = {
     1: 1.0,
     2: 2.5,
-    3: 5.0,
 }
 
 
 @dataclass(frozen=True)
 class ItemDistribution:
-    """1 item (post/video) 의 G/T/F distribution + source.
+    """1 item (post/video) 의 G/F distribution + source. technique 은 cluster
+    drilldown 의 distribution 으로 별도 노출 — cluster_key 에서는 빠짐 (2026-04-30 sync).
 
-    빈 dict 는 "결정 안됨" 의미. spec §C.2 (representative 적재 = G/T/F 모두 결정) 에
-    따르면 한 attr 이라도 비면 N<3 이므로 함수 내부에서 자연 제외.
-
-    `item_base_unit` 는 spec §2.4 마지막 줄의 향후 engagement 가중 자리 — 현재 1.0 default.
+    `item_base_unit` 는 향후 engagement 가중 자리 — 현재 1.0 default.
     """
     item_id: str
     source: ContentSource
     garment_type: dict[str, float] = field(default_factory=dict)
-    technique: dict[str, float] = field(default_factory=dict)
     fabric: dict[str, float] = field(default_factory=dict)
+    technique: dict[str, float] = field(default_factory=dict)  # drilldown 표시용
     item_base_unit: float = 1.0
 
 
 @dataclass(frozen=True)
 class RepresentativeContribution:
-    """1 item 이 1 representative 에 보태는 기여도 + multiplier."""
-    representative_key: str  # "g__t__f" 포맷
+    """1 item 이 1 representative 에 보태는 기여도 + multiplier (G__F 2축)."""
+    representative_key: str  # "g__f" 포맷
     item_id: str
     source: ContentSource
-    match_share: float       # cross-product 곱
-    multiplier: float        # 1.0 / 2.5 / 5.0
+    match_share: float       # cross-product 곱 (G × F)
+    multiplier: float        # 1.0 / 2.5
     contribution: float      # match_share × multiplier × item_base_unit
 
 
@@ -67,35 +66,26 @@ class RepresentativeAggregate:
     member_count: int  # 기여한 item 수 (debug / sparse 진단용)
 
 
-def representative_key(g: str, t: str, f: str) -> str:
-    """spec §C.2 representative_key 포맷 — `garment__technique__fabric`."""
-    return f"{g}__{t}__{f}"
+def representative_key(g: str, f: str) -> str:
+    """representative_key 포맷 (2026-04-30) — `garment__fabric` (2축)."""
+    return f"{g}__{f}"
 
 
 def multiplier_for_n(n: int) -> float:
-    """spec §2.4 매칭 multiplier. N=0 → 0.0 (representative 후보 아님)."""
+    """매칭 multiplier (G__F 2축). N=0 → 0.0 (후보 아님)."""
     return _MULTIPLIER_BY_N.get(n, 0.0)
 
 
 def _resolved_axis_count(item: ItemDistribution) -> int:
-    """G/T/F 중 비어있지 않은 축 수 (0~3)."""
-    return sum(
-        1 for d in (item.garment_type, item.technique, item.fabric) if d
-    )
+    """G/F 중 비어있지 않은 축 수 (0~2). technique 은 cluster_key 에서 빠짐."""
+    return sum(1 for d in (item.garment_type, item.fabric) if d)
 
 
 def effective_item_count(items: list[ItemDistribution]) -> float:
-    """multiplier-scaled batch denominator (Phase β1, 2026-04-28).
-
-    `score_total / effective_item_count` 가 view-layer normalize 분모. multiplier
-    테이블 (1.0 / 2.5 / 5.0) 을 N=3 기준으로 정규화하여 N=0:0 / 1:0.2 / 2:0.5 /
-    3:1.0 weight 합산.
-
-    이 형태가 numerator (Σ share × multiplier) 와 단위 정합 — 미래에 N<3 도 emit
-    하면 분자/분모 동시에 자동 반영됨. binary 카운트 (N>0) 는 N=1 도 full count
-    되어 분자 multiplier scale 과 맞지 않음.
+    """multiplier-scaled batch denominator. N=2 기준 정규화 — N=0:0 / N=1:0.4 / N=2:1.0.
+    분자 multiplier scale 과 단위 정합.
     """
-    full = multiplier_for_n(3)
+    full = multiplier_for_n(2)
     return sum(multiplier_for_n(_resolved_axis_count(item)) / full for item in items)
 
 
@@ -105,12 +95,11 @@ _UNKNOWN_AXIS = "unknown"
 
 
 def _item_contributions(item: ItemDistribution) -> list[RepresentativeContribution]:
-    """1 item → cross-product 후 representative 별 contribution 목록.
+    """1 item → G__F cross-product representative contribution 목록 (2026-04-30 sync).
 
-    Phase partial(g) 활성화 (2026-04-28):
-    - N (resolved axis 수) = 0 → 빈 list (representative 후보 아님)
-    - N≥1 → cross-product. 비어있는 axis 는 `_UNKNOWN_AXIS` placeholder (1.0 share).
-      multiplier = multiplier_for_n(N) (1.0 / 2.5 / 5.0).
+    - N=0 → 빈 list (후보 아님)
+    - N≥1 → cross-product (G × F). 비어있는 axis 는 `_UNKNOWN_AXIS` placeholder.
+      multiplier = multiplier_for_n(N) (1.0 / 2.5).
     - contribution = share × multiplier × item_base_unit.
     """
     n_axes = _resolved_axis_count(item)
@@ -118,20 +107,17 @@ def _item_contributions(item: ItemDistribution) -> list[RepresentativeContributi
         return []
 
     g_eff = item.garment_type or {_UNKNOWN_AXIS: 1.0}
-    t_eff = item.technique or {_UNKNOWN_AXIS: 1.0}
     f_eff = item.fabric or {_UNKNOWN_AXIS: 1.0}
     mult = multiplier_for_n(n_axes)
 
     out: list[RepresentativeContribution] = []
-    for (g, gp), (t, tp), (f, fp) in product(
-        g_eff.items(), t_eff.items(), f_eff.items(),
-    ):
-        share = gp * tp * fp
+    for (g, gp), (f, fp) in product(g_eff.items(), f_eff.items()):
+        share = gp * fp
         if share <= 0.0:
             continue
         contrib = share * mult * item.item_base_unit
         out.append(RepresentativeContribution(
-            representative_key=representative_key(g, t, f),
+            representative_key=representative_key(g, f),
             item_id=item.item_id,
             source=item.source,
             match_share=share,
@@ -202,23 +188,15 @@ def aggregate_representatives(
 
 
 def item_cluster_shares(item: ItemDistribution) -> dict[str, float]:
-    """Phase α (2026-04-28): item → cluster_key 별 raw share dict (multiplier 없음).
+    """item → cluster_key 별 raw share dict. G__F 2축 (2026-04-30 sync).
 
-    pipeline_spec §2.4 line 252-255 의 contribution-weighted score 입력용 — 1 item
-    의 G/T/F 분포가 cross-product 으로 여러 cluster_key 에 share 로 fan-out.
-    representative_key 와 cluster_key 는 동일 포맷 (`g__t__f`) 이므로
-    `assign_shares` 위임 — cross-product 로직 single source.
+    1 item 의 G/F 분포가 cross-product 으로 여러 cluster_key 에 share 로 fan-out.
+    representative_key 와 cluster_key 는 동일 포맷 (`g__f`).
 
-    contribution = share × multiplier × item_base_unit 인데, score 합산은 share
-    만 보면 됨 (multiplier 는 representative 적재 단위, score 는 item 의 representative
-    참여 확률 그대로 가중). 따라서 raw share 만 반환.
-
-    G/T/F 한 distribution 이라도 비면 빈 dict (N<3 정책 — `_item_contributions` /
-    `assign_shares` 와 동일).
-
-    Phase β 에서 build_cluster_summary 가 이 함수로 fan-out 호출 예정.
+    technique 은 cluster fan-out 키에서 빠짐 — cluster drilldown 의 technique_distribution
+    으로만 노출. share 합 = N=2 → 1.0, N=1 → 0.5, N=0 → 0.
     """
-    return assign_shares(item.garment_type, item.technique, item.fabric)
+    return assign_shares(item.garment_type, item.fabric)
 
 
 def top_evidence_per_source(

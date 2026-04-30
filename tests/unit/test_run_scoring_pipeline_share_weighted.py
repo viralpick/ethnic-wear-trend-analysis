@@ -169,24 +169,22 @@ def empty_history(tmp_path: Path) -> ScoreHistory:
 # --------------------------------------------------------------------------- #
 
 def test_n_lt_3_item_contributes_partial_mass(empty_history: ScoreHistory) -> None:
-    # Phase partial(g) 활성화 (2026-04-28) — β2 의 N<3 zero contribution 정책 revisit.
-    # N=2 (technique 누락) → assign_shares 가 multiplier_ratio (0.5) 가중 share 반환 →
-    # cluster 에 mass=0.5 비례 기여 (per-item mass: N=3=1.0 / N=2=0.5 / N=1=0.2).
+    # technique 누락은 cluster fan-out 키에 영향 없음.
     item = _enriched("p1", g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
-                     cluster_key="kurta_set__unknown__cotton")
+                     cluster_key="kurta_set__cotton")
     grouped = group_by_cluster([item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
-    assert "kurta_set__unknown__cotton" in acc
-    a = acc["kurta_set__unknown__cotton"]
-    assert a.post_count_today == pytest.approx(0.5)  # N=2 multiplier_ratio
-    assert a.social_weighted_engagement == pytest.approx(50.0)  # 100 × 0.5
+    assert "kurta_set__cotton" in acc
+    a = acc["kurta_set__cotton"]
+    assert a.post_count_today == pytest.approx(1.0)
+    assert a.social_weighted_engagement == pytest.approx(100.0)
 
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
     assert len(contexts) == 1
     ctx = contexts[0]
-    assert ctx.cluster_key == "kurta_set__unknown__cotton"
-    assert ctx.post_count_today == pytest.approx(0.5)
-    assert ctx.social_weighted_engagement == pytest.approx(50.0)
+    assert ctx.cluster_key == "kurta_set__cotton"
+    assert ctx.post_count_today == pytest.approx(1.0)
+    assert ctx.social_weighted_engagement == pytest.approx(100.0)
 
 
 def test_n_zero_item_contributes_zero(empty_history: ScoreHistory) -> None:
@@ -206,35 +204,34 @@ def test_n_eq_3_mass_preservation_single_winner(empty_history: ScoreHistory) -> 
     # G/T/F 모두 단일값 1.0 → cross-product 1개 cluster, share=1.0.
     item = _enriched(
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     grouped = group_by_cluster([item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
 
-    assert set(acc.keys()) == {"kurta_set__chikankari__cotton"}
-    a = acc["kurta_set__chikankari__cotton"]
+    assert set(acc.keys()) == {"kurta_set__cotton"}
+    a = acc["kurta_set__cotton"]
     assert a.post_count_today == pytest.approx(1.0)
     # winner-takes-all baseline 과 동치 (degenerate distribution)
     assert a.social_weighted_engagement == pytest.approx(100.0)
 
 
 def test_mass_preservation_3_items(empty_history: ScoreHistory) -> None:
-    # 3 N=3 items + 1 N=2 item → partial 활성화 후 sum(post_count_today) = 3.0 + 0.5 = 3.5.
-    # per-item mass: N=3=1.0 (×3) + N=2=0.5 (×1) = 3.5.
+    # technique 누락 item 도 G/F 둘 다 있으면 full mass.
     items = [
         _enriched("p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-                  cluster_key="kurta_set__chikankari__cotton"),
+                  cluster_key="kurta_set__cotton"),
         _enriched("p2", g=GarmentType.CASUAL_SAREE, t=Technique.BLOCK_PRINT, f=Fabric.CHANDERI,
-                  cluster_key="casual_saree__block_print__chanderi"),
+                  cluster_key="casual_saree__chanderi"),
         _enriched("p3", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-                  cluster_key="kurta_set__chikankari__cotton"),
+                  cluster_key="kurta_set__cotton"),
         _enriched("p4_n2", g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
-                  cluster_key="kurta_set__unknown__cotton"),
+                  cluster_key="kurta_set__cotton"),
     ]
     grouped = group_by_cluster(items)
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
     total_mass = sum(a.post_count_today for a in acc.values())
-    assert total_mass == pytest.approx(3.5)  # N=3 (×3, 1.0) + N=2 (×1, 0.5)
+    assert total_mass == pytest.approx(4.0)
 
 
 def test_share_fan_out_cross_product(empty_history: ScoreHistory) -> None:
@@ -242,14 +239,14 @@ def test_share_fan_out_cross_product(empty_history: ScoreHistory) -> None:
     # fixture 라 cross-product 결과도 1 cluster).
     items = [
         _enriched("p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-                  cluster_key="kurta_set__chikankari__cotton", engagement=200),
+                  cluster_key="kurta_set__cotton", engagement=200),
         _enriched("p2", g=GarmentType.CASUAL_SAREE, t=Technique.BLOCK_PRINT, f=Fabric.CHANDERI,
-                  cluster_key="casual_saree__block_print__chanderi", engagement=300),
+                  cluster_key="casual_saree__chanderi", engagement=300),
     ]
     grouped = group_by_cluster(items)
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
-    a_kurta = acc["kurta_set__chikankari__cotton"]
-    a_saree = acc["casual_saree__block_print__chanderi"]
+    a_kurta = acc["kurta_set__cotton"]
+    a_saree = acc["casual_saree__chanderi"]
     assert a_kurta.social_weighted_engagement == pytest.approx(200.0)
     assert a_saree.social_weighted_engagement == pytest.approx(300.0)
 
@@ -258,12 +255,12 @@ def test_youtube_video_count_share_weighted(empty_history: ScoreHistory) -> None
     # YT N=3 item → fan-out cluster 에 yt_count = share, sum = 1.0.
     yt_item = _enriched(
         "yt1", g=GarmentType.CASUAL_SAREE, t=Technique.BLOCK_PRINT, f=Fabric.COTTON,
-        cluster_key="casual_saree__block_print__cotton",
+        cluster_key="casual_saree__cotton",
         source=ContentSource.YOUTUBE, engagement=5000,
     )
     grouped = group_by_cluster([yt_item])
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
-    a = acc["casual_saree__block_print__cotton"]
+    a = acc["casual_saree__cotton"]
     assert a.youtube_video_count == pytest.approx(1.0)
     assert a.youtube_views_total == pytest.approx(5000.0)
 
@@ -274,14 +271,14 @@ def test_accounts_in_cluster_includes_ig_handles(empty_history: ScoreHistory) ->
     # 자체는 별도 multi_cluster_fan_out 핀이 검증).
     item = _enriched(
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
         handle="user_alpha",
     )
     grouped = group_by_cluster([item])
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
     assert len(contexts) == 1
     # new_account_ratio 가 빈 history 에 대해 호출됐는지 (간접 — context 가 정상 빌드됨)
-    assert contexts[0].cluster_key == "kurta_set__chikankari__cotton"
+    assert contexts[0].cluster_key == "kurta_set__cotton"
 
 
 def test_post_count_total_history_int_plus_rounded_share(empty_history: ScoreHistory) -> None:
@@ -289,7 +286,7 @@ def test_post_count_total_history_int_plus_rounded_share(empty_history: ScoreHis
     # 단일 N=3 item → round(1.0) = 1.
     item = _enriched(
         "p1", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     grouped = group_by_cluster([item])
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
@@ -319,13 +316,13 @@ def test_multi_cluster_fan_out_mass_preserved(empty_history: ScoreHistory) -> No
     )
     item = _enriched(
         "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton", engagement=100,
+        cluster_key="kurta_set__cotton", engagement=100,
         canonicals=[canonical],
     )
     grouped = group_by_cluster([item])
     # multi-fan-out 확인 — cluster 2 개 등장.
     assert set(grouped.keys()) == {
-        "kurta_set__chikankari__cotton", "casual_saree__chikankari__cotton",
+        "kurta_set__cotton", "casual_saree__cotton",
     }
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
 
@@ -342,7 +339,7 @@ def test_multi_cluster_fan_out_build_contexts_mass_consistent(
     canonical = _canonical_with_garment(upper="casual_saree")
     item = _enriched(
         "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton", engagement=100,
+        cluster_key="kurta_set__cotton", engagement=100,
         canonicals=[canonical],
     )
     grouped = group_by_cluster([item])
@@ -351,5 +348,5 @@ def test_multi_cluster_fan_out_build_contexts_mass_consistent(
     by_key = {c.cluster_key: c for c in contexts}
     total_mass = sum(c.post_count_today for c in contexts)
     assert total_mass == pytest.approx(1.0)
-    assert by_key["kurta_set__chikankari__cotton"].post_count_today > 0
-    assert by_key["casual_saree__chikankari__cotton"].post_count_today > 0
+    assert by_key["kurta_set__cotton"].post_count_today > 0
+    assert by_key["casual_saree__cotton"].post_count_today > 0

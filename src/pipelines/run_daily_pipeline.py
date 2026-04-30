@@ -73,8 +73,9 @@ def _assign_clusters(
     cluster_totals: dict[str, int] = {}
     enriched: list[EnrichedContentItem] = []
     for state in states:
+        # G__F 2축 (2026-04-30 sync). technique 은 cluster drilldown 의 distribution.
         key = assign_cluster(
-            state.garment_type, state.technique, state.fabric, cluster_totals
+            state.garment_type, state.fabric, cluster_totals
         )
         enriched.append(state.to_enriched(cluster_key=key))
         if key != UNCLASSIFIED and "unknown" not in key:

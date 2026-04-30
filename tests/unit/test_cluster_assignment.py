@@ -3,133 +3,95 @@ from __future__ import annotations
 import pytest
 
 from clustering.assign_trend_cluster import UNCLASSIFIED, assign_cluster, assign_shares
-from contracts.common import Fabric, GarmentType, Technique
+from contracts.common import Fabric, GarmentType
 
 
-def test_exact_match_when_all_three_resolved() -> None:
-    key = assign_cluster(
-        GarmentType.KURTA_SET, Technique.CHIKANKARI, Fabric.COTTON,
-        cluster_totals={},
-    )
+def test_exact_match_when_both_axes_resolved() -> None:
+    key = assign_cluster(GarmentType.KURTA_SET, Fabric.COTTON, {})
 
-    assert key == "kurta_set__chikankari__cotton"
+    assert key == "kurta_set__cotton"
 
 
 def test_partial_match_picks_highest_post_count_candidate() -> None:
-    # garment + fabric 고정, technique 이 null. 기존 정확 키들 중 매칭되는 것만 후보.
     key = assign_cluster(
-        GarmentType.KURTA_SET, None, Fabric.COTTON,
-        cluster_totals={
-            "kurta_set__chikankari__cotton": 5,
-            "kurta_set__block_print__cotton": 12,
-            "co_ord__block_print__linen": 30,  # 다른 garment_type — 후보 아님
+        GarmentType.KURTA_SET,
+        None,
+        {
+            "kurta_set__cotton": 5,
+            "kurta_set__linen": 12,
+            "co_ord__linen": 30,
         },
     )
 
-    assert key == "kurta_set__block_print__cotton"
+    assert key == "kurta_set__linen"
 
 
 def test_all_null_routes_to_unclassified() -> None:
-    key = assign_cluster(None, None, None, cluster_totals={})
+    key = assign_cluster(None, None, {})
 
     assert key == UNCLASSIFIED
 
 
 def test_tie_break_picks_lexicographically_smallest_on_equal_count() -> None:
-    # 두 후보 모두 count=5. "block_print" < "chikankari" 이므로 block_print 가 승자.
     key = assign_cluster(
-        GarmentType.KURTA_SET, None, Fabric.COTTON,
-        cluster_totals={
-            "kurta_set__chikankari__cotton": 5,
-            "kurta_set__block_print__cotton": 5,
+        GarmentType.KURTA_SET,
+        None,
+        {
+            "kurta_set__linen": 5,
+            "kurta_set__cotton": 5,
         },
     )
 
-    assert key == "kurta_set__block_print__cotton"
+    assert key == "kurta_set__cotton"
 
 
 def test_partial_with_no_history_builds_unknown_placeholder_key() -> None:
-    # 첫 런 (cluster_totals 비어 있음) + 부분 매칭 케이스.
-    key = assign_cluster(
-        GarmentType.KURTA_SET, None, None,
-        cluster_totals={},
-    )
+    key = assign_cluster(GarmentType.KURTA_SET, None, {})
 
-    assert key == "kurta_set__unknown__unknown"
-
-
-# --------------------------------------------------------------------------- #
-# Phase α (2026-04-28) — share-weighted assign (N:N path)
-# --------------------------------------------------------------------------- #
+    assert key == "kurta_set__unknown"
 
 
 def test_assign_shares_cross_product_matches_spec_example() -> None:
-    # pipeline_spec §2.4 예시 — 0.42 / 0.28 / 0.18 / 0.12 4 keys.
     shares = assign_shares(
-        garment_dist={"kurta": 0.7, "saree": 0.3},
-        technique_dist={"block_print": 1.0},
-        fabric_dist={"cotton": 0.6, "silk": 0.4},
+        {"kurta": 0.7, "saree": 0.3},
+        {"cotton": 0.6, "silk": 0.4},
     )
 
     assert shares == {
-        "kurta__block_print__cotton": 0.7 * 1.0 * 0.6,
-        "kurta__block_print__silk":   0.7 * 1.0 * 0.4,
-        "saree__block_print__cotton": 0.3 * 1.0 * 0.6,
-        "saree__block_print__silk":   0.3 * 1.0 * 0.4,
+        "kurta__cotton": 0.7 * 0.6,
+        "kurta__silk": 0.7 * 0.4,
+        "saree__cotton": 0.3 * 0.6,
+        "saree__silk": 0.3 * 0.4,
     }
-    # input 분포 합 = 1.0 → 결과 share 합 = 1.0 invariant.
     assert abs(sum(shares.values()) - 1.0) < 1e-9
 
 
 def test_assign_shares_partial_emits_with_unknown_axis() -> None:
-    # Phase partial(g) 활성화 (2026-04-28): N<3 도 emit. 비어있는 axis 는 unknown
-    # placeholder, share × multiplier_ratio (N=2 → 0.5 / N=1 → 0.2).
-    # N=2 — 비어있는 axis 1개.
-    assert assign_shares({}, {"a": 1.0}, {"b": 1.0}) == {
-        "unknown__a__b": pytest.approx(0.5)
-    }
-    assert assign_shares({"a": 1.0}, {}, {"b": 1.0}) == {
-        "a__unknown__b": pytest.approx(0.5)
-    }
-    assert assign_shares({"a": 1.0}, {"b": 1.0}, {}) == {
-        "a__b__unknown": pytest.approx(0.5)
-    }
-    # N=0 만 빈 dict.
-    assert assign_shares({}, {}, {}) == {}
+    assert assign_shares({}, {"b": 1.0}) == {"unknown__b": pytest.approx(0.5)}
+    assert assign_shares({"a": 1.0}, {}) == {"a__unknown": pytest.approx(0.5)}
+    assert assign_shares({}, {}) == {}
 
 
 def test_assign_shares_drops_zero_share_entries() -> None:
-    # share=0 인 cross-product 항은 dict 에 안 들어감.
-    shares = assign_shares(
-        garment_dist={"kurta": 1.0, "saree": 0.0},
-        technique_dist={"block_print": 1.0},
-        fabric_dist={"cotton": 1.0},
-    )
+    shares = assign_shares({"kurta": 1.0, "saree": 0.0}, {"cotton": 1.0})
 
-    assert shares == {"kurta__block_print__cotton": 1.0}
+    assert shares == {"kurta__cotton": 1.0}
 
 
 def test_assign_shares_min_share_threshold_drops_below() -> None:
-    # min_share=0.2 → 0.18 / 0.12 케이스 drop.
     shares = assign_shares(
-        garment_dist={"kurta": 0.7, "saree": 0.3},
-        technique_dist={"block_print": 1.0},
-        fabric_dist={"cotton": 0.6, "silk": 0.4},
+        {"kurta": 0.7, "saree": 0.3},
+        {"cotton": 0.6, "silk": 0.4},
         min_share=0.2,
     )
 
     assert set(shares.keys()) == {
-        "kurta__block_print__cotton",
-        "kurta__block_print__silk",
+        "kurta__cotton",
+        "kurta__silk",
     }
 
 
 def test_assign_shares_single_entry_per_axis_returns_share_1() -> None:
-    # exact-key path 와 동치: 각 축 1 value → 1 cluster_key, share = 1.0.
-    shares = assign_shares(
-        garment_dist={"kurta": 1.0},
-        technique_dist={"chikankari": 1.0},
-        fabric_dist={"cotton": 1.0},
-    )
+    shares = assign_shares({"kurta": 1.0}, {"cotton": 1.0})
 
-    assert shares == {"kurta__chikankari__cotton": 1.0}
+    assert shares == {"kurta__cotton": 1.0}
