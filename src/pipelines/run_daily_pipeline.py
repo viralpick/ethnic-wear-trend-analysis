@@ -308,10 +308,15 @@ def run_pipeline(
     if sink not in ("starrocks", "starrocks_insert", "dry_run"):
         return
 
+    # Phase 3 (2026-04-30): batch 내 url_short_tag 안전망 dedup. backfill batch 단위
+    # 라 cross-batch 중복은 item-resync 에서 누적 dedup 으로 처리.
+    from pipelines.load_enriched import dedup_by_url_short_tag  # noqa: I001
+    enriched_to_emit = dedup_by_url_short_tag(enriched)
+
     writer = _build_writer(sink)
     if phase == "item":
         from exporters.starrocks.sink_runner import emit_items_only  # noqa: I001
-        counts = emit_items_only(enriched, writer)
+        counts = emit_items_only(enriched_to_emit, writer)
         if sink == "dry_run":
             from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
             log_dry_run_summary(writer, counts)
@@ -321,7 +326,7 @@ def run_pipeline(
     from exporters.starrocks.sink_runner import emit_to_starrocks  # noqa: I001
     weekly_history_path = settings.paths.outputs / "score_history_weekly.json"
     counts = emit_to_starrocks(
-        enriched, summaries, target_date, writer,
+        enriched_to_emit, summaries, target_date, writer,
         weekly_history_path=weekly_history_path,
     )
     if sink == "dry_run":
@@ -342,9 +347,16 @@ def run_item_resync_phase(
     Gemini / blob / score 모두 호출 X. 신 코드 (vision_normalize 등) 의 enum 값으로
     item.garment_type_dist 갱신. 새 computed_at 이라 _latest view 가 최신 row 노출.
 
+    Phase 3 (2026-04-30): url_short_tag 기준 dedup — 같은 url 의 시계열 multi-snapshot
+    중 가장 최근 1건만 적재 (cluster score inflate + item table 중복 row 방지).
+
     start_date / end_date 미지정 시 모든 enriched 재적재.
     """
-    from pipelines.load_enriched import load_enriched_files, filter_by_date_range
+    from pipelines.load_enriched import (  # noqa: I001
+        dedup_by_url_short_tag,
+        filter_by_date_range,
+        load_enriched_files,
+    )
     from exporters.starrocks.sink_runner import emit_items_only
 
     pool = load_enriched_files(enriched_glob)
@@ -352,6 +364,7 @@ def run_item_resync_phase(
         enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
     else:
         enriched = pool
+    enriched = dedup_by_url_short_tag(enriched)
     if not enriched:
         logger.warning(
             "run_item_resync_phase empty enriched glob=%s start=%s end=%s",
