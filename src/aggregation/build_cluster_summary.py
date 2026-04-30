@@ -78,6 +78,8 @@ class ClusterDecision:
 
 def _canonical_cluster_entries(
     item: EnrichedContentItem,
+    *,
+    item_base_unit: float = 1.0,
 ) -> list[tuple[str, float]]:
     """Phase 2 (2026-04-30): canonical 단위 cluster fan-out.
 
@@ -87,10 +89,10 @@ def _canonical_cluster_entries(
 
     canonical 내 garment 또는 fabric 이 normalize 외 단어면 그 canonical 미참여.
     canonical 0 인 item (text-only) → enriched.garment_type + enriched.fabric 으로
-    single entry mass=1.0 (text-only 는 multi-outfit 가정 안 됨).
+    single entry mass=item_base_unit (default 1.0).
 
-    return: [(cluster_key, share), ...]. 같은 cluster_key 가 중복 등장 가능
-    (canonical_a 와 canonical_b 가 우연히 같은 g/f) — 호출자가 합치든 따로 두든.
+    Phase 3 (2026-04-30): item_base_unit 가중 — caller (rep phase) 가 growth rate
+    factor (1.0 ~ 2.0) 주입. 모든 canonical share 에 곱해져 cluster mass 자연 가중.
     """
     ethnic_canonicals = [c for c in item.canonicals if is_canonical_ethnic(c)]
     canonical_g_f: list[tuple[str | None, str | None, GroupSnapshot]] = []
@@ -98,7 +100,7 @@ def _canonical_cluster_entries(
         g_enum = normalize_garment_for_cluster(c.representative)
         f_enum = normalize_fabric(c.representative)
         snap = GroupSnapshot(
-            value=None,  # 분배 입력. value 는 호출자가 cluster_key 직접 조합.
+            value=None,
             n_objects=len(c.members),
             mean_area_ratio=canonical_mean_area_ratio(c),
         )
@@ -107,7 +109,6 @@ def _canonical_cluster_entries(
         )
 
     if canonical_g_f:
-        # log-scale 분배 (G = log2(Σn+1) × group_to_item_contrib 비례)
         snaps = [snap for _, _, snap in canonical_g_f]
         g = _g_total(snaps)
         if g <= 0:
@@ -125,7 +126,7 @@ def _canonical_cluster_entries(
             cluster_key = build_exact_key_strs(
                 g_val or "unknown", f_val or "unknown",
             )
-            share = g * c / denom
+            share = g * c / denom * item_base_unit
             if share <= 0.0:
                 continue
             out.append((cluster_key, share))
@@ -137,11 +138,13 @@ def _canonical_cluster_entries(
     if g_text is None and f_text is None:
         return []
     cluster_key = build_exact_key_strs(g_text or "unknown", f_text or "unknown")
-    return [(cluster_key, 1.0)]
+    return [(cluster_key, 1.0 * item_base_unit)]
 
 
 def group_by_cluster(
     items: list[EnrichedContentItem],
+    *,
+    item_base_units: dict[str, float] | None = None,
 ) -> dict[str, list[ItemWithShare]]:
     """canonical-level fan-out grouping (Phase 2, 2026-04-30 sync).
 
@@ -149,12 +152,16 @@ def group_by_cluster(
     의 N canonical 이 G = log2(Σn+1) × group_to_item_contrib 비례로 share 받음.
     text-only post (canonical=[]) 는 single entry mass=1.0.
 
-    cross-product (item.garment_dist × fabric_dist) 는 폐기 — canonical 의 actual
-    (g, f) 만 cluster 에 등록. 가짜 조합 (canonical 에 없는 g+f 페어) 자연 제거.
+    Phase 3 (2026-04-30): item_base_units 옵션 — {url_short_tag: factor} dict.
+    growth rate 가중치 (1.0 ~ 2.0) 를 item 별로 mass 에 곱함. None / 미매핑 item 은
+    factor=1.0 (가중 없음).
     """
     grouped: dict[str, list[ItemWithShare]] = {}
+    units = item_base_units or {}
     for item in items:
-        entries = _canonical_cluster_entries(item)
+        tag = item.normalized.url_short_tag
+        factor = units.get(tag, 1.0) if tag else 1.0
+        entries = _canonical_cluster_entries(item, item_base_unit=factor)
         if not entries:
             continue
         for cluster_key, share in entries:

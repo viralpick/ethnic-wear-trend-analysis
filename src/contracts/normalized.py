@@ -59,6 +59,11 @@ class NormalizedContentItem(BaseModel):
     # YT: view_count + like_count + comment_count*2. 옛 engagement_raw 의미 유지.
     engagement_raw_count: int = 0
 
+    # Phase 3 growth rate 시그널 source (2026-04-30 sync). source 별 다른 metric:
+    # IG: likes (post 인기 변화 직접 시그널), YT: view_count (영상 노출 확대).
+    # 시계열 비교로 Δ growth_metric / Δ days 계산 → cluster contribution 가중.
+    growth_metric: int = 0
+
     # IG 전용 scoring 입력 — YT 는 None / 0 (§9.2 Social / Cultural 계산에 직접 사용).
     account_followers: int = 0
     ig_source_type: str | None = None   # InstagramSourceType.value 문자열, YT 는 None
