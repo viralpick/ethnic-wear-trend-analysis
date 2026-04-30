@@ -297,7 +297,9 @@ def run_pipeline(
         settings.paths.outputs, target_date, enriched,
         filename=settings.export.enriched_filename,
     )
-    run_tracker(normalized, settings.paths.outputs / "unknown_signals.json", target_date)
+    unknown_signals = run_tracker(
+        normalized, settings.paths.outputs / "unknown_signals.json", target_date,
+    )
 
     summaries: list = []
     if phase == "all":
@@ -314,6 +316,10 @@ def run_pipeline(
     enriched_to_emit = dedup_by_url_short_tag(enriched)
 
     writer = _build_writer(sink)
+    # spec §4.2 — 신규 해시태그 시그널도 적재 (sink 활성화 시)
+    from exporters.starrocks.sink_runner import emit_unknown_signals  # noqa: I001
+    emit_unknown_signals(unknown_signals, writer)
+
     if phase == "item":
         from exporters.starrocks.sink_runner import emit_items_only  # noqa: I001
         counts = emit_items_only(enriched_to_emit, writer)

@@ -56,6 +56,7 @@ ITEM_TABLE = "item"
 GROUP_TABLE = "canonical_group"
 OBJECT_TABLE = "canonical_object"
 REPRESENTATIVE_TABLE = "representative_weekly"
+UNKNOWN_SIGNAL_TABLE = "unknown_signal"
 
 _DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 _EVIDENCE_TOP_K = 4
@@ -215,6 +216,39 @@ def _build_representative_rows(
             )
         )
     return rows
+
+
+def emit_unknown_signals(
+    signals: list,
+    writer: StarRocksWriter,
+    *,
+    computed_at: str | None = None,
+) -> int:
+    """spec §4.2 — 매핑에 없는 새 해시태그 적재.
+
+    signals: list[UnknownAttributeSignal]. 빈 list 면 적재 skip.
+    DUPLICATE KEY (tag, computed_at) — 같은 tag day-by-day 변화 추적, _latest view 가
+    최신 1 row 노출.
+    """
+    if not signals:
+        logger.info("emit_unknown_signals skip — empty list")
+        return 0
+    computed = computed_at or _now_utc_str()
+    rows = [
+        {
+            "tag": s.tag,
+            "computed_at": computed,
+            "count_3day": s.count_3day,
+            "first_seen": s.first_seen.isoformat(),
+            "likely_category": s.likely_category,
+            "reviewed": 1 if s.reviewed else 0,
+            "schema_version": "pipeline_v1.0",
+        }
+        for s in signals
+    ]
+    n = writer.write_batch(UNKNOWN_SIGNAL_TABLE, rows)
+    logger.info("emit_unknown_signals done count=%d", n)
+    return n
 
 
 def emit_items_only(
