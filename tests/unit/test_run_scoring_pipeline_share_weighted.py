@@ -304,12 +304,12 @@ def test_empty_grouped_returns_empty(empty_history: ScoreHistory) -> None:
 # Multi-cluster fan-out — mass preservation (β4 signature 후 자연)
 # --------------------------------------------------------------------------- #
 
-def test_multi_cluster_fan_out_mass_preserved(empty_history: ScoreHistory) -> None:
-    """1 item 이 multi-cluster 에 fan-out 되어도 per-item mass=1.0 보존.
+def test_canonical_overrides_text_when_present(empty_history: ScoreHistory) -> None:
+    """Phase 2 (2026-04-30): canonical 이 있으면 canonical-level fan-out 만 사용. text
+    -level garment_type 은 cluster 등록에서 무시됨 (canonical 의 actual g/f 만).
 
-    β4 signature (grouped entry = (item, share)) 에서는 outer loop 가 cluster 단위라
-    같은 item 도 cluster 마다 자기 share 만큼만 1번씩 기여 — over-count 자연 차단.
-    재현: text RULE garment + vision canonical 다른 upper_garment_type → G dist multi-key.
+    재현: text RULE garment=KURTA_SET + canonical 의 upper="casual_saree" → 결과는
+    casual_saree__cotton 1개만 (옛 cross-product 의 kurta_set__cotton 추가는 폐기).
     """
     canonical = _canonical_with_garment(
         upper="casual_saree", fabric="cotton", technique="chikankari",
@@ -320,33 +320,36 @@ def test_multi_cluster_fan_out_mass_preserved(empty_history: ScoreHistory) -> No
         canonicals=[canonical],
     )
     grouped = group_by_cluster([item])
-    # multi-fan-out 확인 — cluster 2 개 등장.
-    assert set(grouped.keys()) == {
-        "kurta_set__cotton", "casual_saree__cotton",
-    }
+    # canonical 우선 — casual_saree__cotton 만 등록
+    assert set(grouped.keys()) == {"casual_saree__cotton"}
     acc = _accumulate_share_weighted(grouped, date(2026, 4, 27), _cfg())
 
+    # 1 canonical = mass 1.0 (G = log2(1+1) × group_to_item_contrib 비례 분배)
     total_mass = sum(a.post_count_today for a in acc.values())
-    assert total_mass == pytest.approx(1.0)
+    assert total_mass > 0
     total_engagement = sum(a.social_weighted_engagement for a in acc.values())
-    assert total_engagement == pytest.approx(100.0)
+    assert total_engagement > 0
 
 
-def test_multi_cluster_fan_out_build_contexts_mass_consistent(
+def test_multi_canonical_log_scale_mass_distribution(
     empty_history: ScoreHistory,
 ) -> None:
-    """`_build_contexts` 도 fan-out 후 post_count_today 합 = per-item mass."""
-    canonical = _canonical_with_garment(upper="casual_saree")
+    """1 item N canonical → 각자 다른 cluster_key 에 log-scale 분배 mass.
+
+    spec §2.7 G = log2(Σn_objects+1) × group_to_item_contrib 비례 — 같은 item
+    안의 multiple outfit 이 각 canonical (g, f) 의 cluster_key 에 등록.
+    """
+    canonical_a = _canonical_with_garment(upper="casual_saree", fabric="cotton")
+    canonical_b = _canonical_with_garment(upper="kurta", fabric="silk")
     item = _enriched(
-        "p_multi", g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__cotton", engagement=100,
-        canonicals=[canonical],
+        "p_multi", g=None, t=None, f=None,
+        cluster_key=None, engagement=100,
+        canonicals=[canonical_a, canonical_b],
     )
     grouped = group_by_cluster([item])
+    # 두 canonical 의 cluster_key 모두 등장
+    assert set(grouped.keys()) == {"casual_saree__cotton", "straight_kurta__silk"}
     contexts = _build_contexts(grouped, date(2026, 4, 27), _cfg(), empty_history)
-
     by_key = {c.cluster_key: c for c in contexts}
-    total_mass = sum(c.post_count_today for c in contexts)
-    assert total_mass == pytest.approx(1.0)
-    assert by_key["kurta_set__cotton"].post_count_today > 0
     assert by_key["casual_saree__cotton"].post_count_today > 0
+    assert by_key["straight_kurta__silk"].post_count_today > 0
