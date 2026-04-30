@@ -1,8 +1,8 @@
 """representative_builder pinning — pipeline_spec_v1.0 §2.4.
 
 검증 대상:
-- multiplier 테이블: N=1 → 1.0 / N=2 → 2.5 / N=3 → 5.0 / 그 외 → 0.0.
-- representative_key 포맷 = "g__t__f".
+- multiplier 테이블: N=1 → 1.0 / N=2 → 2.5 / 그 외 → 0.0.
+- representative_key 포맷 = "g__f".
 - cross-product: 한 attr 이라도 비면 contribution 없음 (spec §C.2).
 - contribution = share × multiplier × item_base_unit.
 - sparse filter: total_item_contribution > 0 만 emit.
@@ -29,13 +29,13 @@ from contracts.common import ContentSource
 def test_multiplier_table() -> None:
     assert multiplier_for_n(1) == 1.0
     assert multiplier_for_n(2) == 2.5
-    assert multiplier_for_n(3) == 5.0
+    assert multiplier_for_n(3) == 0.0
     assert multiplier_for_n(0) == 0.0
     assert multiplier_for_n(4) == 0.0
 
 
 def test_representative_key_format() -> None:
-    assert representative_key("kurta", "block_print", "cotton") == "kurta__block_print__cotton"
+    assert representative_key("kurta", "cotton") == "kurta__cotton"
 
 
 def test_build_contributions_cross_product() -> None:
@@ -47,25 +47,23 @@ def test_build_contributions_cross_product() -> None:
         fabric={"cotton": 0.6, "silk": 0.4},
     )
     contribs = build_contributions([item])
-    assert len(contribs) == 4  # 2 × 1 × 2
+    assert len(contribs) == 4  # 2 × 2
     keys = sorted(c.representative_key for c in contribs)
     assert keys == [
-        "kurta__block_print__cotton",
-        "kurta__block_print__silk",
-        "saree__block_print__cotton",
-        "saree__block_print__silk",
+        "kurta__cotton",
+        "kurta__silk",
+        "saree__cotton",
+        "saree__silk",
     ]
-    # share 검증: kurta + block_print + cotton = 0.7 × 1.0 × 0.6 = 0.42
+    # share 검증: kurta + cotton = 0.7 × 0.6 = 0.42
     by_key = {c.representative_key: c for c in contribs}
-    kbc = by_key["kurta__block_print__cotton"]
+    kbc = by_key["kurta__cotton"]
     assert kbc.match_share == pytest.approx(0.42)
-    # multiplier=5.0 (N=3, all decided) → contribution = 0.42 × 5.0 = 2.1
-    assert kbc.contribution == pytest.approx(2.1)
+    assert kbc.contribution == pytest.approx(1.05)
 
 
 def test_partial_distribution_emits_with_unknown_axis() -> None:
-    # Phase partial(g) 활성화 (2026-04-28): N=2 (technique 비어있음) → 1 contribution
-    # with unknown axis placeholder. multiplier = 2.5 (N=2).
+    # technique 비어있어도 G/F 둘 다 있으면 exact representative 로 full emit.
     item = ItemDistribution(
         item_id="ig_002",
         source=ContentSource.INSTAGRAM,
@@ -76,10 +74,10 @@ def test_partial_distribution_emits_with_unknown_axis() -> None:
     contribs = build_contributions([item])
     assert len(contribs) == 1
     c = contribs[0]
-    assert c.representative_key == "kurta__unknown__cotton"
+    assert c.representative_key == "kurta__cotton"
     assert c.match_share == pytest.approx(1.0)
-    assert c.multiplier == pytest.approx(2.5)  # N=2
-    assert c.contribution == pytest.approx(2.5)  # share × multiplier
+    assert c.multiplier == pytest.approx(2.5)
+    assert c.contribution == pytest.approx(2.5)
 
 
 def test_n_zero_item_emits_no_contribution() -> None:
@@ -106,8 +104,8 @@ def test_aggregate_factor_contribution_single_source() -> None:
     aggs = aggregate_representatives(contribs)
     assert len(aggs) == 1
     a = aggs[0]
-    assert a.representative_key == "kurta__block_print__cotton"
-    assert a.total_item_contribution == pytest.approx(5.0)
+    assert a.representative_key == "kurta__cotton"
+    assert a.total_item_contribution == pytest.approx(2.5)
     assert a.factor_contribution[ContentSource.INSTAGRAM] == pytest.approx(1.0)
     assert a.factor_contribution[ContentSource.YOUTUBE] == pytest.approx(0.0)
     assert a.member_count == 1
@@ -133,8 +131,7 @@ def test_aggregate_factor_contribution_mixed_sources() -> None:
     aggs = aggregate_representatives(build_contributions(items))
     assert len(aggs) == 1
     a = aggs[0]
-    # 두 item 모두 contribution=5.0, total=10.0, 각각 0.5 비중.
-    assert a.total_item_contribution == pytest.approx(10.0)
+    assert a.total_item_contribution == pytest.approx(5.0)
     assert a.factor_contribution[ContentSource.INSTAGRAM] == pytest.approx(0.5)
     assert a.factor_contribution[ContentSource.YOUTUBE] == pytest.approx(0.5)
     assert sum(a.factor_contribution.values()) == pytest.approx(1.0)
@@ -151,11 +148,11 @@ def _mk_contrib(
     item_id: str, source: ContentSource, contribution: float
 ) -> RepresentativeContribution:
     return RepresentativeContribution(
-        representative_key="kurta__block_print__cotton",
+        representative_key="kurta__cotton",
         item_id=item_id,
         source=source,
-        match_share=contribution / 5.0,
-        multiplier=5.0,
+        match_share=contribution / 2.5,
+        multiplier=2.5,
         contribution=contribution,
     )
 
@@ -226,16 +223,15 @@ def test_item_cluster_shares_matches_spec_cross_product() -> None:
     shares = item_cluster_shares(item)
 
     assert shares == {
-        "kurta__block_print__cotton": 0.7 * 1.0 * 0.6,
-        "kurta__block_print__silk":   0.7 * 1.0 * 0.4,
-        "saree__block_print__cotton": 0.3 * 1.0 * 0.6,
-        "saree__block_print__silk":   0.3 * 1.0 * 0.4,
+        "kurta__cotton": 0.7 * 0.6,
+        "kurta__silk":   0.7 * 0.4,
+        "saree__cotton": 0.3 * 0.6,
+        "saree__silk":   0.3 * 0.4,
     }
     assert abs(sum(shares.values()) - 1.0) < 1e-9
 
 
-def test_item_cluster_shares_n2_emits_with_unknown_axis() -> None:
-    # Phase partial(g) (2026-04-28): N=2 → unknown placeholder, share × 0.5.
+def test_item_cluster_shares_n2_emits_with_exact_key() -> None:
     item = ItemDistribution(
         item_id="i1",
         source=ContentSource.INSTAGRAM,
@@ -245,12 +241,11 @@ def test_item_cluster_shares_n2_emits_with_unknown_axis() -> None:
     )
 
     shares = item_cluster_shares(item)
-    assert shares == {"kurta__unknown__cotton": pytest.approx(0.5)}
+    assert shares == {"kurta__cotton": pytest.approx(1.0)}
 
 
 def test_item_cluster_shares_n3_full_mass() -> None:
-    # N=3 single value → multiplier_ratio=1.0 → share=1.0 (variance 없음, 동작 변화 X).
-    # build_contributions 는 동일 input 으로 contribution=5.0 (× multiplier=5.0).
+    # technique 은 fan-out 키에서 빠지므로 G/F exact single value 와 동치.
     item = ItemDistribution(
         item_id="i1",
         source=ContentSource.INSTAGRAM,
@@ -258,10 +253,9 @@ def test_item_cluster_shares_n3_full_mass() -> None:
         technique={"chikankari": 1.0},
         fabric={"cotton": 1.0},
     )
-
-    assert item_cluster_shares(item) == {"kurta__chikankari__cotton": pytest.approx(1.0)}
+    assert item_cluster_shares(item) == {"kurta__cotton": pytest.approx(1.0)}
     [contrib] = build_contributions([item])
-    assert contrib.contribution == 5.0
+    assert contrib.contribution == 2.5
     assert contrib.match_share == 1.0
 
 
@@ -286,16 +280,14 @@ def test_effective_item_count_n_eq_3() -> None:
     assert effective_item_count(items) == pytest.approx(1.0)
 
 
-def test_effective_item_count_n_eq_2() -> None:
-    # N=2 → multiplier 2.5 / 5.0 = 0.5
+def test_effective_item_count_partial_garment_only() -> None:
     items = [_mk_item("i1", g=True, t=True, f=False)]
-    assert effective_item_count(items) == pytest.approx(0.5)
+    assert effective_item_count(items) == pytest.approx(0.4)
 
 
-def test_effective_item_count_n_eq_1() -> None:
-    # N=1 → multiplier 1.0 / 5.0 = 0.2
-    items = [_mk_item("i1", g=True, t=False, f=False)]
-    assert effective_item_count(items) == pytest.approx(0.2)
+def test_effective_item_count_partial_fabric_only() -> None:
+    items = [_mk_item("i1", g=False, t=False, f=True)]
+    assert effective_item_count(items) == pytest.approx(0.4)
 
 
 def test_effective_item_count_n_eq_0() -> None:
@@ -306,11 +298,11 @@ def test_effective_item_count_n_eq_0() -> None:
 def test_effective_item_count_mixed_batch_sums_correctly() -> None:
     items = [
         _mk_item("a", g=True, t=True, f=True),    # 1.0
-        _mk_item("b", g=True, t=True, f=False),   # 0.5
-        _mk_item("c", g=True, t=False, f=False),  # 0.2
+        _mk_item("b", g=True, t=False, f=True),   # 1.0
+        _mk_item("c", g=True, t=False, f=False),  # 0.4
         _mk_item("d", g=False, t=False, f=False), # 0.0
     ]
-    assert effective_item_count(items) == pytest.approx(1.7)
+    assert effective_item_count(items) == pytest.approx(2.4)
 
 
 def test_effective_item_count_empty_returns_zero() -> None:

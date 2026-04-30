@@ -92,12 +92,12 @@ def test_no_canonicals_keeps_existing_shares() -> None:
         normalized=_normalized(),
         garment_type=GarmentType.KURTA_SET,
         canonicals=[],
-        trend_cluster_key="kurta_set__unknown__unknown",
-        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
+        trend_cluster_key="kurta_set__unknown",
+        trend_cluster_shares={"kurta_set__unknown": 1.0},
     )
     new_shares = _vision_reassign_cluster_shares(item)
-    assert new_shares == {"kurta_set__unknown__unknown": 1.0}
-    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown__unknown"
+    assert new_shares == {"kurta_set__unknown": 1.0}
+    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown"
 
 
 def test_partial_text_promoted_to_exact_after_vision() -> None:
@@ -113,13 +113,11 @@ def test_partial_text_promoted_to_exact_after_vision() -> None:
         classification_method_per_attribute={
             "garment_type": ClassificationMethod.RULE,
         },
-        trend_cluster_key="kurta_set__unknown__unknown",
-        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
+        trend_cluster_key="kurta_set__unknown",
+        trend_cluster_shares={"kurta_set__unknown": 1.0},
     )
     new_shares = _vision_reassign_cluster_shares(item)
-    expected_key = build_exact_key(
-        GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
-    )
+    expected_key = build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON)
     # N=3 cross-product 결과: G/T/F 모두 enum 매핑 → 단일 cluster_key (분포가 collapsed)
     # → shares = {expected_key: 1.0}. multiplier_ratio = 1.0 (N=3).
     assert new_shares == {expected_key: 1.0}
@@ -138,14 +136,14 @@ def test_vision_axis_missing_keeps_shares() -> None:
         classification_method_per_attribute={
             "garment_type": ClassificationMethod.RULE,
         },
-        trend_cluster_key="kurta_set__unknown__unknown",
-        trend_cluster_shares={"kurta_set__unknown__unknown": 1.0},
+        trend_cluster_key="kurta_set__unknown",
+        trend_cluster_shares={"kurta_set__unknown": 1.0},
     )
     new_shares = _vision_reassign_cluster_shares(item)
     # N<3 → shares 보존 (picking 손실 방지 — multiplier_ratio 0.5/0.2 곱하면 0.10 cutoff
     # 에 걸려 picking 후보 0개 됨).
-    assert new_shares == {"kurta_set__unknown__unknown": 1.0}
-    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown__unknown"
+    assert new_shares == {"kurta_set__unknown": 1.0}
+    assert _winner_key_from_shares(new_shares) == "kurta_set__unknown"
 
 
 def test_text_rule_weight_dominates_vision() -> None:
@@ -169,18 +167,12 @@ def test_text_rule_weight_dominates_vision() -> None:
             "fabric": ClassificationMethod.RULE,
             "technique": ClassificationMethod.RULE,
         },
-        trend_cluster_key=build_exact_key(
-            GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
-        ),
+        trend_cluster_key=build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON),
         trend_cluster_shares={
-            build_exact_key(
-                GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
-            ): 1.0
+            build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON): 1.0
         },
     )
-    expected_winner = build_exact_key(
-        GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
-    )
+    expected_winner = build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON)
     assert _reassigned_key(item) == expected_winner
 
 
@@ -196,12 +188,10 @@ def test_vision_overrides_when_text_method_missing() -> None:
         technique=Technique.SOLID,
         canonicals=[canonical],
         classification_method_per_attribute={},  # method 없음 → text weight=0.
-        trend_cluster_key="kurta_set__solid__cotton",
-        trend_cluster_shares={"kurta_set__solid__cotton": 1.0},
+        trend_cluster_key="kurta_set__cotton",
+        trend_cluster_shares={"kurta_set__cotton": 1.0},
     )
-    expected_winner = build_exact_key(
-        GarmentType.ANARKALI, Technique.THREAD_EMBROIDERY, Fabric.GEORGETTE
-    )
+    expected_winner = build_exact_key(GarmentType.ANARKALI, Fabric.GEORGETTE)
     assert _reassigned_key(item) == expected_winner
 
 
@@ -232,13 +222,9 @@ def test_tiebreak_is_deterministic_by_value_asc() -> None:
         canonicals=[canonical_a, canonical_b],
     )
     new_shares = _vision_reassign_cluster_shares(item)
-    # cross-product: 2 garment × 1 technique × 1 fabric = 2 cluster, share=0.5 each.
-    anarkali_key = build_exact_key(
-        GarmentType.ANARKALI, Technique.BLOCK_PRINT, Fabric.COTTON
-    )
-    kurta_key = build_exact_key(
-        GarmentType.KURTA_SET, Technique.BLOCK_PRINT, Fabric.COTTON
-    )
+    # cross-product: 2 garment × 1 fabric = 2 cluster, share=0.5 each.
+    anarkali_key = build_exact_key(GarmentType.ANARKALI, Fabric.COTTON)
+    kurta_key = build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON)
     assert set(new_shares.keys()) == {anarkali_key, kurta_key}
     # winner tiebreak: alpha asc → anarkali (a < k).
     assert _winner_key_from_shares(new_shares) == anarkali_key

@@ -78,11 +78,11 @@ def test_n3_single_distribution_registers_in_one_cluster() -> None:
     item = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     grouped = group_by_cluster([item])
-    assert set(grouped.keys()) == {"kurta_set__chikankari__cotton"}
-    entries = grouped["kurta_set__chikankari__cotton"]
+    assert set(grouped.keys()) == {"kurta_set__cotton"}
+    entries = grouped["kurta_set__cotton"]
     assert len(entries) == 1
     pair_item, pair_share = entries[0]
     assert pair_item is item
@@ -90,21 +90,20 @@ def test_n3_single_distribution_registers_in_one_cluster() -> None:
 
 
 def test_n_lt_3_item_registers_in_partial_cluster() -> None:
-    """technique 누락 (N=2) → partial(g) 활성화 후 multiplier_ratio=0.5 share 로
-    placeholder (`unknown`) cluster 에 (item, 0.5) 등록 (β4 tuple).
+    """technique 누락은 cluster_key 에 영향 없음 → G/F exact cluster 에 full share 등록.
     """
     item = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=None, f=Fabric.COTTON,
-        cluster_key="kurta_set__unknown__cotton",  # winner contract 값 — 무시되고 있어도 동치
+        cluster_key="kurta_set__cotton",  # winner contract 값 — 무시되고 있어도 동치
     )
     grouped = group_by_cluster([item])
-    assert set(grouped.keys()) == {"kurta_set__unknown__cotton"}
-    entries = grouped["kurta_set__unknown__cotton"]
+    assert set(grouped.keys()) == {"kurta_set__cotton"}
+    entries = grouped["kurta_set__cotton"]
     assert len(entries) == 1
     pair_item, pair_share = entries[0]
     assert pair_item is item
-    assert pair_share == pytest.approx(0.5)  # N=2 multiplier_ratio
+    assert pair_share == pytest.approx(1.0)
 
 
 def test_n_zero_item_registers_in_no_cluster() -> None:
@@ -123,20 +122,20 @@ def test_two_different_n3_items_split_into_two_clusters() -> None:
     item_a = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     item_b = _enriched(
         "p2",
         g=GarmentType.CASUAL_SAREE, t=Technique.BLOCK_PRINT, f=Fabric.CHANDERI,
-        cluster_key="casual_saree__block_print__chanderi",
+        cluster_key="casual_saree__chanderi",
     )
     grouped = group_by_cluster([item_a, item_b])
     assert set(grouped.keys()) == {
-        "kurta_set__chikankari__cotton",
-        "casual_saree__block_print__chanderi",
+        "kurta_set__cotton",
+        "casual_saree__chanderi",
     }
-    assert grouped["kurta_set__chikankari__cotton"] == [(item_a, pytest.approx(1.0))]
-    assert grouped["casual_saree__block_print__chanderi"] == [(item_b, pytest.approx(1.0))]
+    assert grouped["kurta_set__cotton"] == [(item_a, pytest.approx(1.0))]
+    assert grouped["casual_saree__chanderi"] == [(item_b, pytest.approx(1.0))]
 
 
 def test_winner_contract_key_is_not_read() -> None:
@@ -152,7 +151,7 @@ def test_winner_contract_key_is_not_read() -> None:
     grouped = group_by_cluster([item])
     # distribution 기반 cluster_key 만 등장. winner key 는 grouped 에 없음.
     assert "totally_unrelated__winner__key" not in grouped
-    assert "kurta_set__chikankari__cotton" in grouped
+    assert "kurta_set__cotton" in grouped
 
 
 def test_same_cluster_two_items_aggregated() -> None:
@@ -160,16 +159,16 @@ def test_same_cluster_two_items_aggregated() -> None:
     item_a = _enriched(
         "p1",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     item_b = _enriched(
         "p2",
         g=GarmentType.KURTA_SET, t=Technique.CHIKANKARI, f=Fabric.COTTON,
-        cluster_key="kurta_set__chikankari__cotton",
+        cluster_key="kurta_set__cotton",
     )
     grouped = group_by_cluster([item_a, item_b])
-    assert list(grouped.keys()) == ["kurta_set__chikankari__cotton"]
-    entries = grouped["kurta_set__chikankari__cotton"]
+    assert list(grouped.keys()) == ["kurta_set__cotton"]
+    entries = grouped["kurta_set__cotton"]
     assert [pair[0] for pair in entries] == [item_a, item_b]
     assert all(pair[1] == pytest.approx(1.0) for pair in entries)
 
