@@ -27,6 +27,9 @@ class RawInstagramPost(BaseModel):
 
     post_id: str
     source_type: InstagramSourceType
+    # 외부 IG URL (Phase 3, 2026-04-30): unique 게시물 식별 + 시계열 dedup용. raw DB
+    # `url` 컬럼. backwards-compat default None (옛 fixture / FakeIngestor 호환).
+    post_url: str | None = None
     # hashtag_search 소스의 포스트는 계정 정보 없이 수집될 수 있음 → None 허용 (2026-04-22).
     # 크롤러 팀과 4/24 에 "항상 account 해석" 가능 여부 협의 후 재고.
     account_handle: str | None = None
@@ -60,6 +63,9 @@ class RawYouTubeVideo(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     video_id: str
+    # 외부 YT URL (Phase 3, 2026-04-30): video_id 와 같은 unique 식별이지만 IG 와
+    # 일관성 위해 별도 보존. backwards-compat default None.
+    video_url: str | None = None
     channel: str
     # 채널 구독자 수 (rate-based engagement 분모, 2026-04-30). raw DB
     # `channel_follower_count` 컬럼. 미수집/0 → engagement_score 가 _MIN_FOLLOWERS=100

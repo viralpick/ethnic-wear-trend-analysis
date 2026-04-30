@@ -93,6 +93,7 @@ def _build_ig_post(row: dict[str, Any]) -> RawInstagramPost | None:
         return RawInstagramPost(
             post_id=row["id"],
             source_type=_source_type(row["entry"] or "profile", row["user"] or ""),
+            post_url=row.get("url") or None,
             account_handle=row["user"] or None,
             account_followers=int(row["follower_count"] or 0),
             image_urls=images,
@@ -124,6 +125,7 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
         _, videos = _split_image_video(_split_csv(row.get("download_urls") or ""))
         return RawYouTubeVideo(
             video_id=match.group(1),
+            video_url=url,
             channel=row["channel"] or "",
             channel_follower_count=int(row.get("channel_follower_count") or 0),
             title=row["title"] or "",
