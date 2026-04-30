@@ -385,26 +385,44 @@ def run_representative_phase(
     sink: str,
     dedup_by_url: bool = False,
 ) -> None:
-    """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → (optional) url dedup
-    → score → representative 적재.
+    """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → growth rate 계산
+    → url_short_tag dedup → growth-weighted score → representative 적재.
+
+    Phase 3 (2026-04-30): growth rate 시그널 통합. 같은 url_short_tag 의 multi-snapshot
+    이 시계열로 보존돼 있으면 Δ growth_metric/Δ days = growth rate. 그 rate 를
+    minmax 정규화한 factor (1.0 ~ 2.0) 가 item_base_unit 에 곱해져 cluster contribution
+    가중. canonical 단위 mass 분배 시 자연 전파 (group_by_cluster 입력 dict).
 
     target_date 는 end_date 사용 (week_start_date / trajectory 조회 기준).
-    dedup_by_url=True: raw DB url 기준 동일 post 중 engagement 최대 1건만 keep (cluster
-    점수 inflate 방지).
+    dedup_by_url=True: url_short_tag 기준 가장 최근 1건만 keep. growth rate 계산은
+    dedup 전 시계열 사용 (factor map 으로 후속 wiring).
     """
     from pipelines.load_enriched import (  # noqa: I001
-        dedup_by_raw_url,
+        compute_growth_rate,
+        dedup_by_url_short_tag,
         filter_by_date_range,
+        growth_rate_factor_map,
         load_enriched_files,
-        load_raw_post_urls,
     )
     from exporters.starrocks.sink_runner import emit_representatives_only
 
     pool = load_enriched_files(enriched_glob)
     enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
+
+    # Phase 3 (2026-04-30): growth rate 계산 (dedup 전 시계열 사용)
+    growth_by_tag = compute_growth_rate(enriched)
+    factor_by_tag = growth_rate_factor_map(growth_by_tag)
+    if growth_by_tag:
+        n_growing = sum(1 for r in growth_by_tag.values() if r > 0)
+        logger.info(
+            "growth_rate computed tags=%d positive=%d max=%.2f",
+            len(growth_by_tag), n_growing,
+            max(growth_by_tag.values(), default=0.0),
+        )
+
+    # url_short_tag 기준 가장 최근 1건만 keep (cluster score inflate 방지)
     if dedup_by_url and enriched:
-        post_urls = load_raw_post_urls()
-        enriched = dedup_by_raw_url(enriched, post_urls)
+        enriched = dedup_by_url_short_tag(enriched)
     if not enriched:
         logger.warning(
             "run_representative_phase empty after filter glob=%s start=%s end=%s",
@@ -412,15 +430,14 @@ def run_representative_phase(
         )
         return
 
-    target_date = end_date  # week_start_date 계산 + score_history_weekly 갱신 기준
-    # rep phase 는 raw 를 안 읽으므로 enriched.json 도 따로 써둬야 HTML 빌더가
-    # 동일 윈도우 데이터를 읽을 수 있음 (filtered 314 개 등).
+    target_date = end_date
     write_enriched(
         settings.paths.outputs, target_date, enriched,
         filename=settings.export.enriched_filename,
     )
     _, summaries = score_and_export(
-        enriched, settings, target_date, settings.paths.outputs
+        enriched, settings, target_date, settings.paths.outputs,
+        growth_factor_by_tag=factor_by_tag,
     )
 
     if sink not in ("starrocks", "starrocks_insert", "dry_run"):

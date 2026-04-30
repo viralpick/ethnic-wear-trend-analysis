@@ -85,11 +85,16 @@ def _group_snapshot_for_technique(canonical: CanonicalOutfit) -> GroupSnapshot:
     )
 
 
-def enriched_to_item_distribution(enriched: EnrichedContentItem) -> ItemDistribution:
+def enriched_to_item_distribution(
+    enriched: EnrichedContentItem,
+    *,
+    item_base_unit: float = 1.0,
+) -> ItemDistribution:
     """spec §2.4 의 ItemDistribution 입력으로 변환.
 
     item_id = `{source}__{source_post_id}` (raw, hash 변환은 row_builder 단계에서).
-    item_base_unit = 1.0 default — engagement 가중은 후속 작업.
+    item_base_unit: Phase 3 (2026-04-30) growth rate 가중치. caller (rep phase) 가
+    `1 + growth_rate / max_growth` factor 를 주입. default 1.0 = 가중 없음.
     """
     normalized = enriched.normalized
     item_id = f"{normalized.source.value}__{normalized.source_post_id}"
@@ -113,6 +118,7 @@ def enriched_to_item_distribution(enriched: EnrichedContentItem) -> ItemDistribu
     return ItemDistribution(
         item_id=item_id,
         source=normalized.source,
+        item_base_unit=item_base_unit,
         garment_type=build_distribution(
             text_value=garment_text,
             text_method=method_map.get("garment_type"),

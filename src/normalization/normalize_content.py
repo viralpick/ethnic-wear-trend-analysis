@@ -71,6 +71,8 @@ def normalize_instagram_post(
         source=ContentSource.INSTAGRAM,
         source_post_id=post.post_id,
         url_short_tag=extract_url_short_tag(post.post_url),
+        # IG growth metric = likes. 시계열로 Δ likes/Δ days 계산 → cluster 가중.
+        growth_metric=post.likes,
         text_blob=text_blob,
         hashtags=list(post.hashtags),
         image_urls=list(post.image_urls),
@@ -111,6 +113,8 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
         source=ContentSource.YOUTUBE,
         source_post_id=video.video_id,
         url_short_tag=extract_url_short_tag(video.video_url) or video.video_id,
+        # YT growth metric = view_count. 시계열로 Δ views/Δ days 계산 → cluster 가중.
+        growth_metric=video.view_count,
         text_blob=text_blob,
         hashtags=tag_tokens,
         image_urls=[],

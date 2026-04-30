@@ -326,14 +326,22 @@ def score_and_export(
     settings: Settings,
     target_date: date,
     output_root: Path,
+    *,
+    growth_factor_by_tag: dict[str, float] | None = None,
 ) -> tuple[Path, list[TrendClusterSummary]]:
-    """공용 진입점 — daily pipeline 에서도 호출."""
+    """공용 진입점 — daily pipeline 에서도 호출.
+
+    Phase 3 (2026-04-30): growth_factor_by_tag — {url_short_tag: factor} dict.
+    rep phase 가 시계열 growth rate 계산 후 source 별 정규화한 factor (1.0~2.0).
+    canonical 단위 mass 분배 시 item_base_unit 으로 곱해져 cluster 가중. None →
+    가중 없음 (모든 item factor=1.0).
+    """
     history_path = output_root / "score_history.json"
     history = ScoreHistory(history_path)
     weekly_history_path = output_root / "score_history_weekly.json"
     weekly_history = WeeklyScoreHistory(weekly_history_path)
 
-    grouped = group_by_cluster(enriched)
+    grouped = group_by_cluster(enriched, item_base_units=growth_factor_by_tag)
     contexts = _build_contexts(grouped, target_date, settings.scoring, history)
     days = _days_collected(settings.pipeline.collection_start_date, target_date)
     decisions = _decide_clusters(contexts, settings, days, grouped, target_date, history)
