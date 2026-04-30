@@ -132,6 +132,7 @@ def build_item_row(
     return {
         "source": normalized.source.value,
         "source_post_id": normalized.source_post_id,
+        "url_short_tag": normalized.url_short_tag,
         "computed_at": computed_at,
         "posted_at": posted_at,
         "garment_type_dist": dict(item_distribution.garment_type) or None,
@@ -176,6 +177,7 @@ def build_group_rows(
         rows.append({
             "item_source": src,
             "item_source_post_id": pid,
+            "url_short_tag": normalized.url_short_tag,
             "canonical_index": c.canonical_index,
             "computed_at": computed_at,
             "group_id": _group_id(src, pid, c.canonical_index),
@@ -266,6 +268,7 @@ def build_object_rows(
             rows.append({
                 "item_source": src,
                 "item_source_post_id": pid,
+                "url_short_tag": normalized.url_short_tag,
                 "canonical_index": c.canonical_index,
                 "member_index": m.outfit_index,
                 "computed_at": computed_at,
