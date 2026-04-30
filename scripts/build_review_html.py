@@ -1043,6 +1043,21 @@ a:hover { text-decoration: underline; }
 
 /* post-link icon */
 .post-link { color: #2a5db8; }
+
+/* unknown signals panel (spec §4.2) */
+.unknown-signals-panel { background: #fffbe6; border: 1px solid #ffd966;
+                          border-radius: 6px; padding: 10px 14px;
+                          margin-bottom: 12px; }
+.unknown-signals-panel summary { font-size: 13px; font-weight: bold;
+                                  color: #8b6f00; cursor: pointer; }
+.unknown-signals-panel[open] summary { margin-bottom: 8px; }
+.unknown-signals-panel p { margin: 6px 0; }
+.unknown-signals-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.unknown-signals-table th { text-align: left; padding: 4px 8px;
+                            border-bottom: 1px solid #ffd966; background: #fff8d4; }
+.unknown-signals-table td { padding: 3px 8px; border-bottom: 1px dotted #ffd966;
+                            vertical-align: middle; }
+.unknown-signals-table tr:hover { background: #fff3cd; }
 """
 
 
@@ -1206,6 +1221,67 @@ def _build_week_section(
 </section>"""
 
 
+def _load_unknown_signals() -> list[dict[str, Any]]:
+    """outputs/unknown_signals.json (spec §4.2 hashtag tracker 결과) 로드.
+    파일 없거나 빈 dict 면 [] 반환.
+    """
+    path = _REPO / "outputs" / "unknown_signals.json"
+    if not path.exists():
+        return []
+    try:
+        with path.open() as f:
+            state = json.load(f)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(state, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for tag, entry in state.items():
+        if not isinstance(entry, dict):
+            continue
+        buckets = entry.get("buckets") or {}
+        if not isinstance(buckets, dict):
+            continue
+        count_3day = sum(buckets.values())
+        if count_3day < 10:
+            continue  # spec §4.2 threshold
+        first_seen = min(buckets.keys()) if buckets else ""
+        rows.append({
+            "tag": f"#{tag}",
+            "count_3day": count_3day,
+            "first_seen": first_seen,
+            "likely_category": entry.get("likely_category"),
+            "reviewed": bool(entry.get("reviewed", False)),
+        })
+    rows.sort(key=lambda r: -r["count_3day"])
+    return rows
+
+
+def _render_unknown_signals_panel(signals: list[dict[str, Any]]) -> str:
+    """spec §4.2 — 매핑 외 신규 해시태그 시그널 패널 (검수용)."""
+    if not signals:
+        return ""
+    rows_html = "".join(
+        f'<tr>'
+        f'<td><code>{_esc(s["tag"])}</code></td>'
+        f'<td class="num">{s["count_3day"]}</td>'
+        f'<td>{_esc(s["first_seen"])}</td>'
+        f'<td>{_esc(s.get("likely_category") or "—")}</td>'
+        f'<td>{"✓" if s["reviewed"] else "—"}</td>'
+        f'</tr>'
+        for s in signals[:30]  # 상위 30 개
+    )
+    return f'''
+<details class="unknown-signals-panel">
+  <summary>🆕 신규 시그널 감지 — 매핑 외 해시태그 ({len(signals)}건, 3일 ≥10) ▼</summary>
+  <p class="muted">spec §4.2 — 자동 감지된 해시태그. 매핑에 추가 또는 noise 무시 검토.</p>
+  <table class="unknown-signals-table">
+    <thead><tr><th>tag</th><th>count_3day</th><th>first_seen</th><th>likely_category</th><th>reviewed</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</details>'''
+
+
 def build_multi_week_html(
     weeks: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]],
     html_dir: Path,
@@ -1224,6 +1300,7 @@ def build_multi_week_html(
         f'<option value="{idx}">{_esc(label)}</option>'
         for idx, (label, _, _) in enumerate(weeks)
     )
+    unknown_signals_html = _render_unknown_signals_panel(_load_unknown_signals())
     return f"""<!DOCTYPE html>
 <html lang="ko"><head>
 <meta charset="utf-8">
@@ -1240,6 +1317,8 @@ def build_multi_week_html(
     </select>
   </label>
 </div>
+
+{unknown_signals_html}
 
 {sections}
 
