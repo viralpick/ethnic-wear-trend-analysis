@@ -7,13 +7,15 @@
     "post_count": float,                # Phase γ: int → float (β2/β4 share-weighted 정합)
     "youtube_views_total": float,
     "hashtag_counts": {tag: int},
-    "accounts": [str],
+    "accounts": [str],                  # IG handle (B-2 sub-signal: new_ig_account_ratio)
+    "channels": [str],                  # YT channel (B-2 sub-signal: new_yt_channel_ratio)
   }, ...}}
 
 backward compat:
 - 구버전 float 값("YYYY-MM-DD": 40.0) 및 score/post_count 만 있는 구버전 dict 도 읽기.
 - post_count 가 int 로 저장된 기존 파일 → `_read_count` 의 `float()` cast 로 자연 호환
   (Phase γ 마이그 read-cast 정책).
+- B-2 (M3.G/H 후): channels 키 없는 기존 entry → default `[]` (자연 read-cast).
 """
 from __future__ import annotations
 
@@ -52,6 +54,13 @@ def _read_hashtag_counts(entry: object) -> dict[str, int]:
 def _read_accounts(entry: object) -> list[str]:
     if isinstance(entry, dict):
         return entry.get("accounts", [])
+    return []
+
+
+def _read_channels(entry: object) -> list[str]:
+    """B-2 (M3.G/H 후): YT channel 신규 비율 추적용. 기존 entry 에 channels 없으면 []."""
+    if isinstance(entry, dict):
+        return entry.get("channels", [])
     return []
 
 
@@ -124,24 +133,49 @@ class ScoreHistory:
             return 0.0
         return (this_week - last_week) / last_week
 
-    def get_new_account_ratio(
+    def get_new_ig_account_ratio(
         self,
         cluster_key: str,
         target_date: date,
         window_days: int,
         today_accounts: list[str],
     ) -> float:
-        """window_days 내 미등장 계정 비율. today_accounts 없으면 0."""
-        if not today_accounts:
+        """B-2 (M3.G/H 후): IG handle 신규 비율 — momentum sub-signal."""
+        return self._compute_new_entity_ratio(
+            cluster_key, target_date, window_days, today_accounts, _read_accounts
+        )
+
+    def get_new_yt_channel_ratio(
+        self,
+        cluster_key: str,
+        target_date: date,
+        window_days: int,
+        today_channels: list[str],
+    ) -> float:
+        """B-2 (M3.G/H 후): YT channel 신규 비율 — momentum sub-signal."""
+        return self._compute_new_entity_ratio(
+            cluster_key, target_date, window_days, today_channels, _read_channels
+        )
+
+    def _compute_new_entity_ratio(
+        self,
+        cluster_key: str,
+        target_date: date,
+        window_days: int,
+        today_entities: list[str],
+        reader,
+    ) -> float:
+        """window_days 내 미등장 entity 비율. today_entities 없으면 0."""
+        if not today_entities:
             return 0.0
         bucket = self._data.get(cluster_key, {})
         seen: set[str] = set()
         for i in range(1, window_days + 1):
-            seen.update(_read_accounts(
+            seen.update(reader(
                 bucket.get((target_date - timedelta(days=i)).isoformat())
             ))
-        new_count = sum(1 for a in today_accounts if a not in seen)
-        return new_count / len(today_accounts)
+        new_count = sum(1 for e in today_entities if e not in seen)
+        return new_count / len(today_entities)
 
     def update(
         self,
@@ -152,6 +186,7 @@ class ScoreHistory:
         youtube_views_total: float = 0.0,
         hashtag_counts: dict[str, int] | None = None,
         accounts: list[str] | None = None,
+        channels: list[str] | None = None,
     ) -> None:
         bucket = self._data.setdefault(cluster_key, {})
         bucket[target_date.isoformat()] = {
@@ -160,6 +195,7 @@ class ScoreHistory:
             "youtube_views_total": youtube_views_total,
             "hashtag_counts": hashtag_counts or {},
             "accounts": accounts or [],
+            "channels": channels or [],
         }
 
     def save(self) -> None:

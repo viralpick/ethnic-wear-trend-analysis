@@ -21,6 +21,7 @@ from datetime import date
 
 from contracts.output import (
     DrilldownPayload,
+    MomentumComponents,
     ScoreBreakdown,
     TrendClusterSummary,
 )
@@ -101,6 +102,12 @@ def _mock_summary(
             youtube=0.0,
             cultural=0.0,
             momentum=0.0,
+            momentum_components=MomentumComponents(
+                post_growth=0.0,
+                hashtag_velocity=0.0,
+                new_ig_account_ratio=0.0,
+                new_yt_channel_ratio=0.0,
+            ),
         ),
         daily_direction="flat",
         weekly_direction="flat",

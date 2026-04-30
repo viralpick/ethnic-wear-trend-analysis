@@ -127,9 +127,13 @@ class CulturalFestival(BaseModel):
 
 
 class MomentumFactorWeights(BaseModel):
+    """spec §9.2 Momentum sub-weights. B-2 (M3.G/H 후): new_account_ratio 0.3 을
+    new_ig_account_ratio + new_yt_channel_ratio 로 분리. default 0.15 + 0.15 균등.
+    """
     post_growth: float
     hashtag_velocity: float
-    new_account_ratio: float
+    new_ig_account_ratio: float
+    new_yt_channel_ratio: float
 
 
 class DataMaturityConfig(BaseModel):
@@ -159,8 +163,13 @@ class ScoringConfig(BaseModel):
 class VLMConfig(BaseModel):
     seed: int = 42
     temperature: float = 0.0
-    case2_per_cluster_cap: int = 10
-    case1_daily_cap: int = 150
+    # M3.G/H 이후 IG/YT 둘 다 vision 흐름에 진입. cap 은 source 별 분리축 — YT 단가가
+    # 더 비쌈 (영상 1건 ≈ frame 20장 = Gemini 호출 20회, IG 1건 ≈ image 1~10장).
+    # 분리 cap 으로 IG / YT 비용 상한 각각 명시.
+    case2_per_cluster_cap_ig: int = 5
+    case2_per_cluster_cap_yt: int = 1
+    case1_daily_cap_ig: int = 50
+    case1_daily_cap_yt: int = 10
     # ζ (2026-04-28): Case2 picking share threshold. trend_cluster_shares 의 share 가
     # 이 값 미만이면 picking 후보에서 제외. 0.0 = 모든 fan-out cluster 후보 (cap 자연
     # cutoff), 0.10 = G(0.6,0.4)×T(0.5,0.5)×F(0.5,0.5) 분포의 자연 lower bound 대응.
