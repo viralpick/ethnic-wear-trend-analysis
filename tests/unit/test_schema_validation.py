@@ -36,7 +36,8 @@ def _valid_normalized_payload() -> dict[str, Any]:
         "hashtags": [],
         "image_urls": [],
         "post_date": "2026-04-21T00:00:00Z",
-        "engagement_raw": 0,
+        "engagement_score": 0.0,
+        "engagement_raw_count": 0,
     }
 
 

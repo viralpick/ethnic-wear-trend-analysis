@@ -56,7 +56,7 @@ def _normalized(
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 28),
-        engagement_raw=engagement,
+        engagement_raw_count=engagement,
         account_handle=handle,
         account_followers=1000,
     )

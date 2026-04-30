@@ -138,7 +138,7 @@ def _render_post_card(row: dict, blob_cache: Path, llm_cache: Path) -> str:
     text = (norm.get("text_blob") or "")[:200]
     image_urls = norm.get("image_urls") or []
     handle = norm.get("account_handle") or "?"
-    engagement = norm.get("engagement_raw") or 0
+    engagement = norm.get("engagement_raw_count") or norm.get("engagement_raw") or 0
     post_date = norm.get("post_date") or ""
     source_type = norm.get("ig_source_type") or "-"
 

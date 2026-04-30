@@ -136,12 +136,12 @@ def _share_weighted_dict_aggregate(
 def _top_posts(
     items_with_share: list[ItemWithShare], limit: int
 ) -> list[str]:
-    """engagement_raw × share 내림차순 → IG source_post_id 상위 N (β4 share-weighted)."""
+    """engagement_raw_count × share 내림차순 → IG source_post_id 상위 N (β4 share-weighted)."""
     ig = [
         (item, share) for item, share in items_with_share
         if item.normalized.source == ContentSource.INSTAGRAM
     ]
-    ig.sort(key=lambda pair: -pair[0].normalized.engagement_raw * pair[1])
+    ig.sort(key=lambda pair: -pair[0].normalized.engagement_raw_count * pair[1])
     return [item.normalized.source_post_id for item, _ in ig[:limit]]
 
 
@@ -152,7 +152,7 @@ def _top_influencers(items_with_share: list[ItemWithShare], limit: int) -> list[
         if item.normalized.source == ContentSource.INSTAGRAM
         and item.normalized.account_handle
     ]
-    ig.sort(key=lambda pair: -pair[0].normalized.engagement_raw * pair[1])
+    ig.sort(key=lambda pair: -pair[0].normalized.engagement_raw_count * pair[1])
     seen: set[str] = set()
     result: list[str] = []
     for item, _ in ig:

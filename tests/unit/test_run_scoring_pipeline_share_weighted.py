@@ -83,6 +83,8 @@ def _normalized(
     engagement: int = 100,
     handle: str | None = None,
 ) -> NormalizedContentItem:
+    # 옛 fixture 호환 — engagement 인자를 engagement_score 로도 노출 (rate 가 100/1=100
+    # 처럼 큰 값이면 같은 단위로 비교 가능). 정밀 테스트는 engagement_score 직접 검증.
     return NormalizedContentItem(
         source=source,
         source_post_id=post_id,
@@ -90,7 +92,8 @@ def _normalized(
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 27),
-        engagement_raw=engagement,
+        engagement_score=float(engagement),  # rate-based path 입력
+        engagement_raw_count=engagement,
         account_handle=handle,
         account_followers=1000,
     )

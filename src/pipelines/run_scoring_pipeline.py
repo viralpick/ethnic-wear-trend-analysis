@@ -139,13 +139,19 @@ def _per_item_signals(
     n = item.normalized
     is_ig = n.source == ContentSource.INSTAGRAM
     is_yt = n.source == ContentSource.YOUTUBE
+    # Social score (rate-based, 2026-04-30): engagement_score (likes/F + comments*2/F)
+    # × influencer_weight × source_type_weight. F = max(followers, 100).
+    # rate 가 follower 자동 반영하지만 mega/macro tier weight 는 narrative 신뢰도 시그널
+    # 로 유지 (user 결정).
     social_e = (
-        n.engagement_raw
+        n.engagement_score
         * _influencer_weight(n.account_followers, cfg)
         * _source_type_weight(n.ig_source_type, cfg)
     ) if is_ig else 0.0
     yt_count = 1.0 if is_yt else 0.0
-    yt_views = float(n.engagement_raw) if is_yt else 0.0
+    # YT raw 절대 view_count + like + comment*2 는 engagement_raw_count 에 보존됨.
+    # spec §9.2 의 yt_views 는 절대값 노출이라 engagement_raw_count 사용.
+    yt_views = float(n.engagement_raw_count) if is_yt else 0.0
     bolly = 1.0 if (is_ig and n.ig_source_type == _BOLLYWOOD_SOURCE) else 0.0
     festival_match = 1.0 if (
         festival_tags and any(h.lower() in festival_tags for h in n.hashtags)

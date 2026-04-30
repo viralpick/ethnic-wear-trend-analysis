@@ -125,6 +125,7 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
         return RawYouTubeVideo(
             video_id=match.group(1),
             channel=row["channel"] or "",
+            channel_follower_count=int(row.get("channel_follower_count") or 0),
             title=row["title"] or "",
             description=row["description"] or "",
             tags=_split_csv(row["tags"] or ""),
@@ -247,7 +248,7 @@ class StarRocksRawLoader:
 
     def _load_youtube_count(self, batch_index: int, page_size: int) -> list[RawYouTubeVideo]:
         sql = """
-            SELECT id, url, channel, title, description, tags,
+            SELECT id, url, channel, channel_follower_count, title, description, tags,
                    thumbnail_url, upload_date, view_count, like_count,
                    comment_count, comments, download_urls
             FROM india_ai_fashion_youtube_posting
@@ -294,7 +295,7 @@ class StarRocksRawLoader:
         self, window_start: date, window_end: date
     ) -> list[RawYouTubeVideo]:
         sql = """
-            SELECT id, url, channel, title, description, tags,
+            SELECT id, url, channel, channel_follower_count, title, description, tags,
                    thumbnail_url, upload_date, view_count, like_count,
                    comment_count, comments, download_urls
             FROM india_ai_fashion_youtube_posting

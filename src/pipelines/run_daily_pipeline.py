@@ -120,7 +120,7 @@ def _case2_targets(
 
     picks: list[EnrichedContentItem] = []
     for cluster_items in by_cluster.values():
-        cluster_items.sort(key=lambda i: -i.normalized.engagement_raw)
+        cluster_items.sort(key=lambda i: -i.normalized.engagement_raw_count)
         picks.extend(cluster_items[:cap_per_cluster])
     return picks
 

@@ -42,7 +42,9 @@ class RawInstagramPost(BaseModel):
 
     likes: int
     comments_count: int
-    saves: int | None  # 수집 실패 시 null 허용 (spec §8.1)
+    # raw DB 미수집 → 항상 None (2026-04-30 sync). Engagement Score (rate-based) 에서도
+    # saves 항 제외됨. 유지는 backwards-compat 만 (tsv fixture 등). 추후 cleanup 후보.
+    saves: int | None = None
 
     post_date: datetime
     collected_at: datetime
@@ -59,6 +61,10 @@ class RawYouTubeVideo(BaseModel):
 
     video_id: str
     channel: str
+    # 채널 구독자 수 (rate-based engagement 분모, 2026-04-30). raw DB
+    # `channel_follower_count` 컬럼. 미수집/0 → engagement_score 가 _MIN_FOLLOWERS=100
+    # fallback. backwards-compat default 0.
+    channel_follower_count: int = 0
 
     title: str
     description: str

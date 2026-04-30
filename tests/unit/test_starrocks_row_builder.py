@@ -55,7 +55,7 @@ def _normalized(
         hashtags=["#kurta"],
         image_urls=["https://example.com/img.jpg"],
         post_date=datetime(2026, 4, 27, 12, 0, 0),
-        engagement_raw=4321,
+        engagement_raw_count=4321,
         account_followers=1500,
         account_handle="brand_x",
     )
@@ -216,7 +216,7 @@ def test_build_item_row_empty_canonicals_silhouette_null() -> None:
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 27, 0, 0, 0),
-        engagement_raw=0,
+        engagement_raw_count=0,
     )
     enriched = EnrichedContentItem(normalized=bare_normalized, canonicals=[])
     row = build_item_row(
@@ -373,7 +373,7 @@ def test_build_object_rows_resolves_media_ref_by_basename() -> None:
                 "https://x.blob.core.windows.net/c/01KP5678.jpg",
             ],
             post_date=datetime(2026, 4, 27, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -410,7 +410,7 @@ def test_build_object_rows_media_ref_none_when_no_match() -> None:
             hashtags=[],
             image_urls=["https://x.blob.core.windows.net/c/01KP1234.jpg"],
             post_date=datetime(2026, 4, 27, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -447,7 +447,7 @@ def test_build_object_rows_resolves_media_ref_video_frame_match() -> None:
                 "https://x.blob.core.windows.net/c/reel123.mp4?sv=2024&sig=AAA",
             ],
             post_date=datetime(2026, 4, 28, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -491,7 +491,7 @@ def test_build_object_rows_video_frame_id_no_false_positive_on_jpg() -> None:
             # video frame 패턴에 안 잡혀야 false-positive 차단.
             video_urls=["https://x.blob.core.windows.net/c/picture.mp4"],
             post_date=datetime(2026, 4, 28, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -526,7 +526,7 @@ def test_build_object_rows_video_frame_id_no_match_when_video_urls_empty() -> No
             image_urls=["https://x.blob.core.windows.net/c/static.jpg"],
             video_urls=[],
             post_date=datetime(2026, 4, 28, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -560,7 +560,7 @@ def test_build_object_rows_media_ref_none_when_image_urls_empty() -> None:
             hashtags=[],
             image_urls=[],
             post_date=datetime(2026, 4, 27, 12, 0, 0),
-            engagement_raw=0,
+            engagement_raw_count=0,
             account_followers=0,
         ),
         garment_type=GarmentType.KURTA_SET,
@@ -672,7 +672,7 @@ def test_build_item_row_styling_combo_text_only_when_no_canonicals() -> None:
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 27, 0, 0, 0),
-        engagement_raw=0,
+        engagement_raw_count=0,
     )
     enriched = EnrichedContentItem(
         normalized=bare_normalized,

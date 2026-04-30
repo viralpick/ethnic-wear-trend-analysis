@@ -32,7 +32,7 @@ def _normalized(post_id: str, *, source: ContentSource = ContentSource.INSTAGRAM
         hashtags=[],
         image_urls=[],
         post_date=datetime(2026, 4, 28),
-        engagement_raw=engagement,
+        engagement_raw_count=engagement,
     )
 
 

@@ -380,7 +380,7 @@ def _render_post_card(item: dict[str, Any], html_dir: Path) -> str:
     src = n.get("source", "?")
     handle = n.get("account_handle") or "—"
     date = n.get("post_date", "")[:10] if n.get("post_date") else ""
-    eng = n.get("engagement_raw", 0)
+    eng = n.get("engagement_raw_count") or n.get("engagement_raw") or 0
     src_type = n.get("ig_source_type") or ""
     image_urls = n.get("image_urls") or []
     video_urls = n.get("video_urls") or []
@@ -718,7 +718,7 @@ def _render_compact_contributor(
     src = n.get("source", "?")
     handle = n.get("account_handle") or "—"
     date = n.get("post_date", "")[:10] if n.get("post_date") else ""
-    eng = n.get("engagement_raw", 0)
+    eng = n.get("engagement_raw_count") or n.get("engagement_raw") or 0
     pct = share * 100
     palette = item.get("post_palette") or []
     canonicals = item.get("canonicals") or []
@@ -1071,7 +1071,7 @@ def _dedup_enriched_by_url(
         if len(items) > 1:
             n_dups += len(items) - 1
         items.sort(
-            key=lambda it: -(it["normalized"].get("engagement_raw") or 0)
+            key=lambda it: -(it["normalized"].get("engagement_raw_count") or it["normalized"].get("engagement_raw") or 0)
         )
         out.append(items[0])
     print(

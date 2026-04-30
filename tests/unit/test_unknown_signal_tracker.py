@@ -17,7 +17,7 @@ def _make(hashtags: list[str], text: str = "") -> NormalizedContentItem:
         hashtags=hashtags,
         image_urls=[],
         post_date=datetime(2026, 4, 21),
-        engagement_raw=0,
+        engagement_raw_count=0,
     )
 
 
