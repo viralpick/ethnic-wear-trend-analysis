@@ -82,6 +82,7 @@ def test_normalize_youtube_video_propagates_video_urls() -> None:
         comment_count=10,
         top_comments=[],
         published_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        collected_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
         video_urls=["stem/abc.mp4"],
     )
     item = normalize_youtube_video(raw)
@@ -104,6 +105,7 @@ def test_normalize_youtube_video_default_empty_video_urls() -> None:
         comment_count=0,
         top_comments=[],
         published_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        collected_at=datetime(2026, 4, 20, tzinfo=timezone.utc),
     )
     item = normalize_youtube_video(raw)
     assert item.video_urls == []

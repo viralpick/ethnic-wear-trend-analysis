@@ -148,6 +148,7 @@ def _build_youtube(row: list[str]) -> RawYouTubeVideo | None:
         logger.info("tsv_yt_skip ulid=%s reason=no_video_id_in_url", row[1])
         return None
     try:
+        published = _parse_yyyymmdd(row[10])
         return RawYouTubeVideo(
             video_id=match.group(1),
             channel=row[4],
@@ -159,7 +160,10 @@ def _build_youtube(row: list[str]) -> RawYouTubeVideo | None:
             like_count=int(row[12]),
             comment_count=int(row[13]),
             top_comments=[x for x in (row[14] or "").split("|") if x],
-            published_at=_parse_yyyymmdd(row[10]),
+            published_at=published,
+            # TSV 에 collected_at 컬럼 없음 — published_at 으로 fallback (TSV path 는
+            # deprecated, growth_rate 시계열 의미 없음).
+            collected_at=published,
         )
     except (ValueError, KeyError) as exc:
         logger.info("tsv_yt_skip ulid=%s reason=%s", row[1] if len(row) > 1 else "?", exc)
