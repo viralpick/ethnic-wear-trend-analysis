@@ -153,11 +153,15 @@ def _ffprobe_fps(video_path: Path) -> float | None:
 
 def _selected_video_frames(
     item: dict[str, Any], video_path: Path, thumbs_dir: Path, *, max_n: int = 5,
+    match_image_ids: set[str] | None = None,
 ) -> list[Path]:
     """item.canonicals[*].members[*].image_id 에서 video_path.stem 매칭하는
     global_idx 추출 → 균등 분포 max_n 개 선택 → ffmpeg 으로 idx/fps 시점 frame 추출.
 
     canonical 에 등장한 frame 이 0 개면 빈 list (호출자가 fallback 처리).
+
+    match_image_ids: 지정 시 그 image_id set 에 속하는 frame (= cluster 매칭 canonical
+    의 frame) 만 후보. None = 모든 canonical (옛 동작).
     """
     import subprocess
     stem = video_path.stem
@@ -165,6 +169,8 @@ def _selected_video_frames(
     for c in item.get("canonicals", []):
         for m in (c.get("members") or []):
             iid = m.get("image_id") or ""
+            if match_image_ids is not None and iid not in match_image_ids:
+                continue
             prefix = f"{stem}_f"
             if iid.startswith(prefix):
                 tail = iid[len(prefix):]
@@ -512,11 +518,16 @@ def _item_thumbnail_src(item: dict[str, Any], html_dir: Path) -> tuple[str, str]
 
 def _item_media_srcs(
     item: dict[str, Any], html_dir: Path, *, max_n: int = 5,
+    match_image_ids: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """item 의 media 최대 max_n 개 — IG 는 image_urls 첫 N 장, YT 는 영상 frame
     균등 분포 N 개 (1/(N+1) ~ N/(N+1) 위치). image+video mix 면 image 우선.
 
     각 entry: (src_path, src_label "instagram"|"youtube"). blob 캐시 없는 URL 은 skip.
+
+    match_image_ids: 특정 canonical 에 매칭된 image_id 집합. 지정 시 그 image_id 와
+    basename 일치하는 image_url / video frame 만 표시 — cluster matching 카드에서
+    "이 cluster 에 매칭된 frame 만" 보여주기 위함. None = 전체 (옛 동작).
     """
     n = item["normalized"]
     src = n.get("source", "")
@@ -524,13 +535,15 @@ def _item_media_srcs(
     video_urls = n.get("video_urls") or []
     out: list[tuple[str, str]] = []
 
-    # IG: image 우선 (post 내 등장 순서)
+    # IG: image 우선 (post 내 등장 순서). match_image_ids 지정 시 그 안 image 만.
     for url in image_urls:
         if len(out) >= max_n:
             break
         path_only = url.split("?", 1)[0]
         basename = Path(urlparse(path_only).path).name
         if not basename:
+            continue
+        if match_image_ids is not None and basename not in match_image_ids:
             continue
         cached = _IMG_CACHE / basename
         if cached.exists():
@@ -546,16 +559,38 @@ def _item_media_srcs(
             if local is None:
                 continue
             remaining = max_n - len(out)
-            # 1차: canonical 에 등장한 selected frame (분석 파이프라인이 실제 사용한 frame)
-            selected = _selected_video_frames(item, local, thumbs_dir, max_n=remaining)
-            # 2차 fallback: selected 0 개면 25%/50%/75% 균등 추출
-            thumbs = selected or _extract_video_thumbs(
-                local, thumbs_dir, n_frames=remaining,
+            # 1차: canonical 에 등장한 selected frame (분석 파이프라인이 실제 사용한 frame).
+            # match_image_ids 지정 시 그 set 만 (cluster 매칭 frame 한정).
+            selected = _selected_video_frames(
+                item, local, thumbs_dir, max_n=remaining,
+                match_image_ids=match_image_ids,
             )
+            # 2차 fallback: selected 0 개 + match_image_ids 가 None 이면 균등 분포.
+            # match_image_ids 가 지정됐는데 0 개면 균등 fallback 안 함 (cluster 와 무관한
+            # frame 노출 차단). YT CDN fallback 이 아래에서 동작.
+            if selected:
+                thumbs = selected
+            elif match_image_ids is None:
+                thumbs = _extract_video_thumbs(local, thumbs_dir, n_frames=remaining)
+            else:
+                thumbs = []
             for thumb in thumbs:
                 if len(out) >= max_n:
                     break
                 out.append((_rel_path(thumb, html_dir), src))
+
+    # 3차 fallback: YT video 가 blob 캐시에 없거나 ffmpeg 추출 실패 → YouTube CDN
+    # thumbnail (`https://img.youtube.com/vi/{video_id}/{kind}.jpg`) 사용. video_id
+    # = source_post_id. frame 보단 informativeness 떨어지지만 placeholder 보단 나음.
+    # 균등 frame 효과를 위해 0/1/2/3.jpg (썸네일 슬라이드) 와 hqdefault 조합.
+    if src == "youtube" and len(out) < max_n:
+        vid = n.get("source_post_id") or n.get("url_short_tag") or ""
+        if vid:
+            cdn_kinds = ["hqdefault", "0", "1", "2", "3"]
+            for kind in cdn_kinds:
+                if len(out) >= max_n:
+                    break
+                out.append((f"https://img.youtube.com/vi/{vid}/{kind}.jpg", src))
     return out
 
 
@@ -594,10 +629,19 @@ def _cluster_summary_body(
     extra_html: color_palette 직후 삽입. extra_html_bottom: 가장 마지막 (distributions 후)."""
     drill = s.get("drilldown") or {}
     breakdown = s.get("score_breakdown") or {}
-    breakdown_html = "".join(
-        f'<tr><td>{_esc(k)}</td><td class="num">{v:.2f}</td></tr>'
-        for k, v in breakdown.items()
-    )
+
+    def _fmt_breakdown_row(key: str, value: Any) -> str:
+        if isinstance(value, dict):
+            sub = ", ".join(
+                f"{_esc(str(sk))}={sv:.2f}" if isinstance(sv, (int, float)) else f"{_esc(str(sk))}={_esc(str(sv))}"
+                for sk, sv in value.items()
+            )
+            return f'<tr><td>{_esc(key)}</td><td class="num">{sub}</td></tr>'
+        if isinstance(value, (int, float)):
+            return f'<tr><td>{_esc(key)}</td><td class="num">{value:.2f}</td></tr>'
+        return f'<tr><td>{_esc(key)}</td><td class="num">{_esc(str(value))}</td></tr>'
+
+    breakdown_html = "".join(_fmt_breakdown_row(k, v) for k, v in breakdown.items())
     palette_html = _color_bar(drill.get("color_palette") or [])
     top_inf = drill.get("top_influencers") or []
     top_inf_html = "".join(
@@ -617,7 +661,11 @@ def _cluster_summary_body(
     </section>
     <section>
       <h4>counts</h4>
-      <div>total={s.get("post_count_total", 0):.1f} · today={s.get("post_count_today", 0):.1f} · views={s.get("total_video_views", 0):,}</div>
+      <div class="counts-line">
+        <span>total={s.get("post_count_total", 0):.1f}</span>
+        <span>today={s.get("post_count_today", 0):.1f}</span>
+        <span>views={s.get("total_video_views", 0):,}</span>
+      </div>
     </section>
     <section>
       <h4>top_influencers</h4>
@@ -711,8 +759,15 @@ def _render_cluster_card(
 
 def _render_compact_contributor(
     item: dict[str, Any], share: float, html_dir: Path,
+    *, cluster_key: str | None = None,
 ) -> str:
-    """cluster detail 안에 들어갈 compact contributor card — 이미지 + 핵심 정보 + palette bar."""
+    """cluster detail 안에 들어갈 compact contributor card — 이미지 + 핵심 정보 + palette bar.
+
+    contributor 단위는 Item (= 1 post). post 안에 multi-outfit (multi-canonical) 인 경우
+    각 canonical 의 (G, F, T, silhouette) 를 한 줄씩 펼침 + 현재 cluster_key 와 매칭되는
+    canonical (G__F) 는 굵은 파란색으로 highlight. 옆에는 post-level 합산 (eng, palette,
+    brand mention) 표시 — Item 단위 정보 함께 노출.
+    """
     n = item["normalized"]
     pid = n.get("source_post_id", "")
     src = n.get("source", "?")
@@ -722,9 +777,39 @@ def _render_compact_contributor(
     pct = share * 100
     palette = item.get("post_palette") or []
     canonicals = item.get("canonicals") or []
+    brands = item.get("brands") or []
+
+    # cluster_key 매칭되는 canonical 의 members image_id 집합 — 매칭 frame/image 만
+    # thumbnail 표시 (다른 pose / 사람 없는 image 제외). cluster_key=None 또는 매칭
+    # canonical 없으면 전체 fallback (옛 동작).
+    match_image_ids: set[str] | None = None
+    if cluster_key is not None and canonicals:
+        from aggregation.vision_normalize import (
+            normalize_garment_for_cluster, normalize_fabric,
+        )
+        from contracts.vision import EthnicOutfit
+        ids: set[str] = set()
+        for c in canonicals:
+            rep_dict = c.get("representative") or {}
+            try:
+                rep_model = EthnicOutfit.model_validate(rep_dict)
+                g = normalize_garment_for_cluster(rep_model)
+                f = normalize_fabric(rep_model)
+                g_val = g.value if g is not None else None
+                f_val = f.value if f is not None else None
+            except Exception:
+                continue
+            canon_ck = f"{g_val}__{f_val}" if g_val and f_val else None
+            if canon_ck == cluster_key:
+                for m in (c.get("members") or []):
+                    iid = m.get("image_id")
+                    if iid:
+                        ids.add(iid)
+        if ids:
+            match_image_ids = ids
 
     # thumbnail grid (최대 5장 — IG image / YT frame 균등 분포)
-    media = _item_media_srcs(item, html_dir, max_n=5)
+    media = _item_media_srcs(item, html_dir, max_n=5, match_image_ids=match_image_ids)
     if media:
         thumb_html = "".join(
             f'<img src="{_esc(p)}" loading="lazy" tabindex="0" class="contrib-card-img" alt="" />'
@@ -745,33 +830,177 @@ def _render_compact_contributor(
         else f'<code class="post-id">{_esc(pid)}</code>'
     )
 
-    # canonical 의 주요 attributes 한 줄로 (첫 canonical 기준)
-    canon_attr = ""
+    # canonical 별 한 줄 펼침 — multi-outfit post 의 모든 group 노출, 현재 cluster 매칭 highlight
+    canon_lines = []
     if canonicals:
-        rep = canonicals[0].get("representative", {})
-        canon_attr = (
+        from aggregation.vision_normalize import (
+            normalize_garment_for_cluster, normalize_fabric,
+        )
+        from contracts.vision import EthnicOutfit
+        for idx, c in enumerate(canonicals):
+            rep_dict = c.get("representative") or {}
+            try:
+                rep_model = EthnicOutfit.model_validate(rep_dict)
+                g = normalize_garment_for_cluster(rep_model)
+                f = normalize_fabric(rep_model)
+                g_val = g.value if g is not None else None
+                f_val = f.value if f is not None else None
+            except Exception:
+                g_val = rep_dict.get("upper_garment_type")
+                f_val = rep_dict.get("fabric")
+            canon_ck = f"{g_val}__{f_val}" if g_val and f_val else None
+            is_match = cluster_key is not None and canon_ck == cluster_key
+            klass = "canon-line match" if is_match else "canon-line"
+            badge = '<span class="canon-match-badge">★ this cluster</span>' if is_match else ''
+            canon_lines.append(
+                f'<div class="{klass}">'
+                f'<span class="canon-idx">#{idx}</span> '
+                f'upper={_esc(rep_dict.get("upper_garment_type") or "—")} / '
+                f'lower={_esc(rep_dict.get("lower_garment_type") or "—")} / '
+                f'fabric={_esc(rep_dict.get("fabric") or "—")} / '
+                f'technique={_esc(rep_dict.get("technique") or "—")} / '
+                f'silhouette={_esc(rep_dict.get("silhouette") or "—")}'
+                f' {badge}</div>'
+            )
+    canon_html = "\n".join(canon_lines)
+
+    brand_names = [b.get("name") if isinstance(b, dict) else str(b) for b in brands]
+    brand_names = [b for b in brand_names if b]
+    brands_html = (
+        f'<span class="muted">brands: {_esc(", ".join(brand_names[:3]))}</span>'
+        if brand_names else ''
+    )
+    item_summary = (
+        f'<div class="contrib-item-summary">'
+        f'<span class="muted">canonicals: {len(canonicals)}</span>'
+        f' {brands_html}'
+        f'</div>' if canonicals else ''
+    )
+
+    # Item full detail expand (post 전체 사진 + 모든 outfit + post-level 속성).
+    # 기본 hidden, contributor 카드 click 시 toggle.
+    item_detail_html = _render_item_full_detail(item, html_dir, cluster_key=cluster_key)
+    detail_id = f"itemdetail-{_esc(pid)}-{cluster_key or 'na'}"
+
+    return f'''
+<div class="contrib-card-wrap">
+  <div class="contrib-card" onclick="toggleItemDetail('{_esc(detail_id)}')" title="클릭 → 이 item 의 전체 사진 / 모든 outfit / post-level 속성 보기">
+    <div class="contrib-card-thumb">{thumb_html}</div>
+    <div class="contrib-card-body">
+      <div class="contrib-card-header">
+        <span class="badge src-{_esc(src)}">{_esc(src)}</span>
+        {handle_html}
+        {post_link_html}
+        <span class="muted">{_esc(date)}</span>
+        <span class="muted">eng={eng:,}</span>
+        <span class="contrib-share">{pct:.2f}%</span>
+        <span class="contrib-expand-hint">▾ click for item detail</span>
+      </div>
+      {item_summary}
+      {f'<div class="contrib-attrs">{canon_html}</div>' if canon_html else ''}
+      <div class="contrib-card-palette">{_color_bar(palette)}</div>
+    </div>
+  </div>
+  <div class="item-detail" id="{_esc(detail_id)}" style="display:none">{item_detail_html}</div>
+</div>'''
+
+
+def _render_item_full_detail(
+    item: dict[str, Any], html_dir: Path, *, cluster_key: str | None = None,
+) -> str:
+    """Item 전체 상세 — contributor 카드 click 시 expand. 8단계 신규 (2026-04-30).
+
+    구성:
+    - 전체 carousel/frame 사진 (cluster 매칭 outfit 만이 아니라 모든 image/frame)
+    - post-level 속성 (occasion, brands, post_palette, engagement raw count)
+    - 모든 canonical (outfit) 의 attribute + palette + 매칭 cluster highlight
+    """
+    n = item["normalized"]
+    canonicals = item.get("canonicals") or []
+    brands = item.get("brands") or []
+    occasion = item.get("occasion") or "—"
+    palette = item.get("post_palette") or []
+    eng_raw = n.get("engagement_raw_count") or n.get("engagement_raw") or 0
+    eng_score = n.get("engagement_score") or 0.0
+    growth = n.get("growth_metric") or 0
+    text_blob = (n.get("text_blob") or "")[:300]
+
+    # 전체 사진 — match_image_ids=None 으로 모든 이미지 (carousel 전체 / 모든 video frame)
+    full_media = _item_media_srcs(item, html_dir, max_n=12, match_image_ids=None)
+    if full_media:
+        all_thumbs = "".join(
+            f'<img src="{_esc(p)}" loading="lazy" class="item-detail-img" alt="" />'
+            for p, _ in full_media
+        )
+    else:
+        all_thumbs = '<span class="muted">no media available</span>'
+
+    # 모든 canonical 펼침 — palette 도 같이
+    from aggregation.vision_normalize import (
+        normalize_garment_for_cluster, normalize_fabric,
+    )
+    from contracts.vision import EthnicOutfit
+    canon_blocks = []
+    for idx, c in enumerate(canonicals):
+        rep = c.get("representative") or {}
+        try:
+            rm = EthnicOutfit.model_validate(rep)
+            g = normalize_garment_for_cluster(rm); f = normalize_fabric(rm)
+            ck_canon = f"{g.value if g else 'unknown'}__{f.value if f else 'unknown'}"
+        except Exception:
+            ck_canon = None
+        is_match = cluster_key is not None and ck_canon == cluster_key
+        klass = "item-canon-block match" if is_match else "item-canon-block"
+        match_badge = '<span class="canon-match-badge">★ this cluster</span>' if is_match else ''
+        canon_palette_html = _color_bar(c.get("palette") or [])
+        members_count = len(c.get("members") or [])
+        canon_blocks.append(
+            f'<div class="{klass}">'
+            f'<div class="item-canon-header">'
+            f'<span class="canon-idx">#{idx}</span> '
+            f'<code>{_esc(ck_canon or "?")}</code> '
+            f'<span class="muted">({members_count} members)</span> {match_badge}'
+            f'</div>'
+            f'<div class="item-canon-attrs">'
             f'upper={_esc(rep.get("upper_garment_type") or "—")} / '
             f'lower={_esc(rep.get("lower_garment_type") or "—")} / '
             f'fabric={_esc(rep.get("fabric") or "—")} / '
             f'technique={_esc(rep.get("technique") or "—")} / '
             f'silhouette={_esc(rep.get("silhouette") or "—")}'
+            f'</div>'
+            f'<div class="item-canon-palette">{canon_palette_html}</div>'
+            f'</div>'
         )
+    canon_blocks_html = "\n".join(canon_blocks) or '<span class="muted">no canonical</span>'
 
+    brand_names = [b.get("name") if isinstance(b, dict) else str(b) for b in brands]
+    brand_names = [b for b in brand_names if b]
+    brand_str = ", ".join(brand_names) if brand_names else "—"
     return f'''
-<div class="contrib-card">
-  <div class="contrib-card-thumb">{thumb_html}</div>
-  <div class="contrib-card-body">
-    <div class="contrib-card-header">
-      <span class="badge src-{_esc(src)}">{_esc(src)}</span>
-      {handle_html}
-      {post_link_html}
-      <span class="muted">{_esc(date)}</span>
-      <span class="muted">eng={eng:,}</span>
-      <span class="contrib-share">{pct:.2f}%</span>
+<div class="item-detail-inner">
+  <h4 class="item-detail-title">📌 Item full detail</h4>
+  <section class="item-detail-section">
+    <h5>전체 사진 / Frame ({len(full_media)})</h5>
+    <div class="item-detail-media-grid">{all_thumbs}</div>
+  </section>
+  <section class="item-detail-section">
+    <h5>Post-level 속성</h5>
+    <div class="item-detail-meta">
+      <div><b>occasion</b>: {_esc(occasion)}</div>
+      <div><b>brands</b>: {_esc(brand_str)}</div>
+      <div><b>engagement_raw_count</b>: {eng_raw:,} / <b>engagement_score</b>: {eng_score:.4f}</div>
+      <div><b>growth_metric</b>: {growth:,} (IG=likes / YT=view_count)</div>
+      <div class="muted item-detail-text"><b>text</b>: {_esc(text_blob)}{'…' if text_blob and len(text_blob) >= 300 else ''}</div>
     </div>
-    {f'<div class="contrib-attrs">{canon_attr}</div>' if canon_attr else ''}
-    <div class="contrib-card-palette">{_color_bar(palette)}</div>
-  </div>
+    <div class="item-detail-section-palette">
+      <h5>post_palette (item-level)</h5>
+      {_color_bar(palette)}
+    </div>
+  </section>
+  <section class="item-detail-section">
+    <h5>모든 outfit ({len(canonicals)} canonicals) — cluster 매칭 ★ 표시</h5>
+    {canon_blocks_html}
+  </section>
 </div>'''
 
 
@@ -788,7 +1017,8 @@ def _render_cluster_detail(
     contributors = sorted(contributors or [], key=lambda t: -t[1])
     n_contrib = len(contributors)
     contrib_html = "".join(
-        _render_compact_contributor(it, sh, html_dir) for it, sh in contributors
+        _render_compact_contributor(it, sh, html_dir, cluster_key=cluster_key)
+        for it, sh in contributors
     ) or '<div class="muted">contributor 없음</div>'
     return f'''
 <article class="cluster cluster-detail" data-cluster-key="{_esc(cluster_key)}" style="display:none">
@@ -865,7 +1095,9 @@ small { color: #888; font-size: 0.85em; }
 .meta-pill.lifecycle { color: #6b3aa0; border-color: #d8c5f0; background: #f4eefc; }
 
 .cluster-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-.cluster-body section { font-size: 12px; }
+.cluster-body section { font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.counts-line { display: flex; flex-wrap: wrap; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.counts-line > span { white-space: nowrap; }
 .dist-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 .post-body { display: grid; grid-template-columns: 540px 1fr; gap: 16px; }
@@ -1038,7 +1270,49 @@ a:hover { text-decoration: underline; }
                  background: rgba(211,84,0,0.1); padding: 1px 6px;
                  border-radius: 3px; }
 .contrib-attrs { font-size: 11px; color: #555; line-height: 1.4; }
+.contrib-item-summary { font-size: 11px; color: #888; }
+.canon-line { padding: 2px 6px; border-radius: 3px; margin: 2px 0;
+              border-left: 2px solid transparent; }
+.canon-line.match { background: #eff4fc; border-left-color: #2a5db8;
+                    color: #1a3a78; font-weight: 500; }
+.canon-idx { font-family: ui-monospace, monospace; color: #999;
+             font-size: 10px; margin-right: 4px; }
+.canon-line.match .canon-idx { color: #2a5db8; }
+.canon-match-badge { font-size: 9px; color: #2a5db8;
+                     background: rgba(42,93,184,0.1); padding: 1px 4px;
+                     border-radius: 3px; margin-left: 4px;
+                     font-weight: bold; text-transform: uppercase; }
 .contrib-card-palette { margin-top: 4px; }
+
+/* 8단계 — contributor click → item full detail expand */
+.contrib-card { cursor: pointer; transition: background 0.15s; }
+.contrib-card:hover { background: #f0f4fc; }
+.contrib-card-wrap { margin-bottom: 8px; }
+.contrib-expand-hint { color: #2a5db8; font-size: 10px; margin-left: auto; opacity: 0.6; }
+.contrib-card:hover .contrib-expand-hint { opacity: 1; }
+.item-detail { background: #fffbe6; border-left: 3px solid #f5c518;
+               border-radius: 0 6px 6px 0; padding: 10px 14px;
+               margin: 6px 0 12px 24px; }
+.item-detail-title { font-size: 12px; color: #c08400; margin: 0 0 8px;
+                     text-transform: none; }
+.item-detail-section { margin-bottom: 12px; }
+.item-detail-section h5 { font-size: 11px; color: #555; margin: 6px 0 4px;
+                          text-transform: uppercase; }
+.item-detail-media-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.item-detail-img { width: 120px; height: 120px; object-fit: cover; border-radius: 4px; }
+.item-detail-meta { font-size: 11px; line-height: 1.6; }
+.item-detail-meta b { color: #555; }
+.item-detail-text { margin-top: 4px; font-style: italic; max-width: 100%;
+                    overflow-wrap: anywhere; }
+.item-detail-section-palette { margin-top: 8px; }
+.item-detail-section-palette .palette-bar { height: 24px; }
+.item-canon-block { background: #fff; border-radius: 4px; padding: 6px 10px;
+                    margin: 4px 0; border-left: 2px solid transparent; }
+.item-canon-block.match { border-left-color: #2a5db8; background: #eff4fc; }
+.item-canon-header { font-size: 11px; margin-bottom: 4px; }
+.item-canon-attrs { font-size: 11px; color: #555; line-height: 1.5; }
+.item-canon-palette { margin-top: 4px; }
+.item-canon-palette .palette-bar { height: 18px; }
 .contrib-card-palette .palette-bar { height: 24px; }
 
 /* post-link icon */
@@ -1357,6 +1631,12 @@ function showClusterList(weekIdx) {{
   root.querySelectorAll('.cluster-detail').forEach(el => {{
     el.style.display = 'none';
   }});
+}}
+function toggleItemDetail(detailId) {{
+  // contributor 카드 click 시 그 item 의 full detail panel toggle (8단계, 2026-04-30)
+  const el = document.getElementById(detailId);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
 }}
 function filterPosts(weekIdx) {{
   const root = document.querySelector(`section.week-block[data-week="${{weekIdx}}"]`);
