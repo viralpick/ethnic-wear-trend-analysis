@@ -25,6 +25,11 @@ class NormalizedContentItem(BaseModel):
     source: ContentSource
     source_post_id: str
 
+    # Phase 3 (2026-04-30): URL short tag — IG shortcode / YT video_id. raw DB ULID
+    # (source_post_id) 는 매 crawl 마다 새로 발급 → 시계열 snapshot dedup 위해 외부
+    # unique key 별도 보존. None = URL parse 실패 (fallback: source_post_id 사용).
+    url_short_tag: str | None = None
+
     # 룰/LLM 매칭 대상. IG: caption + hashtag 문자열, YT: title + description + tags.
     text_blob: str
 

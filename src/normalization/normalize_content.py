@@ -12,6 +12,7 @@ from __future__ import annotations
 from contracts.common import ContentSource, InstagramSourceType
 from contracts.normalized import NormalizedContentItem
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
+from loaders.url_parsing import extract_url_short_tag
 
 _MIN_FOLLOWERS = 100  # rate normalize lower bound (2026-04-30 sync)
 
@@ -69,6 +70,7 @@ def normalize_instagram_post(
     return NormalizedContentItem(
         source=ContentSource.INSTAGRAM,
         source_post_id=post.post_id,
+        url_short_tag=extract_url_short_tag(post.post_url),
         text_blob=text_blob,
         hashtags=list(post.hashtags),
         image_urls=list(post.image_urls),
@@ -108,6 +110,7 @@ def normalize_youtube_video(video: RawYouTubeVideo) -> NormalizedContentItem:
     return NormalizedContentItem(
         source=ContentSource.YOUTUBE,
         source_post_id=video.video_id,
+        url_short_tag=extract_url_short_tag(video.video_url) or video.video_id,
         text_blob=text_blob,
         hashtags=tag_tokens,
         image_urls=[],

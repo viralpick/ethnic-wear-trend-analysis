@@ -27,7 +27,9 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 def load_enriched_files(glob_pattern: str) -> list[EnrichedContentItem]:
     """glob 패턴으로 enriched.json 파일들 로드 → flat list.
 
-    같은 source_post_id 중복 시 마지막 파일 우선 (glob 정렬 순서).
+    같은 source_post_id 중복 시 마지막 파일 우선 (glob 정렬 순서). 단 같은
+    url_short_tag 의 multi-snapshot 은 모두 유지 (Phase 3, 2026-04-30) — growth rate
+    계산용 시계열.
     """
     paths = sorted(glob.glob(glob_pattern))
     if not paths:
@@ -110,37 +112,92 @@ def load_raw_post_urls() -> dict[str, str]:
     return out
 
 
-def dedup_by_raw_url(
+def dedup_by_url_short_tag(
     items: list[EnrichedContentItem],
-    post_urls: dict[str, str],
 ) -> list[EnrichedContentItem]:
-    """raw DB url 기준 dedup — 동일 url 가진 item 중 engagement_raw_count 최대 1건만 keep.
+    """url_short_tag 기준 dedup — 동일 short_tag 중 가장 최근 (post_date 최대) 1건 keep.
 
-    rep phase 에서 enriched 내 url 중복 (re-crawl 등) 으로 cluster 점수 inflate 방지.
-    url 미매핑 (post_id 가 raw DB lookup 실패) item 은 모두 유지 (가짜 dedup 방지).
+    Phase 3 (2026-04-30): score 계산 시 동일 게시물의 multi-snapshot 이 cluster 점수
+    inflate 시키는 걸 방지. growth rate 계산은 별도로 시계열 유지 (compute_growth_rate
+    가 모든 snapshot 받아서 처리).
+
+    short_tag 미존재 (url parse 실패) item 은 source_post_id (ULID) 기준 유지 — fallback.
     """
-    if not post_urls:
-        return items
-    by_url: dict[str, list[EnrichedContentItem]] = {}
-    no_url: list[EnrichedContentItem] = []
+    by_tag: dict[str, list[EnrichedContentItem]] = {}
+    no_tag: list[EnrichedContentItem] = []
     for it in items:
-        pid = it.normalized.source_post_id
-        url = post_urls.get(pid)
-        if url:
-            by_url.setdefault(url, []).append(it)
+        tag = it.normalized.url_short_tag
+        if tag:
+            by_tag.setdefault(tag, []).append(it)
         else:
-            no_url.append(it)
-    out: list[EnrichedContentItem] = list(no_url)
+            no_tag.append(it)
+    out: list[EnrichedContentItem] = list(no_tag)
     dropped = 0
-    for url, group in by_url.items():
+    for tag, group in by_tag.items():
         if len(group) > 1:
             dropped += len(group) - 1
-        group.sort(key=lambda it: -(it.normalized.engagement_raw_count or 0))
+        # 가장 최근 snapshot keep (post_date max). 같은 ULID 의 re-crawl 은 같은 post_date
+        # 라 secondary tiebreak 으로 engagement_raw_count desc.
+        group.sort(
+            key=lambda it: (
+                -(it.normalized.post_date.timestamp()),
+                -(it.normalized.engagement_raw_count or 0),
+            )
+        )
         out.append(group[0])
     logger.info(
-        "dedup_by_raw_url in=%d out=%d dropped=%d no_url=%d",
-        len(items), len(out), dropped, len(no_url),
+        "dedup_by_url_short_tag in=%d out=%d dropped=%d no_tag=%d",
+        len(items), len(out), dropped, len(no_tag),
     )
+    return out
+
+
+# 옛 dedup_by_raw_url 호환 alias (backwards-compat. Phase 3 후속 cleanup)
+def dedup_by_raw_url(
+    items: list[EnrichedContentItem],
+    post_urls: dict[str, str] | None = None,
+) -> list[EnrichedContentItem]:
+    """deprecated — Phase 3 이후 url_short_tag 사용. 호환 위해 wrapper 유지.
+
+    post_urls 인자는 backwards-compat 더미 (사용 안 함).
+    """
+    _ = post_urls
+    return dedup_by_url_short_tag(items)
+
+
+def compute_growth_rate(items: list[EnrichedContentItem]) -> dict[str, float]:
+    """url_short_tag 기준 시계열 → growth rate (Δ engagement / Δ days).
+
+    같은 short_tag 의 multiple snapshot 이 있으면 (post_date asc 정렬):
+    - 첫 ↔ 마지막 snapshot 의 engagement_raw_count 차이 / Δ days = growth_rate
+    - snapshot 1개 또는 Δ days = 0 이면 0.0 (성장 측정 불가)
+
+    Returns: {url_short_tag: growth_rate}. growth_rate > 0 이면 시간 지나며 engagement
+    증가 시그널 (단위: count/day).
+    """
+    by_tag: dict[str, list[EnrichedContentItem]] = {}
+    for it in items:
+        tag = it.normalized.url_short_tag
+        if not tag:
+            continue
+        by_tag.setdefault(tag, []).append(it)
+    out: dict[str, float] = {}
+    for tag, group in by_tag.items():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda it: it.normalized.post_date)
+        first = group[0]
+        last = group[-1]
+        delta_days = (
+            last.normalized.post_date - first.normalized.post_date
+        ).total_seconds() / 86400.0
+        if delta_days <= 0:
+            continue
+        delta_eng = (
+            (last.normalized.engagement_raw_count or 0)
+            - (first.normalized.engagement_raw_count or 0)
+        )
+        out[tag] = delta_eng / delta_days
     return out
 
 
