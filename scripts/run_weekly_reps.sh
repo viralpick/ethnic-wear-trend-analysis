@@ -18,7 +18,8 @@ SINK="${SINK:-starrocks}"
 
 # 12 주차 — 각 주의 Sunday (end_date). oldest first.
 WEEKS=(
-  2026-02-15  # 1주차 (가장 과거)
+  2026-02-08  # 1주차 (가장 과거)
+  2026-02-15
   2026-02-22
   2026-03-01
   2026-03-08
@@ -49,6 +50,7 @@ for end_date in "${WEEKS[@]}"; do
     --start-date "$start_date" \
     --end-date "$end_date" \
     --enriched-glob "$GLOB" \
+    --dedup-by-url \
     --sink "$SINK" 2>&1 | tail -5
 done
 
