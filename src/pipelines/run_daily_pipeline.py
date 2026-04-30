@@ -148,26 +148,19 @@ def _case2_targets(
 
 
 def _vision_reassign_cluster_shares(item: EnrichedContentItem) -> dict[str, float]:
-    """canonicals 채워진 후 G/T/F cross-product fan-out share dict 재계산 (ζ + 갭 #3 B).
+    """canonicals 단위 cluster_shares 재계산 (Phase v2.1 (A), 2026-04-30).
 
-    text-level partial 의 single-entry shares (= {winner_key: 1.0}) 를 vision-aware
-    multi-cluster fan-out 으로 확장. representative_builder.item_cluster_shares 와 동일
-    cross-product space — score path (β2) ↔ summary path (β4) ↔ picking path (ζ) 정합.
+    cross-product 폐기 — canonical_cluster_shares 가 group_to_item_contrib 비례 mass.
+    multi-canonical post 의 가짜 cluster (다른 canonical 의 axis mix) 자동 차단.
 
-    N (resolved axis 수) 별 동작:
-    - N=3 (G/T/F 모두 채워짐) → item_cluster_shares cross-product dict (winner-only
-      collapse 해소 ★ ζ 본 목적). multiplier_ratio=1.0.
-    - N<3 (partial) → 기존 shares 유지. assign_shares 가 N<3 일 때 multiplier_ratio 0.5/0.2
-      를 곱해 share 가 작아져 picking_min_share=0.10 threshold 에 걸려 picking 손실
-      방지. text-level winner single-entry ({winner_key: 1.0}) 가 그대로 picking 됨.
-    - canonicals 비어있음 → 기존 shares 유지 (text-level 결정 보존).
+    canonicals 비어있으면 text-level shares 보존 (옛 enriched 호환).
     """
     if not item.canonicals:
         return item.trend_cluster_shares
     dist = enriched_to_item_distribution(item)
-    if not dist.garment_type or not dist.technique or not dist.fabric:
+    if not dist.cluster_shares:
         return item.trend_cluster_shares
-    return item_cluster_shares(dist)
+    return dict(dist.cluster_shares)
 
 
 def _winner_key_from_shares(shares: dict[str, float]) -> str | None:
@@ -432,11 +425,12 @@ def run_representative_phase(
     growth_by_tag = compute_growth_rate(enriched)
     factor_by_tag = growth_rate_factor_map(growth_by_tag)
     if growth_by_tag:
-        n_growing = sum(1 for r in growth_by_tag.values() if r > 0)
+        rates = [rate for _, rate in growth_by_tag.values()]
+        n_growing = sum(1 for r in rates if r > 0)
         logger.info(
             "growth_rate computed tags=%d positive=%d max=%.2f",
             len(growth_by_tag), n_growing,
-            max(growth_by_tag.values(), default=0.0),
+            max(rates, default=0.0),
         )
 
     # url_short_tag 기준 가장 최근 1건만 keep (cluster score inflate 방지)

@@ -47,6 +47,12 @@ class NormalizedContentItem(BaseModel):
     # IG: post_date, YT: published_at
     post_date: datetime
 
+    # 크롤 수집 시점 (raw.collected_at). 같은 콘텐츠의 multi-snapshot 시계열 비교에 쓰임.
+    # post_date 는 게시일 불변이라 Δ days 분모로 부적합. compute_growth_rate 가 이 값으로
+    # Δ days 계산. 옛 enriched JSON 호환 위해 default None — None 이면 growth_rate 미수록.
+    # 2026-04-30 추가.
+    collected_at: datetime | None = None
+
     # Engagement Score (rate-based, 2026-04-30 sync 결정):
     #   engagement_score = (likes / max(followers, 100)) × 1
     #                    + (comments / max(followers, 100)) × 2

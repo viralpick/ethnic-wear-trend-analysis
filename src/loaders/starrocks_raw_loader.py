@@ -139,6 +139,9 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
             published_at=_parse_yyyymmdd(row["upload_date"])
             if row.get("upload_date")
             else datetime.now(timezone.utc),
+            collected_at=row["created_at"].replace(tzinfo=timezone.utc)
+            if row.get("created_at")
+            else datetime.now(timezone.utc),
             video_urls=videos,
         )
     except Exception as exc:

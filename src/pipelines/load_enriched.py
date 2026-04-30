@@ -174,27 +174,30 @@ def compute_growth_rate(
     수십~수천 vs views 수만~수백만) 라 정규화 시 source 별 분리 필요. tuple 의 source
     는 growth_rate_factor_map 에서 source 별 max 로 정규화 위해 함께 반환.
 
-    같은 short_tag 의 multiple snapshot 이 있으면 (post_date asc 정렬):
-    - 첫 ↔ 마지막 snapshot 의 growth_metric 차이 / Δ days = growth_rate
-    - snapshot 1개 또는 Δ days = 0 이면 미수록
+    Δ days 분모는 `collected_at` (크롤 수집 시점). post_date 는 게시일 불변이라
+    multi-snapshot 에 동일 → Δ days = 0 → 전부 skip 되는 버그 회피.
 
-    Returns: {url_short_tag: (source, growth_rate)}.
+    같은 short_tag 의 multiple snapshot 이 있으면 (collected_at asc 정렬):
+    - 첫 ↔ 마지막 snapshot 의 growth_metric 차이 / Δ days = growth_rate
+    - snapshot 1개, collected_at 누락, Δ days = 0 이면 미수록 → factor=1.0 (default)
     """
     by_tag: dict[str, list[EnrichedContentItem]] = {}
     for it in items:
         tag = it.normalized.url_short_tag
         if not tag:
             continue
+        if it.normalized.collected_at is None:
+            continue
         by_tag.setdefault(tag, []).append(it)
     out: dict[str, tuple[str, float]] = {}
     for tag, group in by_tag.items():
         if len(group) < 2:
             continue
-        group.sort(key=lambda it: it.normalized.post_date)
+        group.sort(key=lambda it: it.normalized.collected_at)
         first = group[0]
         last = group[-1]
         delta_days = (
-            last.normalized.post_date - first.normalized.post_date
+            last.normalized.collected_at - first.normalized.collected_at
         ).total_seconds() / 86400.0
         if delta_days <= 0:
             continue

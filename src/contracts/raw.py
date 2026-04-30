@@ -83,6 +83,10 @@ class RawYouTubeVideo(BaseModel):
     top_comments: list[str]  # spec §3.2 — 상위 50개, 텍스트만
 
     published_at: datetime
+    # 크롤 수집 시점. 시계열 growth rate 계산의 Δ days 분모로 사용 (published_at 은 게시일
+    # 불변이라 multi-snapshot 에 동일하므로 부적합). raw DB `created_at` 컬럼 매핑.
+    # 2026-04-30 추가.
+    collected_at: datetime
 
     # M3.H — YT 영상 mp4 Azure Blob URL. 보통 1개. backwards-compat 위해 default `[]`.
     video_urls: list[str] = []
