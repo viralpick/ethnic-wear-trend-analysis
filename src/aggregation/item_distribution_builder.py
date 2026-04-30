@@ -16,7 +16,7 @@ distribution 으로 합성. distribution_builder.build_distribution 을 G/T/F �
 from __future__ import annotations
 
 from aggregation.distribution_builder import GroupSnapshot, build_distribution
-from aggregation.representative_builder import ItemDistribution
+from aggregation.representative_builder import ItemDistribution, canonical_cluster_shares
 from aggregation.vision_normalize import (
     normalize_fabric,
     normalize_garment_for_cluster,
@@ -105,35 +105,57 @@ def enriched_to_item_distribution(
     # representative 점수에 섞여 운영 시그널 오염. group/object 적재 (검수 대시보드용) 는
     # build_group_rows / build_object_rows 가 그대로 처리.
     canonicals = [c for c in enriched.canonicals if is_canonical_ethnic(c)]
+
+    # Phase 3.1 (2026-04-30): canonicals=[] post 는 cluster fan-out 차단. SceneFilter
+    # 통과 후 vision 결과 빈 (남성 kurta / non-woman / non-ethnic 분류) post 가 caption
+    # 의 "kurta" 등 text-rule fallback 으로 cluster 에 들어가는 false positive 방지.
+    if not canonicals:
+        empty_dist: dict = {}
+        return ItemDistribution(
+            item_id=item_id,
+            source=normalized.source,
+            item_base_unit=item_base_unit,
+            garment_type=empty_dist,
+            fabric=empty_dist,
+            technique=empty_dist,
+            cluster_shares={},
+        )
+
     garment_groups = [_group_snapshot_for_garment(c) for c in canonicals]
     fabric_groups = [_group_snapshot_for_fabric(c) for c in canonicals]
     technique_groups = [_group_snapshot_for_technique(c) for c in canonicals]
 
+    # Phase 3.2 (2026-04-30): G/F/T distribution 은 vision-only (text rule 폐지). 사례:
+    # silk vision 결과를 caption "cotton" 키워드가 0.857 가중치로 덮어 cotton cluster
+    # 잘못 분류 (DXmIpa6l0bk). occasion / brand 는 vision 으로 추론 어려운 메타라 text 그대로.
     method_map = enriched.classification_method_per_attribute
 
-    garment_text = enriched.garment_type.value if enriched.garment_type is not None else None
-    fabric_text = enriched.fabric.value if enriched.fabric is not None else None
-    technique_text = enriched.technique.value if enriched.technique is not None else None
+    # Phase v2.1 (2026-04-30 (A)): cluster_shares 는 canonical 단위 fan-out — 각 canonical
+    # 의 (g, f) 가 자기 cluster_key 에 group_to_item_contrib 비례 mass. cross-product 폐기
+    # (multi-canonical post 의 가짜 cluster 매칭 방지). 사례: 9-canonical haul post 의
+    # casual_saree__satin 가짜 cluster (canonical 0 의 garment + canonical 3 의 fabric mix).
+    cluster_shares = canonical_cluster_shares(canonicals, base_unit=item_base_unit)
 
     return ItemDistribution(
         item_id=item_id,
         source=normalized.source,
         item_base_unit=item_base_unit,
         garment_type=build_distribution(
-            text_value=garment_text,
+            text_value=None,
             text_method=method_map.get("garment_type"),
             canonical_groups=garment_groups,
         ),
         fabric=build_distribution(
-            text_value=fabric_text,
+            text_value=None,
             text_method=method_map.get("fabric"),
             canonical_groups=fabric_groups,
         ),
         technique=build_distribution(
-            text_value=technique_text,
+            text_value=None,
             text_method=method_map.get("technique"),
             canonical_groups=technique_groups,
         ),
+        cluster_shares=cluster_shares,
     )
 
 

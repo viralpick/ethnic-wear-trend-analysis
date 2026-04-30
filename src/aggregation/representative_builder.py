@@ -30,16 +30,23 @@ _MULTIPLIER_BY_N: dict[int, float] = {
 
 @dataclass(frozen=True)
 class ItemDistribution:
-    """1 item (post/video) 의 G/F distribution + source. technique 은 cluster
-    drilldown 의 distribution 으로 별도 노출 — cluster_key 에서는 빠짐 (2026-04-30 sync).
+    """1 item (post/video) 의 G/F distribution + source.
 
-    `item_base_unit` 는 향후 engagement 가중 자리 — 현재 1.0 default.
+    `item_base_unit` 는 growth_rate 가중치 — 현재 1.0 default.
+
+    Phase v2.1 (2026-04-30 (A)): `cluster_shares` 는 canonical 단위 fan-out 결과 —
+    각 canonical 의 (g_i, f_i) 가 자기 cluster_key 에 group_to_item_contrib 비례 mass.
+    옛 cross-product (G × F distribution mix) 가 multi-canonical post 에서 가짜 cluster
+    매칭 (예: canonical 0=kurta+cotton, canonical 1=saree+silk → cross-product `kurta__silk`
+    가짜 매칭) 을 만들던 갭 해소. distribution 들 (garment_type/fabric/technique) 은 화면
+    표시 용도 그대로 유지 (item_dist drilldown / cluster summary aggregation).
     """
     item_id: str
     source: ContentSource
     garment_type: dict[str, float] = field(default_factory=dict)
     fabric: dict[str, float] = field(default_factory=dict)
     technique: dict[str, float] = field(default_factory=dict)  # drilldown 표시용
+    cluster_shares: dict[str, float] = field(default_factory=dict)
     item_base_unit: float = 1.0
 
 
@@ -77,16 +84,39 @@ def multiplier_for_n(n: int) -> float:
 
 
 def _resolved_axis_count(item: ItemDistribution) -> int:
-    """G/F 중 비어있지 않은 축 수 (0~2). technique 은 cluster_key 에서 빠짐."""
+    """G/F 중 비어있지 않은 축 수 (0~2). technique 은 cluster_key 에서 빠짐.
+
+    Phase v2.1 호환: cluster_shares 가 비어있으면 0, 모든 cluster_key 가 unknown axis 만
+    포함하면 0, 그 외엔 cluster_key 의 unknown 갯수 분포로 추정 (max resolved axis count).
+    """
+    if item.cluster_shares:
+        max_resolved = 0
+        for ck in item.cluster_shares:
+            n_resolved = sum(1 for ax in ck.split("__") if ax != _UNKNOWN_AXIS)
+            max_resolved = max(max_resolved, n_resolved)
+        return max_resolved
     return sum(1 for d in (item.garment_type, item.fabric) if d)
 
 
 def effective_item_count(items: list[ItemDistribution]) -> float:
     """multiplier-scaled batch denominator. N=2 기준 정규화 — N=0:0 / N=1:0.4 / N=2:1.0.
-    분자 multiplier scale 과 단위 정합.
+
+    Phase v2.1 (A): cluster_shares 의 multiplier-scaled 합으로 직접 산출 (canonical 단위
+    fan-out 결과 정확 반영). cluster_shares 비어있으면 _resolved_axis_count fallback.
     """
     full = multiplier_for_n(2)
-    return sum(multiplier_for_n(_resolved_axis_count(item)) / full for item in items)
+    if full <= 0:
+        return 0.0
+    total = 0.0
+    for item in items:
+        if item.cluster_shares:
+            for ck, share in item.cluster_shares.items():
+                mult = _multiplier_from_cluster_key(ck)
+                total += share * mult / full
+        else:
+            n = _resolved_axis_count(item)
+            total += multiplier_for_n(n) / full
+    return total
 
 
 # `clustering.assign_trend_cluster._UNKNOWN` 와 같은 placeholder ("unknown" 하드코드 — partial
@@ -94,29 +124,57 @@ def effective_item_count(items: list[ItemDistribution]) -> float:
 _UNKNOWN_AXIS = "unknown"
 
 
-def _item_contributions(item: ItemDistribution) -> list[RepresentativeContribution]:
-    """1 item → G__F cross-product representative contribution 목록 (2026-04-30 sync).
+def _multiplier_from_cluster_key(cluster_key: str) -> float:
+    """cluster_key 의 unknown axis 갯수로 multiplier 결정 (Phase v2.1 (A))."""
+    n_resolved = sum(1 for ax in cluster_key.split("__") if ax != _UNKNOWN_AXIS)
+    return multiplier_for_n(n_resolved)
 
-    - N=0 → 빈 list (후보 아님)
-    - N≥1 → cross-product (G × F). 비어있는 axis 는 `_UNKNOWN_AXIS` placeholder.
-      multiplier = multiplier_for_n(N) (1.0 / 2.5).
-    - contribution = share × multiplier × item_base_unit.
+
+def _item_contributions(item: ItemDistribution) -> list[RepresentativeContribution]:
+    """1 item → representative contribution 목록.
+
+    Phase v2.1 (2026-04-30 (A)): `item.cluster_shares` 가 canonical 단위 fan-out 결과
+    (caller `enriched_to_item_distribution` 에서 산출). cross-product 폐기.
+
+    Backwards-compat: cluster_shares 빈 dict 면 옛 G/F cross-product fallback. 옛 test
+    fixture / 직접 ItemDistribution 만드는 caller 호환용.
+
+    multiplier 는 cluster_key 의 unknown axis 갯수로 결정 (N=2 → 2.5, N=1 → 1.0).
+    contribution = share × multiplier × item_base_unit.
     """
-    n_axes = _resolved_axis_count(item)
+    if item.cluster_shares:
+        out: list[RepresentativeContribution] = []
+        for ck, share in item.cluster_shares.items():
+            if share <= 0.0:
+                continue
+            mult = _multiplier_from_cluster_key(ck)
+            if mult <= 0.0:
+                continue
+            contrib = share * mult * item.item_base_unit
+            out.append(RepresentativeContribution(
+                representative_key=ck,
+                item_id=item.item_id,
+                source=item.source,
+                match_share=share,
+                multiplier=mult,
+                contribution=contrib,
+            ))
+        return out
+
+    # Fallback (옛 cross-product) — distribution 직접 만든 caller / fixture 용.
+    n_axes = sum(1 for d in (item.garment_type, item.fabric) if d)
     if n_axes == 0:
         return []
-
     g_eff = item.garment_type or {_UNKNOWN_AXIS: 1.0}
     f_eff = item.fabric or {_UNKNOWN_AXIS: 1.0}
     mult = multiplier_for_n(n_axes)
-
-    out: list[RepresentativeContribution] = []
+    out_legacy: list[RepresentativeContribution] = []
     for (g, gp), (f, fp) in product(g_eff.items(), f_eff.items()):
         share = gp * fp
         if share <= 0.0:
             continue
         contrib = share * mult * item.item_base_unit
-        out.append(RepresentativeContribution(
+        out_legacy.append(RepresentativeContribution(
             representative_key=representative_key(g, f),
             item_id=item.item_id,
             source=item.source,
@@ -124,7 +182,7 @@ def _item_contributions(item: ItemDistribution) -> list[RepresentativeContributi
             multiplier=mult,
             contribution=contrib,
         ))
-    return out
+    return out_legacy
 
 
 def build_contributions(
@@ -188,15 +246,77 @@ def aggregate_representatives(
 
 
 def item_cluster_shares(item: ItemDistribution) -> dict[str, float]:
-    """item → cluster_key 별 raw share dict. G__F 2축 (2026-04-30 sync).
+    """item → cluster_key 별 raw share dict. Phase v2.1 (A) (2026-04-30).
 
-    1 item 의 G/F 분포가 cross-product 으로 여러 cluster_key 에 share 로 fan-out.
-    representative_key 와 cluster_key 는 동일 포맷 (`g__f`).
+    canonical 단위 fan-out 결과를 그대로 반환 — 옛 cross-product (G × F) 폐기.
+    `enriched_to_item_distribution` 가 산출 후 ItemDistribution.cluster_shares 에 주입.
 
-    technique 은 cluster fan-out 키에서 빠짐 — cluster drilldown 의 technique_distribution
-    으로만 노출. share 합 = N=2 → 1.0, N=1 → 0.5, N=0 → 0.
+    Backwards-compat: cluster_shares 빈 dict 면 옛 cross-product fallback.
     """
+    if item.cluster_shares:
+        return dict(item.cluster_shares)
     return assign_shares(item.garment_type, item.fabric)
+
+
+def canonical_cluster_shares(canonicals: list, *, base_unit: float = 1.0) -> dict[str, float]:
+    """canonical 단위 cluster fan-out (Phase v2.1 (A), 2026-04-30).
+
+    각 canonical 의 (g, f) 가 자기 cluster_key 에 mass 분배. mass = canonical 의
+    `group_to_item_contrib` (= log2(n_objects+1) × log2(area×100+1)) / Σ. multi-canonical
+    같은 cluster_key 면 합산.
+
+    partial canonical (g O / f X 또는 그 반대) → unknown axis placeholder cluster_key
+    (예: `straight_kurta__unknown`). g X + f X 인 canonical 은 drop.
+
+    base_unit: growth_rate factor 등 caller 가중치 (default 1.0).
+
+    Returns:
+      cluster_key → share (per item, sum ≤ base_unit). multiplier 미적용 (caller 가
+      `_item_contributions` 에서 cluster_key 의 unknown axis 갯수로 결정).
+    """
+    from math import log2
+    from contracts.vision import is_canonical_ethnic
+    from aggregation.vision_normalize import (
+        normalize_garment_for_cluster, normalize_fabric,
+    )
+
+    eth = [c for c in canonicals if is_canonical_ethnic(c)]
+    if not eth:
+        return {}
+
+    weighted: list[tuple[float, str | None, str | None]] = []
+    for c in eth:
+        n = len(c.members) if c.members else 0
+        if n <= 0:
+            continue
+        # canonical_mean_area_ratio inline
+        total_area = 0.0
+        for m in c.members:
+            _, _, w, h = m.person_bbox
+            total_area += w * h
+        mean_area = total_area / n
+        contrib = log2(n + 1) * log2(mean_area * 100 + 1)
+        if contrib <= 0:
+            continue
+        g_enum = normalize_garment_for_cluster(c.representative)
+        f_enum = normalize_fabric(c.representative)
+        g = g_enum.value if g_enum else None
+        f = f_enum.value if f_enum else None
+        if g is None and f is None:
+            continue
+        weighted.append((contrib, g, f))
+
+    if not weighted:
+        return {}
+    total_contrib = sum(w[0] for w in weighted)
+    if total_contrib <= 0:
+        return {}
+
+    out: dict[str, float] = {}
+    for contrib, g, f in weighted:
+        ck = f"{g or _UNKNOWN_AXIS}__{f or _UNKNOWN_AXIS}"
+        out[ck] = out.get(ck, 0.0) + (contrib / total_contrib) * base_unit
+    return out
 
 
 def top_evidence_per_source(

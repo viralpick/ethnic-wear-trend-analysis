@@ -180,11 +180,9 @@ def test_build_item_row_full_distribution() -> None:
     assert row["posted_at"] == "2026-04-27 06:00:00"
     assert row["schema_version"] == SCHEMA_VERSION
 
-    # text + vision distribution 채워짐. raw "kurta" → STRAIGHT_KURTA enum 매핑됨.
-    assert row["garment_type_dist"] is not None
-    assert "kurta_set" in row["garment_type_dist"]
-    assert "straight_kurta" in row["garment_type_dist"]
-    assert abs(sum(row["garment_type_dist"].values()) - 1.0) < 1e-9
+    # Phase 3.2 (2026-04-30): G/F/T 는 vision-only — text rule 무시.
+    # raw "kurta" → STRAIGHT_KURTA enum 매핑된 vision 결과만.
+    assert row["garment_type_dist"] == {"straight_kurta": 1.0}
 
     # silhouette vision-only.
     assert row["silhouette_dist"] == {"a_line": 1.0}

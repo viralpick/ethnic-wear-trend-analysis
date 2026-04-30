@@ -81,7 +81,11 @@ def _canonical(
     )
 
 
-def test_text_only_rule_distribution_is_text_value() -> None:
+def test_text_only_distribution_blocked_when_canonicals_empty() -> None:
+    """Phase 3.1 (2026-04-30): canonicals=[] 면 빈 distribution 반환 — vision-empty post
+    가 caption 의 'kurta' text rule fallback 으로 cluster fan-out 되는 false positive 차단.
+    SceneFilter 통과 후 LLM ethnic 분류가 outfits=[] 반환한 케이스 (남성 kurta / 비-여성)
+    가 검수 페이지에 들어오던 회귀 방지."""
     item = EnrichedContentItem(
         normalized=_normalized("p_text"),
         garment_type=GarmentType.KURTA_SET,
@@ -98,9 +102,10 @@ def test_text_only_rule_distribution_is_text_value() -> None:
 
     assert dist.item_id == "instagram__p_text"
     assert dist.source == ContentSource.INSTAGRAM
-    assert dist.garment_type == {"kurta_set": 1.0}
-    assert dist.fabric == {"cotton": 1.0}
-    assert dist.technique == {"block_print": 1.0}
+    # text rule 매핑 무시 — canonicals=[] = vision 결과 빈 = cluster contribute 차단
+    assert dist.garment_type == {}
+    assert dist.fabric == {}
+    assert dist.technique == {}
 
 
 def test_text_with_no_method_drops_to_vision_only() -> None:
@@ -145,28 +150,30 @@ def test_vision_only_uses_upper_garment_type_not_lower() -> None:
     assert dist.garment_type == {"straight_kurta": 1.0}
 
 
-def test_text_and_vision_combine_with_weighted_sum() -> None:
-    # text=KURTA_SET (rule weight=6) + vision canonical (upper="saree").
-    # build_distribution: total = 6 + share_saree, normalized.
+def test_vision_only_text_rule_ignored() -> None:
+    """Phase 3.2 (2026-04-30): G/F/T 의 text rule 폐지 — vision 만 사용.
+
+    근거: caption/hashtag 는 post-level 단일 신호라 multi-canonical post 에서 어느
+    outfit 에 매칭되는지 알 수 없음 → 균등 영향 → canonical 별 정확도 오염. 사례:
+    silk vision 결과를 caption "cotton" 키워드가 0.857 가중치로 덮어 cotton cluster
+    잘못 분류 (W11 DXmIpa6l0bk). 이 회귀 방지.
+    """
     canonical = _canonical(
         0,
         outfit=_outfit(upper="saree", fabric="silk", technique="zardosi"),
     )
     item = EnrichedContentItem(
         normalized=_normalized("p_mix"),
-        garment_type=GarmentType.KURTA_SET,
-        canonicals=[canonical],
+        garment_type=GarmentType.KURTA_SET,  # text 가 KURTA_SET 라고 매핑
+        canonicals=[canonical],              # vision 은 saree(=casual_saree)
         classification_method_per_attribute={
             "garment_type": ClassificationMethod.RULE,
         },
     )
     dist = enriched_to_item_distribution(item)
 
-    # 두 키 모두 등장 + 합 = 1.0 + text(rule=6) > vision share.
-    # raw "saree" → CASUAL_SAREE 매핑.
-    assert set(dist.garment_type.keys()) == {"kurta_set", "casual_saree"}
-    assert abs(sum(dist.garment_type.values()) - 1.0) < 1e-9
-    assert dist.garment_type["kurta_set"] > dist.garment_type["casual_saree"]
+    # text rule 무시 → vision 의 saree 만 남음 (KURTA_SET 안 섞임)
+    assert dist.garment_type == {"casual_saree": 1.0}
 
 
 def test_no_text_no_canonicals_returns_empty_distributions() -> None:

@@ -86,15 +86,19 @@ def _outfit(
     *,
     upper: str = "kurta_set",
     lower: str = "palazzo",
-    fabric: str = "cotton",
-    technique: str = "block_print",
+    fabric: str | None = "cotton",
+    technique: str | None = "block_print",
     silhouette: Silhouette = Silhouette.A_LINE,
+    upper_is_ethnic: bool = True,
+    lower_is_ethnic: bool = True,
 ) -> EthnicOutfit:
     return EthnicOutfit(
         person_bbox=(0.1, 0.1, 0.5, 0.7),
         person_bbox_area_ratio=0.35,
         upper_garment_type=upper,
         lower_garment_type=lower,
+        upper_is_ethnic=upper_is_ethnic,
+        lower_is_ethnic=lower_is_ethnic,
         fabric=fabric,
         technique=technique,
         silhouette=silhouette,
@@ -130,7 +134,12 @@ def _enriched(
     technique: Technique | None = Technique.BLOCK_PRINT,
     source: ContentSource = ContentSource.INSTAGRAM,
 ) -> EnrichedContentItem:
-    canonical = _canonical(0, _outfit())
+    # canonical 의 vision attribute 도 enriched 의 post-level 값과 일치하게 — N=2/N=1
+    # partial scenario 검증 시 fabric=None 이면 canonical.fabric 도 None 으로.
+    canonical = _canonical(0, _outfit(
+        fabric=fabric.value if fabric is not None else None,
+        technique=technique.value if technique is not None else None,
+    ))
     method_map = {
         "garment_type": ClassificationMethod.RULE,
         "fabric": ClassificationMethod.RULE,

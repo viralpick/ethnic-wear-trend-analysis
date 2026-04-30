@@ -146,8 +146,10 @@ def test_vision_axis_missing_keeps_shares() -> None:
     assert _winner_key_from_shares(new_shares) == "kurta_set__unknown"
 
 
-def test_text_rule_weight_dominates_vision() -> None:
-    # text=KURTA_SET (rule weight) + vision 다른 outfit 작은 area → rule 가 winner.
+def test_vision_only_text_rule_ignored_for_garment_fabric() -> None:
+    """Phase 3.2 (2026-04-30): G/F/T 의 text rule 폐지 — vision 만. text=KURTA_SET 라도
+    vision (canonical.upper=straight_kurta) 가 winner. 옛 동작 (text rule weight 우세)
+    회귀 방지."""
     canonical = _canonical(
         _outfit(
             upper="straight_kurta",
@@ -158,10 +160,10 @@ def test_text_rule_weight_dominates_vision() -> None:
     )
     item = EnrichedContentItem(
         normalized=_normalized(),
-        garment_type=GarmentType.KURTA_SET,
+        garment_type=GarmentType.KURTA_SET,  # text 가 KURTA_SET 매핑
         fabric=Fabric.COTTON,
         technique=Technique.BLOCK_PRINT,
-        canonicals=[canonical],
+        canonicals=[canonical],              # vision = straight_kurta
         classification_method_per_attribute={
             "garment_type": ClassificationMethod.RULE,
             "fabric": ClassificationMethod.RULE,
@@ -172,7 +174,8 @@ def test_text_rule_weight_dominates_vision() -> None:
             build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON): 1.0
         },
     )
-    expected_winner = build_exact_key(GarmentType.KURTA_SET, Fabric.COTTON)
+    # vision (straight_kurta) 가 정확한 결과. text KURTA_SET 무시.
+    expected_winner = build_exact_key(GarmentType.STRAIGHT_KURTA, Fabric.COTTON)
     assert _reassigned_key(item) == expected_winner
 
 
