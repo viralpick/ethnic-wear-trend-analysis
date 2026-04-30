@@ -21,11 +21,22 @@ from datetime import date
 
 from aggregation.brand_distribution import compute_brand_distribution
 from aggregation.cluster_palette import build_cluster_palette
+from aggregation.distribution_builder import (
+    GroupSnapshot,
+    _g_total,
+    group_to_item_contrib,
+)
 from aggregation.item_distribution_builder import (
     build_styling_combo_distribution,
+    canonical_mean_area_ratio,
     enriched_to_item_distribution,
 )
 from aggregation.representative_builder import item_cluster_shares
+from aggregation.vision_normalize import (
+    normalize_fabric,
+    normalize_garment_for_cluster,
+)
+from clustering.assign_trend_cluster import build_exact_key_strs
 from contracts.common import (
     ContentSource,
     DataMaturity,
@@ -39,6 +50,7 @@ from contracts.output import (
     ScoreBreakdown,
     TrendClusterSummary,
 )
+from contracts.vision import is_canonical_ethnic
 from settings import PaletteConfig
 
 # 한 cluster 안에서 (item, share) 페어. share 합 = cluster 내 mass (= effective_item_count).
@@ -64,29 +76,88 @@ class ClusterDecision:
     top_video_ids: list[str]
 
 
+def _canonical_cluster_entries(
+    item: EnrichedContentItem,
+) -> list[tuple[str, float]]:
+    """Phase 2 (2026-04-30): canonical 단위 cluster fan-out.
+
+    각 ethnic canonical 의 (garment, fabric) → cluster_key. mass 는 spec §2.7
+    log-scale (G = log2(Σn_objects+1), group_to_item_contrib 비례 분배) — 기존
+    distribution_builder 와 동일 로직 재활용.
+
+    canonical 내 garment 또는 fabric 이 normalize 외 단어면 그 canonical 미참여.
+    canonical 0 인 item (text-only) → enriched.garment_type + enriched.fabric 으로
+    single entry mass=1.0 (text-only 는 multi-outfit 가정 안 됨).
+
+    return: [(cluster_key, share), ...]. 같은 cluster_key 가 중복 등장 가능
+    (canonical_a 와 canonical_b 가 우연히 같은 g/f) — 호출자가 합치든 따로 두든.
+    """
+    ethnic_canonicals = [c for c in item.canonicals if is_canonical_ethnic(c)]
+    canonical_g_f: list[tuple[str | None, str | None, GroupSnapshot]] = []
+    for c in ethnic_canonicals:
+        g_enum = normalize_garment_for_cluster(c.representative)
+        f_enum = normalize_fabric(c.representative)
+        snap = GroupSnapshot(
+            value=None,  # 분배 입력. value 는 호출자가 cluster_key 직접 조합.
+            n_objects=len(c.members),
+            mean_area_ratio=canonical_mean_area_ratio(c),
+        )
+        canonical_g_f.append(
+            (g_enum.value if g_enum else None, f_enum.value if f_enum else None, snap)
+        )
+
+    if canonical_g_f:
+        # log-scale 분배 (G = log2(Σn+1) × group_to_item_contrib 비례)
+        snaps = [snap for _, _, snap in canonical_g_f]
+        g = _g_total(snaps)
+        if g <= 0:
+            return []
+        contribs = [
+            group_to_item_contrib(s.n_objects, s.mean_area_ratio) for s in snaps
+        ]
+        denom = sum(contribs)
+        if denom <= 0:
+            return []
+        out: list[tuple[str, float]] = []
+        for (g_val, f_val, _snap), c in zip(canonical_g_f, contribs, strict=True):
+            if g_val is None and f_val is None:
+                continue
+            cluster_key = build_exact_key_strs(
+                g_val or "unknown", f_val or "unknown",
+            )
+            share = g * c / denom
+            if share <= 0.0:
+                continue
+            out.append((cluster_key, share))
+        return out
+
+    # text-only fallback: canonical 0 인 item — enriched.garment_type + enriched.fabric
+    g_text = item.garment_type.value if item.garment_type else None
+    f_text = item.fabric.value if item.fabric else None
+    if g_text is None and f_text is None:
+        return []
+    cluster_key = build_exact_key_strs(g_text or "unknown", f_text or "unknown")
+    return [(cluster_key, 1.0)]
+
+
 def group_by_cluster(
     items: list[EnrichedContentItem],
 ) -> dict[str, list[ItemWithShare]]:
-    """G×T×F cross-product fan-out grouping (Phase β3 + β4, spec §2.4).
+    """canonical-level fan-out grouping (Phase 2, 2026-04-30 sync).
 
-    한 item 의 garment_type / technique / fabric distribution 의 cross-product 결과로
-    share > 0 인 모든 cluster_key 에 그 item 을 (item, share) 페어로 등록 (β4).
-    share 는 그 cluster 안에서의 item 기여도 (= item_cluster_shares 결과 = G×T×F ×
-    multiplier_ratio). β2 의 score path 와 같은 cluster space → score path ↔ summary
-    path align (sparse rep_with_summary 해소).
+    1 canonical = 1 cluster_key 등록 (G+F 만 사용). mass 는 log-scale 분배 — 1 item
+    의 N canonical 이 G = log2(Σn+1) × group_to_item_contrib 비례로 share 받음.
+    text-only post (canonical=[]) 는 single entry mass=1.0.
 
-    N<3 (G/T/F 한 축이라도 비어있는) item 은 item_cluster_shares 가 빈 dict 반환 →
-    어떤 cluster 에도 등장 X (mass preservation 정합). partial(g) 활성화 후엔 N<3 도
-    multiplier 가중 share 로 등장.
-
-    contract `trend_cluster_key` (winner 단일) 는 read 안 함 — ζ 에서 deprecate 예정.
+    cross-product (item.garment_dist × fabric_dist) 는 폐기 — canonical 의 actual
+    (g, f) 만 cluster 에 등록. 가짜 조합 (canonical 에 없는 g+f 페어) 자연 제거.
     """
     grouped: dict[str, list[ItemWithShare]] = {}
     for item in items:
-        shares = item_cluster_shares(enriched_to_item_distribution(item))
-        if not shares:
+        entries = _canonical_cluster_entries(item)
+        if not entries:
             continue
-        for cluster_key, share in shares.items():
+        for cluster_key, share in entries:
             grouped.setdefault(cluster_key, []).append((item, share))
     return grouped
 
