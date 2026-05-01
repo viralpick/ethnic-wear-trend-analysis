@@ -1,6 +1,8 @@
--- pipeline_spec_v1.0 §1.2 / §5.1 — Item (1 IG post 또는 1 YT video).
+-- pipeline_spec v2.2 §1.2 / §5.1 — Item (1 IG post 또는 1 YT video).
 -- DUPLICATE KEY + computed_at append-only. read-side dedup 은 `item_latest` view.
 -- raw png DB 의 (source, source_post_id) 와 1:1 join 가능.
+-- v2 (migration 004): url_short_tag VARCHAR(64) — IG shortcode / YT video_id.
+-- 같은 URL 의 multi-snapshot ULID 를 view 에서 1 row 로 dedup (COALESCE fallback).
 CREATE TABLE IF NOT EXISTS item (
     source                  VARCHAR(16)    NOT NULL  COMMENT 'instagram|youtube',
     source_post_id          VARCHAR(64)    NOT NULL  COMMENT 'raw png DB ULID',
@@ -17,7 +19,8 @@ CREATE TABLE IF NOT EXISTS item (
     engagement_raw          BIGINT         NULL      COMMENT 'IG: like+comment / YT: views',
     account_handle          VARCHAR(255)   NULL,
     account_follower_count  BIGINT         NULL,
-    schema_version          VARCHAR(32)    NOT NULL  COMMENT 'pipeline_v1.0'
+    schema_version          VARCHAR(32)    NOT NULL  COMMENT 'pipeline_v2.2',
+    url_short_tag           VARCHAR(64)    NULL      COMMENT 'v2 (migration 004): IG shortcode / YT video_id, NULL=parse fail'
 )
 ENGINE=OLAP
 DUPLICATE KEY (source, source_post_id, computed_at)
