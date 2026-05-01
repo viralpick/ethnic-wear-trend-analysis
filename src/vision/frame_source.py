@@ -12,6 +12,7 @@ PIL/cv2 는 각 구현 내부에서만 lazy import — Protocol/dataclass 자체
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Literal, Protocol, runtime_checkable
@@ -19,6 +20,8 @@ from typing import Iterator, Literal, Protocol, runtime_checkable
 import numpy as np
 
 from vision.video_frame_selector import VideoFrameSelectorConfig, select_top_frames
+
+logger = logging.getLogger(__name__)
 
 FrameSourceKind = Literal["image", "video"]
 
@@ -99,6 +102,12 @@ class VideoFrameSource:
             rgb_only = [rgb for _, rgb in candidates]
             kept_local = select_top_frames(rgb_only, self._cfg)
             stem = self._video_path.stem
+            # Cost baseline (2026-05-01): NMS 후 실 frame 수 측정 — n_final=20 max 이지만
+            # 평균 ~12 추정. 1주 운영 후 평균 산출 → frame_n_final 축소 의사결정 데이터.
+            logger.info(
+                "video_frame_select stem=%s total=%d n_cand=%d n_kept=%d n_final=%d",
+                stem, total, n_cand, len(kept_local), self._cfg.n_final,
+            )
             for local_idx in kept_local:
                 global_idx, rgb = candidates[local_idx]
                 yield Frame(

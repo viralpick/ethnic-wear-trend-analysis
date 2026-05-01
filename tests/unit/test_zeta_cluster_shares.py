@@ -23,7 +23,13 @@ from clustering.assign_trend_cluster import UNCLASSIFIED
 from contracts.common import ContentSource, GarmentType
 from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
-from pipelines.run_daily_pipeline import _case1_targets, _case2_targets
+from pipelines.run_daily_pipeline import (
+    _case1_targets,
+    _case2_targets,
+    _run_color_extraction,
+)
+from settings import load_settings
+from vision.color_extractor import ColorExtractionResult
 
 
 def _normalized(post_id: str, *, source: ContentSource = ContentSource.INSTAGRAM,
@@ -277,3 +283,71 @@ def test_case1_targets_classified_items_excluded_regardless_of_source() -> None:
     )
     picks = _case1_targets([classified_ig, classified_yt], cap_ig=10, cap_yt=10)
     assert picks == []
+
+
+
+# --------------------------------------------------------------------------- #
+# _run_color_extraction — case1 ↔ case2 dedup (중복 Gemini 호출 방어)
+# --------------------------------------------------------------------------- #
+
+class _CallCountExtractor:
+    """source_post_id 별 extract_visual 호출 횟수 추적용 fake."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def extract_visual(
+        self, items
+    ) -> list[ColorExtractionResult]:
+        self.calls.extend(item.source_post_id for item in items)
+        # 빈 canonicals 반환 — _apply_extraction_result 가 기존 item 보존 (case2 picking 영향 없음)
+        return [ColorExtractionResult(source_post_id=item.source_post_id) for item in items]
+
+
+def test_run_color_extraction_dedupes_case1_picks_from_case2() -> None:
+    """case1 picked post 는 case2 에서 자동 제외 — 같은 post 가 양쪽 후보일 때 1회만 호출."""
+    # p_dual: garment_type=None (case1 후보) + cluster_share=1.0 (case2 후보) — 양쪽 매칭
+    # p_case2_only: garment_type=KURTA_SET (case1 제외) + cluster_share=1.0 (case2 후보)
+    enriched = [
+        EnrichedContentItem(
+            normalized=_normalized("p_dual", engagement=200),
+            garment_type=None,
+            trend_cluster_key="kurta_set__solid__cotton",
+            trend_cluster_shares={"kurta_set__solid__cotton": 1.0},
+        ),
+        EnrichedContentItem(
+            normalized=_normalized("p_case2_only", engagement=100),
+            garment_type=GarmentType.KURTA_SET,
+            trend_cluster_key="kurta_set__solid__cotton",
+            trend_cluster_shares={"kurta_set__solid__cotton": 1.0},
+        ),
+    ]
+    extractor = _CallCountExtractor()
+    settings = load_settings()
+
+    _run_color_extraction(enriched, extractor, settings)
+
+    # p_dual 은 case1 1번만 호출. case2 가 후보로 선정해도 dedup 으로 skip.
+    assert extractor.calls == ["p_dual", "p_case2_only"]
+
+
+def test_run_color_extraction_no_dedup_when_disjoint() -> None:
+    """case1 / case2 후보가 disjoint 면 dedup 영향 없음 — 각각 1번씩 호출."""
+    enriched = [
+        EnrichedContentItem(
+            normalized=_normalized("p_case1_only", engagement=100),
+            garment_type=None,  # case1 후보, cluster_shares 없음 → case2 후보 X
+        ),
+        EnrichedContentItem(
+            normalized=_normalized("p_case2_only", engagement=100),
+            garment_type=GarmentType.KURTA_SET,  # case1 제외
+            trend_cluster_key="kurta_set__solid__cotton",
+            trend_cluster_shares={"kurta_set__solid__cotton": 1.0},
+        ),
+    ]
+    extractor = _CallCountExtractor()
+    settings = load_settings()
+
+    _run_color_extraction(enriched, extractor, settings)
+
+    assert sorted(extractor.calls) == ["p_case1_only", "p_case2_only"]

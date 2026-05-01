@@ -226,15 +226,23 @@ def _run_color_extraction(
 
     # Defensive read — case2_picking_min_share 가 인스턴스에 없는 환경 (Pydantic
     # frozen + yaml partial override 의 미해소 이슈) 대비. 기본값은 VLMConfig 정의와 동일.
-    case2 = _case2_targets(
+    case2_all = _case2_targets(
         enriched,
         cap_per_cluster_ig=settings.vlm.case2_per_cluster_cap_ig,
         cap_per_cluster_yt=settings.vlm.case2_per_cluster_cap_yt,
         min_share=getattr(settings.vlm, "case2_picking_min_share", 0.10),
     )
+    # case1 picked post 는 이미 vision 호출 완료 — case2 에서 자동 제외해 중복 Gemini
+    # 호출 차단 (cache miss 시 월 +₩1,800~2,700 추정). cache hit 도 preprocessing
+    # overhead 있어 dedup 가 비용/I-O 양쪽 절감.
+    case1_ids = {e.normalized.source_post_id for e in case1}
+    case2 = [e for e in case2_all if e.normalized.source_post_id not in case1_ids]
     results2 = run_color_extraction([e.normalized for e in case2], extractor)
     enriched = _apply_extraction_result(enriched, results2)
-    logger.info("color_extraction case1=%d case2=%d", len(case1), len(case2))
+    logger.info(
+        "color_extraction case1=%d case2=%d case2_dedup_skipped=%d",
+        len(case1), len(case2), len(case2_all) - len(case2),
+    )
     return enriched
 
 
