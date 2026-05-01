@@ -41,7 +41,7 @@
 
 | 항목 | v1 | v2 |
 |---|---|---|
-| 새 해시태그 추천 | 없음 | **`unknown_signal` 테이블 + `_latest` view** (3일 ≥10건 surface). 검수 HTML 노란 패널 |
+| 새 해시태그 추천 | 없음 | **`unknown_signal` 테이블 + `_latest` view** (v2.2 emergence rule: baseline 부재 + spike + co-occurrence). **`hashtag_weekly`** raw count source. 검수 HTML weekly panel |
 | `_latest` view 정책 | freeze 명목으로 backup 가리킴 | **main 가리킴 + 신 데이터 filter** (G__F 2축만 / url_short_tag IS NOT NULL) |
 | 옛 데이터 보존 | — | `*_v1_gtf_backup` 4 테이블 보존 (롤백 가능) |
 
@@ -55,6 +55,7 @@
 | `representative_weekly.brand_distribution JSON` (migration 003) | 머지 완료 |
 | `item / canonical_group / canonical_object.url_short_tag VARCHAR(64)` (migration 004) | 머지 완료 |
 | `unknown_signal` 테이블 + view (DDL 07/08) | 신규 |
+| `hashtag_weekly` 테이블 + view (DDL 09/10, v2.2) | 신규 |
 
 ### 검수 페이지 (review HTML)
 
@@ -169,21 +170,53 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적 / 디버깅
 | `bbox` | `[x, y, w, h]` normalized | vision |
 | `schema_version`, `computed_at` | — | 머리말 |
 
-### 1.5 Unknown Signal — `unknown_signal` (v2 신규)
+### 1.5 Unknown Signal — `unknown_signal` (v2.2 emergence rule)
 
-> spec §4.2 / §8.3. 매핑에 없는 새 해시태그 (3일 ≥10건) 자동 surface. 검수 panel 노출.
+> spec §4.2 / §8.3. 매핑 외 hashtag 가 emergence 룰 (baseline 부재 + spike + co-occurrence) 통과하면 surface. weekly cadence (representative_weekly 와 정합).
+
+#### Surface 룰 (모두 통과)
+
+1. **baseline 부재** — 직전 N일 (default 56) 동안 등장 ≤ floor (default 0)
+2. **spike 발생** — 최근 M일 (default 14) 동안 등장 ≥ K (default 3)
+3. **ethnic_co_share** — tag 가진 post 들 중 known fashion hashtag 도 가진 비율 ≥ R (default 0.5)
+4. **min_posts** — 최소 N posts (default 5) 에서 등장 — measurement stability
+
+CLI override: `--unknown-baseline-days / --unknown-spike-days / --unknown-spike-threshold / --unknown-baseline-floor / --unknown-co-share / --unknown-min-posts`.
+
+#### 컬럼
 
 | 필드 | 정의 |
 |---|---|
 | `tag` | 해시태그 (# prefix 포함, lowercase) |
+| `week_start_date` | weekly anchor 의 주 시작일 (월요일, IST). v2.2 신규 |
 | `computed_at` | 적재 시각 (UTC), append-only sort key |
-| `count_3day` | 3일 윈도우 누적 빈도 |
-| `first_seen` | 최초 발견일 (IST) |
+| `count_recent_window` | spike window 안 등장 instance 수. v2.2 신규 |
+| `count_3day` | v1 호환 컬럼 — `count_recent_window` 와 같은 값 dump (deprecated) |
+| `first_seen` | 최초 발견일 (IST). counters 안 가장 오래된 bucket date |
 | `likely_category` | technique? / fabric? 등 추정 (NULL 허용) |
 | `reviewed` | 0=pending, 1=reviewed |
-| `schema_version` | `"pipeline_v2.0"` |
+| `schema_version` | `"pipeline_v2.2"` |
 
-`unknown_signal_latest` view = tag 별 MAX(computed_at) 1 row.
+`unknown_signal_latest` view = (tag, week_start_date) 별 MAX(computed_at) 1 row (week_start_date IS NOT NULL filter).
+
+### 1.6 Hashtag Weekly — `hashtag_weekly` (v2.2 신규)
+
+> spec §4.2/§8.3. emergence rule 평가 source. 모든 hashtag (known + unknown) 의 주별 raw count + co-occurrence. LLM 분류 도입 시 input cache 로 reuse.
+
+| 필드 | 정의 |
+|---|---|
+| `tag` | 해시태그 (# 미포함, lowercase) |
+| `week_start_date` | IST 월요일 (anchor 의 주) |
+| `computed_at` | 적재 시각 (UTC) |
+| `n_posts` | post-level dedup 카운트 (post 안 같은 tag 여러 번 = +1) |
+| `n_instances` | raw instance 카운트 (post 안 중복 포함) |
+| `n_posts_with_known_fashion` | 같은 post 에 known fashion hashtag 도 있는 post 수 (co-occurrence numerator) |
+| `is_known_mapping` | 0=매핑 외, 1=mapping_tables 의 known hashtag |
+| `schema_version` | `"pipeline_v2.2"` |
+
+`hashtag_weekly_latest` view = (tag, week_start_date) 별 MAX(computed_at) 1 row.
+
+ethnic_co_share = `n_posts_with_known_fashion / n_posts`.
 
 ---
 
@@ -555,7 +588,8 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 | `item` | `(source, source_post_id)` post 단위 | `(source, source_post_id, computed_at)` | append-only. `_latest` view dedup 키 = `url_short_tag` |
 | `canonical_group` | `(item, canonical_index)` outfit 단위 | `(item_source, item_source_post_id, canonical_index, computed_at)` | append-only. `group_id VARCHAR(96)` redundant |
 | `canonical_object` | `(group, member_index)` BBOX 단위 | `(item_source, item_source_post_id, canonical_index, member_index, computed_at)` | append-only. `object_id VARCHAR(112)` + `group_id` redundant |
-| `unknown_signal` (v2 신규) | `(tag, computed_at)` | `(tag, computed_at)` | append-only. day-by-day 변화 추적 |
+| `unknown_signal` (v2.2 emergence) | `(tag, computed_at)` | `(tag, computed_at)` | append-only. weekly cadence (week_start_date 컬럼). emergence rule 통과만 surface |
+| `hashtag_weekly` (v2.2 신규) | `(tag, week_start_date, computed_at)` | `(tag, week_start_date, computed_at)` | append-only. 모든 hashtag (known+unknown) 의 주별 raw count + co-occurrence |
 
 **FK 연결 (논리적, StarRocks 실 FK 없음)**:
 - `canonical_object.group_id` ↔ `canonical_group.group_id`
@@ -575,7 +609,8 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 | `item_ethnic_latest` | `item_latest` wrapper | `color_palette IS NOT NULL` | — |
 | `canonical_group_ethnic_latest` | `canonical_group_latest` wrapper | `color_palette IS NOT NULL` | — |
 | `canonical_object_ethnic_latest` | `canonical_object_latest` wrapper | `color_palette IS NOT NULL` | — |
-| `unknown_signal_latest` | `unknown_signal` | — | `tag` MAX(computed_at) |
+| `unknown_signal_latest` | `unknown_signal` | week_start_date IS NOT NULL | `(tag, week_start_date)` MAX(computed_at) |
+| `hashtag_weekly_latest` | `hashtag_weekly` | — | `(tag, week_start_date)` MAX(computed_at) |
 
 **옛 데이터 보존**: `*_v1_gtf_backup` 4 테이블 — view 가 가리키지 않으나 DB 에 보존 (롤백 / 비교용).
 
@@ -625,7 +660,7 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 
 ### 7.2 Backend 통신 path — `backend_poster` 폐기
 
-- 분석 결과 → StarRocks 적재 → BE 가 StarRocks 직접 read (4 base + 4 `_latest` + 3 ethnic + 1 unknown_signal view)
+- 분석 결과 → StarRocks 적재 → BE 가 StarRocks 직접 read (4 base + 4 `_latest` + 3 ethnic + 1 unknown_signal_latest + 1 hashtag_weekly_latest view)
 - 별도 push 채널 (HTTP POST sender) 불필요. M3.B 폐기
 - BE 측 read pattern 은 `_latest` / ethnic view 기준 (raw DUPLICATE KEY 직접 조회 금지)
 
@@ -645,7 +680,8 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 10. ✅ `factor_contribution` (instagram/youtube 합=1.0) — `RepresentativeAggregate.factor_contribution` 적재 단계 계산
 11. ✅ Object palette — `OutfitMember.palette` + `cut_off_share` + B1 BBOX 단위 KMeans
 12. ✅ (v2 신규) `effective_item_count` 컬럼 prod ALTER 적용 + v6 적재로 채움
-13. ✅ (v2 신규) `unknown_signal` 테이블 + view + sink_runner emit + 검수 HTML panel
+13. ✅ (v2 신규 + v2.2 갱신) `unknown_signal` 테이블 + view + sink_runner emit + 검수 HTML weekly panel — emergence rule (baseline + spike + co-occurrence)
+14. ✅ (v2.2 신규) `hashtag_weekly` 테이블 + view — emergence rule source / LLM 분류 cache
 14. ✅ (v2 신규) `url_short_tag` 컬럼 ALTER + `_latest` view dedup 키 swap
 15. ✅ (v2 신규) `NormalizedContentItem.collected_at` + `compute_growth_rate` 시계열 정상 동작 (옛 enriched 는 `scripts/backfill_collected_at.py` 로 마이그)
 
