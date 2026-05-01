@@ -13,14 +13,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-# --------- config ---------
-START_INDEX=36       # 가장 최신 batch (offset 3600~3661, 61 post)
-END_INDEX=0          # 가장 오래된 batch
-PAGE_SIZE=100
-DATE="2026-04-29"
-TEXT_WORKERS=4
-VISION_WORKERS=8
-OUT_DIR="outputs/backfill"
+# --------- config (env 으로 override 가능 — 24w 등 N주 backfill 호환) ---------
+START_INDEX="${START_INDEX:-36}"      # 가장 최신 batch (12w default)
+END_INDEX="${END_INDEX:-0}"           # 가장 오래된 batch
+PAGE_SIZE="${PAGE_SIZE:-100}"
+DATE="${DATE:-2026-05-02}"            # backfill 실행일 (raw DB collected_at 가드용)
+TEXT_WORKERS="${TEXT_WORKERS:-4}"
+VISION_WORKERS="${VISION_WORKERS:-8}"
+OUT_DIR="${OUT_DIR:-outputs/backfill}"
 mkdir -p "$OUT_DIR"
 
 MANIFEST="$OUT_DIR/manifest.csv"
