@@ -385,12 +385,23 @@ def emit_representatives_only(
     rep_with_summary_rate = (
         len(matched_keys) / len(aggregate_keys) if aggregate_keys else 1.0
     )
-    logger.info(
+    # rep_with_summary < 0.95 → score path 와 item path 사이 cluster_key drift 의심.
+    # 2026-04-30 P1-2/3/4 사례: 옛 코드로 적재된 stale row 가 273/636 NULL 발생
+    # (현재 코드 trace 로는 mismatch 0). 임계 미만이면 warning 으로 즉시 인지.
+    log_fn = logger.warning if rep_with_summary_rate < 0.95 else logger.info
+    log_fn(
         "emit_representatives cluster_match agg=%d summary=%d matched=%d "
         "summary_coverage=%.3f rep_with_summary=%.3f week_start=%s",
         len(aggregate_keys), len(summary_keys),
         len(matched_keys), coverage, rep_with_summary_rate, week_start_iso,
     )
+    if aggregate_keys - summary_keys:
+        sample = sorted(aggregate_keys - summary_keys)[:5]
+        logger.warning(
+            "emit_representatives agg_only cluster_keys (NULL row 후보) "
+            "count=%d sample=%s",
+            len(aggregate_keys - summary_keys), sample,
+        )
 
     counts = {
         REPRESENTATIVE_TABLE: writer.write_batch(
