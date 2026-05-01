@@ -266,12 +266,17 @@ def emit_hashtag_weekly(
     *,
     computed_at: str | None = None,
 ) -> int:
-    """spec §4.2 v2.2 — hashtag_weekly raw 카운트 + co-occurrence 적재.
+    """spec §4.2 v2.3 — hashtag_weekly raw 카운트 + co-occurrence 적재.
 
-    counters: tracker.EmergenceCounters (buckets / co_occur / known).
+    counters: tracker.EmergenceCounters (buckets / co_occur / known / sources).
     매핑 안/밖 모든 hashtag 적재 — emergence rule 평가 source / LLM 분류 input cache.
 
     같은 (tag, week_start_date) 의 재산출은 computed_at 차이로 누적, view 가 dedup.
+
+    v2.3 (2026-05-02) — `n_posts_with_known_fashion` 컬럼의 의미 변경 (silent drift 정정):
+    - 옛 v2.2: post 에 known_fashion tag 1개 이상 → +1 (binary)
+    - 새 v2.3: post 의 fashion_density >= D (default 0.3) → +1 (fashion-context)
+    DDL 컬럼명 그대로지만 schema_version bump 으로 BE 가 의미 변경 인지 가능.
     """
     if not counters or not counters.buckets:
         logger.info("emit_hashtag_weekly skip — empty counters")
@@ -282,6 +287,7 @@ def emit_hashtag_weekly(
     for tag, b in counters.buckets.items():
         n_instances = sum(b.values())
         # n_posts = post-level dedup count (co_occur 의 n_total)
+        # n_kf v2.3 = fashion-context post count (옛 binary co-occur 와 다름)
         n_kf, n_total = counters.co_occur.get(tag, (0, n_instances))
         rows.append({
             "tag": tag,  # # 미포함 lowercase
@@ -291,7 +297,7 @@ def emit_hashtag_weekly(
             "n_instances": int(n_instances),
             "n_posts_with_known_fashion": int(n_kf),
             "is_known_mapping": 1 if counters.known.get(tag, False) else 0,
-            "schema_version": "pipeline_v2.2",
+            "schema_version": "pipeline_v2.3",
         })
     n = writer.write_batch(HASHTAG_WEEKLY_TABLE, rows)
     logger.info("emit_hashtag_weekly done count=%d week=%s", n, week_iso)
