@@ -17,9 +17,7 @@
         "new_yt_channel_ratio": 1.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -65,9 +63,7 @@
         "new_yt_channel_ratio": 1.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -109,9 +105,7 @@
         "new_yt_channel_ratio": 1.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -153,9 +147,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -199,9 +191,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -243,9 +233,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -287,9 +275,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -335,9 +321,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -381,9 +365,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",
@@ -425,9 +407,7 @@
         "new_yt_channel_ratio": 0.0
       }
     },
-    "daily_direction": "flat",
     "weekly_direction": "flat",
-    "daily_change_pct": 0.0,
     "weekly_change_pct": 0.0,
     "lifecycle_stage": "early",
     "data_maturity": "bootstrap",

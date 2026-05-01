@@ -40,33 +40,44 @@ def _days_since(start: date, target: date) -> int:
 # day 1, day 3, day 7 시나리오
 # --------------------------------------------------------------------------- #
 
-def test_day_one_weekly_forced_flat(maturity_cfg: DataMaturityConfig) -> None:
+def test_day_one_weekly_flat_baseline_missing(maturity_cfg: DataMaturityConfig) -> None:
+    # day 1 은 7일 전 entry 가 없어 weekly baseline 부재 → FLAT 강제.
     start = date(2026, 4, 21)
     today = date(2026, 4, 21)
     days = _days_since(start, today)
     assert days == 1
-    assert classify_weekly_direction(50.0, 5.0, days) == Direction.FLAT
+    assert classify_weekly_direction(
+        50.0, 5.0, weekly_baseline_exists=False
+    ) == Direction.FLAT
     assert classify_data_maturity(days, maturity_cfg) == DataMaturity.BOOTSTRAP
 
 
-def test_day_three_weekly_still_flat_but_partial_maturity(
+def test_day_three_partial_maturity_baseline_still_missing(
     maturity_cfg: DataMaturityConfig,
 ) -> None:
+    # day 3 부터 partial maturity. weekly baseline 은 7일 누적 필요라 여전히 부재.
     start = date(2026, 4, 21)
     today = date(2026, 4, 23)
     days = _days_since(start, today)
     assert days == 3
-    # <3 일이 bootstrap → day 3 부터 partial. weekly 도 이제 classify 사용 (역사 존재).
     assert classify_data_maturity(days, maturity_cfg) == DataMaturity.PARTIAL
-    assert classify_weekly_direction(12.0, 5.0, days) == Direction.UP
+    assert classify_weekly_direction(
+        12.0, 5.0, weekly_baseline_exists=False
+    ) == Direction.FLAT
 
 
-def test_day_seven_full_maturity(maturity_cfg: DataMaturityConfig) -> None:
+def test_day_seven_full_maturity_baseline_present(
+    maturity_cfg: DataMaturityConfig,
+) -> None:
+    # day 7+ 는 7일 전 entry 가 있을 수 있음 → baseline_exists=True 시 정상 classify.
     start = date(2026, 4, 21)
     today = date(2026, 4, 27)
     days = _days_since(start, today)
     assert days == 7
     assert classify_data_maturity(days, maturity_cfg) == DataMaturity.FULL
+    assert classify_weekly_direction(
+        12.0, 5.0, weekly_baseline_exists=True
+    ) == Direction.UP
 
 
 # --------------------------------------------------------------------------- #
