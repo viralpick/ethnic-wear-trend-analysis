@@ -95,8 +95,12 @@ def build_counters(
     items: list[NormalizedContentItem],
     *,
     base: EmergenceCounters | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
 ) -> EmergenceCounters:
     """post → counters 누적. base 가 주어지면 그 위에 누적, 없으면 새로 시작.
+
+    from_date/to_date: post_date IST filter (inclusive). None 이면 filter 안 함.
 
     매핑된 known hashtag 도 buckets / co_occur 에 누적 (hashtag_weekly 적재 source).
     emergence rule 평가 시점에 evaluate_at 가 known 인 것 자동 제외.
@@ -117,6 +121,10 @@ def build_counters(
     for item in items:
         pd = _post_date_ist(item)
         if pd is None:
+            continue
+        if from_date is not None and pd < from_date:
+            continue
+        if to_date is not None and pd > to_date:
             continue
         pd_iso = pd.isoformat()
         normalized = [_normalize_tag(t) for t in item.hashtags]
@@ -261,14 +269,22 @@ def compute_weekly_emergence(
     *,
     params: EmergenceParams = EmergenceParams(),
 ) -> tuple[EmergenceCounters, list[UnknownAttributeSignal]]:
-    """fresh build counters + anchor 평가. file persistence 없음.
+    """매 주 anchor 별 (week_counters, signals) 산출.
 
-    caller 가 counters 를 hashtag_weekly 적재 source 로 reuse 하고 signals 는
-    unknown_signal 적재 source 로 사용. weekly orchestrator 에서 매 주 1회 호출.
+    Returns:
+      week_counters: 그 주 (week_start ~ anchor) 안 post 만 카운트. hashtag_weekly
+        적재 source — 매 주 row = 그 주 안 hashtag 분포 (partition by week).
+      signals: emergence rule 통과 surface. evaluate 는 baseline + spike 윈도우
+        (anchor -70 ~ anchor) 안 post 카운트 기반.
     """
-    counters = build_counters(items)
-    signals = evaluate_at(counters, anchor, params)
-    return counters, signals
+    week_start = _monday_of(anchor)
+    # week-only counters — emit_hashtag_weekly 에 dump
+    week_counters = build_counters(items, from_date=week_start, to_date=anchor)
+    # emergence eval counters — baseline + spike 윈도우 (anchor -N-M+1 ~ anchor)
+    eval_from = anchor - timedelta(days=params.baseline_days + params.spike_days - 1)
+    eval_counters = build_counters(items, from_date=eval_from, to_date=anchor)
+    signals = evaluate_at(eval_counters, anchor, params)
+    return week_counters, signals
 
 
 def run_weekly_replay(
