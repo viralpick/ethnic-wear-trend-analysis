@@ -1,111 +1,236 @@
+"""unknown_signal_tracker v3 — emergence rule + co-occurrence + weekly replay.
+
+v3 surface 조건 (전부 통과):
+1. baseline_window (default 56일) 등장 ≤ baseline_floor (default 0)
+2. spike_window (default 14일) 등장 ≥ spike_threshold (default 3)
+3. ethnic_co_share ≥ co_share (default 0.5) — tag 의 post 들 중 known fashion hashtag
+   같이 가진 비율
+4. n_posts ≥ min_posts (default 5)
+
+옛 v2 (≥10 / 3일 단순 룰) 폐기 — count_3day → count_recent_window.
+"""
 from __future__ import annotations
 
 import json
 from datetime import date, datetime
 from pathlib import Path
 
-from attributes.unknown_signal_tracker import run_tracker
+from attributes.unknown_signal_tracker import (
+    EmergenceParams,
+    build_counters,
+    evaluate_at,
+    load_state,
+    run_tracker,
+    run_weekly_replay,
+)
 from contracts.common import ContentSource
 from contracts.normalized import NormalizedContentItem
 
 
-def _make(hashtags: list[str], text: str = "", post_date: datetime | None = None) -> NormalizedContentItem:
+def _make(
+    hashtags: list[str],
+    *,
+    post_date: datetime = datetime(2026, 4, 20, 18, 30),  # IST 4/21 00:00
+    post_id: str = "p",
+) -> NormalizedContentItem:
     return NormalizedContentItem(
         source=ContentSource.INSTAGRAM,
-        source_post_id="t",
-        text_blob=text,
+        source_post_id=post_id,
+        text_blob="",
         hashtags=hashtags,
         image_urls=[],
-        # IST date 가 4/21 가 되도록 UTC 기준 4/20 18:30 (UTC) = 4/21 00:00 IST
-        post_date=post_date or datetime(2026, 4, 20, 18, 30),
+        post_date=post_date,
         engagement_raw_count=0,
     )
 
 
-def test_empty_state_first_insert_below_threshold(tmp_path: Path) -> None:
+# ---- positive: 4 조건 모두 통과 ----
+
+def test_emergence_surfaces_when_all_conditions_pass(tmp_path: Path) -> None:
+    """baseline 부재 + spike ≥3 + co_share ≥0.5 + min_posts ≥5 → surface."""
     path = tmp_path / "signals.json"
-    signals = run_tracker(
-        [_make(["#handloom", "#indianwear"])],
-        path,
-        today=date(2026, 4, 21),
-    )
-
-    # threshold(10) 미만이라 surface 되지 않는다.
-    assert signals == []
-    state = json.loads(path.read_text())
-    assert "handloom" in state
-    assert state["handloom"]["buckets"]["2026-04-21"] == 1
-
-
-def test_threshold_crossing_surfaces_signal(tmp_path: Path) -> None:
-    path = tmp_path / "signals.json"
-    items = [_make(["#handloom"]) for _ in range(10)]
-
-    signals = run_tracker(items, path, today=date(2026, 4, 21))
-
-    assert len(signals) == 1
-    assert signals[0].tag == "#handloom"
-    assert signals[0].count_3day == 10
-    assert signals[0].reviewed is False
-
-
-def test_three_day_window_drops_old_buckets(tmp_path: Path) -> None:
-    """v2: bucket key = post_date IST. anchor = max(post_date) 기준 last 3 days 만 keep.
-
-    Day 1 (post_date=4/18) 5건 → state 에 4/18 bucket 5
-    Day 5 (post_date=4/22) 1건 → anchor=4/22, last 3 days = 4/20/21/22 → 4/18 prune
-    """
-    path = tmp_path / "signals.json"
-    # post_date 4/18 IST = UTC 4/17 18:30
-    run_tracker(
-        [_make(["#handloom"], post_date=datetime(2026, 4, 17, 18, 30)) for _ in range(5)],
-        path,
-        today=date(2026, 4, 18),
-    )
-    # post_date 4/22 IST = UTC 4/21 18:30
-    signals = run_tracker(
-        [_make(["#handloom"], post_date=datetime(2026, 4, 21, 18, 30))],
-        path,
-        today=date(2026, 4, 22),
-    )
-
-    state = json.loads(path.read_text())
-    assert "2026-04-18" not in state["handloom"]["buckets"]
-    assert state["handloom"]["buckets"]["2026-04-22"] == 1
-    # count_3day = 1 이라 surface 되지 않는다.
-    assert signals == []
-
-
-def test_first_seen_uses_post_date_not_load_date_2(tmp_path: Path) -> None:
-    """v2 회귀 방지: first_seen 이 적재일이 아닌 post_date IST. 옛 v1 은 today bucket
-    이라 backfill 시 모든 first_seen=today 였던 버그."""
-    path = tmp_path / "signals.json"
-    # 12개 post — post_date 다양 (4/19, 4/20, 4/21 IST 분포). 적재일은 4/29 (오늘).
+    # 6 posts, 모두 spike window 안 (anchor=4/26 → spike=4/13~4/26).
+    # 각 post 가 #handloom (unknown) + #saree (known) 가져 co_share=1.0.
     items = [
-        _make(["#handloom"], post_date=datetime(2026, 4, 18, 18, 30)),  # IST 4/19
-        _make(["#handloom"], post_date=datetime(2026, 4, 19, 18, 30)),  # IST 4/20
-    ] * 5  # ×5 → 10건
-    signals = run_tracker(items, path, today=date(2026, 4, 29))
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
 
     assert len(signals) == 1
-    # first_seen = 가장 오래된 post_date IST (4/19), 적재일 (4/29) X
-    assert signals[0].first_seen == date(2026, 4, 19)
-    assert signals[0].count_3day == 10
-    state = json.loads(path.read_text())
-    # bucket 이 post_date 별로 분리됐는지
-    assert "2026-04-19" in state["handloom"]["buckets"]
-    assert "2026-04-20" in state["handloom"]["buckets"]
-    # 적재일 (4/29) bucket 은 없음 (post 의 post_date 가 4/29 가 아니므로)
-    assert "2026-04-29" not in state["handloom"]["buckets"]
+    sig = signals[0]
+    assert sig.tag == "#handloom"
+    assert sig.count_recent_window == 6  # spike window 안 등장 instance 합
+    assert sig.week_start_date == date(2026, 4, 20)  # Mon of 4/26 week
+    assert sig.first_seen == date(2026, 4, 20)  # IST
+
+
+# ---- negative: 각 조건 별 fail ----
+
+def test_baseline_floor_violation(tmp_path: Path) -> None:
+    """baseline window 에 1번 등장하면 floor=0 통과 못함."""
+    path = tmp_path / "signals.json"
+    # baseline window = anchor (4/26) - 14 - 56 일 ~ -15일 = 2026-02-17 ~ 2026-04-12
+    # 4/1 에 1번 등장
+    items = (
+        [_make(["#handloom", "#saree"], post_date=datetime(2026, 3, 31, 18, 30), post_id="old")]
+        + [_make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+           for i in range(6)]
+    )
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+
+    # baseline 1 > floor 0 → 통과 못함
+    assert signals == []
+
+
+def test_spike_threshold_not_met(tmp_path: Path) -> None:
+    """spike < K=3 이면 surface 안 됨."""
+    path = tmp_path / "signals.json"
+    # 2 posts in spike window — K=3 미달
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(2)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    assert signals == []
+
+
+def test_co_share_too_low(tmp_path: Path) -> None:
+    """unknown tag 의 post 들이 known fashion hashtag 거의 안 가지면 surface 안 됨."""
+    path = tmp_path / "signals.json"
+    # 6 posts: 2개만 known fashion (#saree) 같이, 나머지 4개는 unknown only
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id="kf1"),
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 20, 18, 30), post_id="kf2"),
+        _make(["#handloom"], post_date=datetime(2026, 4, 21, 18, 30), post_id="kf3"),
+        _make(["#handloom"], post_date=datetime(2026, 4, 22, 18, 30), post_id="kf4"),
+        _make(["#handloom"], post_date=datetime(2026, 4, 23, 18, 30), post_id="kf5"),
+        _make(["#handloom"], post_date=datetime(2026, 4, 24, 18, 30), post_id="kf6"),
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    # co_share = 2 / 6 = 0.33 < 0.5 → 통과 못함
+    assert signals == []
+
+
+def test_min_posts_not_met(tmp_path: Path) -> None:
+    """post 수 < 5 면 measurement stability 부족 → surface 안 됨."""
+    path = tmp_path / "signals.json"
+    # 4 posts (min_posts=5 미달)
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(4)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    assert signals == []
+
+
+# ---- weekly replay 시나리오 ----
+
+def test_weekly_replay_different_anchors_different_results(tmp_path: Path) -> None:
+    """같은 enriched 라도 anchor 별로 spike/baseline 다르게 평가됨."""
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    # anchor=4/26 → spike=4/13~4/26 → 6 surface
+    s1 = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    assert len(s1) == 1
+
+    # anchor=5/12 → spike=4/29~5/12 → 0 (spike 밖)
+    s2 = run_weekly_replay([], path, anchor=date(2026, 5, 12))
+    assert s2 == []
+
+
+def test_state_persistence_round_trip(tmp_path: Path) -> None:
+    """save → load → 같은 counters 복원."""
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+
+    counters_loaded, weeks = load_state(path)
+    assert "handloom" in counters_loaded.buckets
+    assert sum(counters_loaded.buckets["handloom"].values()) == 6
+    assert counters_loaded.co_occur["handloom"] == (6, 6)
+    assert "2026-04-20" in weeks  # Mon of 4/26
 
 
 def test_caption_text_ignored_hashtag_only(tmp_path: Path) -> None:
+    """v3 도 hashtag-only — caption text 안의 단어는 카운트 X."""
     path = tmp_path / "signals.json"
-    # 캡션에 "handloom" 단어만 있고 해시태그 없음. v1 은 hashtag-only 이므로 무시.
-    item = _make([], text="beautiful handloom scarf today")
-
-    signals = run_tracker([item], path, today=date(2026, 4, 21))
-
+    items = [
+        NormalizedContentItem(
+            source=ContentSource.INSTAGRAM,
+            source_post_id=f"p{i}",
+            text_blob="beautiful handloom scarf today",
+            hashtags=[],
+            image_urls=[],
+            post_date=datetime(2026, 4, 19, 18, 30),
+            engagement_raw_count=0,
+        )
+        for i in range(6)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
     assert signals == []
-    state = json.loads(path.read_text())
-    assert state == {}
+
+
+def test_legacy_run_tracker_compat(tmp_path: Path) -> None:
+    """옛 caller (today=anchor) 호환 — run_tracker 가 1회 평가."""
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    signals = run_tracker(items, path, today=date(2026, 4, 26))
+    assert len(signals) == 1
+    assert signals[0].count_recent_window == 6
+
+
+# ---- params override ----
+
+def test_params_override_relaxes_thresholds(tmp_path: Path) -> None:
+    """min_posts=2 / spike_threshold=1 override → 통과."""
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(2)
+    ]
+    params = EmergenceParams(min_posts=2, spike_threshold=1)
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26), params=params)
+    assert len(signals) == 1
+
+
+# ---- internal: build_counters / evaluate_at 분리 검증 ----
+
+def test_build_counters_separates_buckets_and_co_occur() -> None:
+    """post 1개 안의 unknown tag 마다 buckets +N (instance), co_occur post-level dedup +1."""
+    items = [
+        _make(["#handloom", "#handloom", "#saree"],  # 같은 tag 2번 → buckets +2, co_occur +1
+              post_date=datetime(2026, 4, 19, 18, 30), post_id="p1"),
+        _make(["#handloom"],
+              post_date=datetime(2026, 4, 20, 18, 30), post_id="p2"),
+    ]
+    c = build_counters(items)
+    assert c.buckets["handloom"]["2026-04-20"] == 2  # post p1 IST 4/20
+    assert c.buckets["handloom"]["2026-04-21"] == 1  # post p2 IST 4/21
+    assert c.co_occur["handloom"] == (1, 2)  # 1 post 가 #saree 같이 / 2 posts total
+
+
+def test_evaluate_at_window_boundaries() -> None:
+    """spike window 경계가 anchor 포함, baseline 경계가 spike 직전."""
+    # default: spike_days=14, baseline_days=56
+    # anchor=4/26 → spike=[4/13, 4/26], baseline=[2026-02-17, 4/12]
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    counters = build_counters(items)
+    out = evaluate_at(counters, anchor=date(2026, 4, 26))
+    assert len(out) == 1
+
+    # anchor=4/12 → spike=[3/30, 4/12]: 4/20 IST post 들이 spike 밖 → surface 안 됨
+    out2 = evaluate_at(counters, anchor=date(2026, 4, 12))
+    assert out2 == []

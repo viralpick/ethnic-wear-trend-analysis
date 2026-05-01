@@ -117,15 +117,21 @@ class TrendClusterSummary(BaseModel):
 
 class UnknownAttributeSignal(BaseModel):
     """
-    purpose: 매핑에 없는 새 해시태그 자동 감지 (spec §4.2)
+    purpose: 매핑에 없는 새 해시태그 자동 감지 (spec §4.2 / §8.3 v2.2)
     stage: output
     ownership: analysis-owned
     stability: locked
+
+    v2.2 (2026-05-01) emergence rule:
+    - bucket key = post_date IST. weekly cadence 로 매 주 anchor 별 평가.
+    - surface(tag) := baseline_window 부재 + spike_window K회 + ethnic_co_share R 통과.
+    - 옛 `count_3day` (≥10 / 3일 단순 룰) 폐기 — `count_recent_window` 으로 대체.
     """
     model_config = ConfigDict(frozen=True)
 
     tag: str                                # 예: "#bandhani"
-    count_3day: int
+    week_start_date: date                   # weekly anchor 의 주 시작일 (월요일)
+    count_recent_window: int                # spike window 안 등장 횟수
     first_seen: date
     likely_category: str | None = None      # 예: "technique?"
     reviewed: bool = False
