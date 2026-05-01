@@ -1407,6 +1407,8 @@ def _build_week_section(
     enriched: list[dict[str, Any]],
     summaries: list[dict[str, Any]],
     html_dir: Path,
+    *,
+    unknown_signals: list[dict[str, Any]] | None = None,
 ) -> str:
     """주차별 section — Clusters tab + Items tab 구조. id prefix `w<idx>-` 로 anchor 충돌 방지."""
     # view-단 dedup: raw url 기준 동일 post 중 engagement 최대 1건만 keep.
@@ -1452,6 +1454,8 @@ def _build_week_section(
         f'<option value="{_esc(c)}">{_esc(c)}</option>' for c in distinct_clusters
     )
 
+    unknown_panel = _render_unknown_signals_panel(unknown_signals or [])
+
     return f"""
 <section class="week-block" data-week="{week_idx}">
   <div class="summary-bar">
@@ -1461,6 +1465,8 @@ def _build_week_section(
     <span><b>{n_canonicals}</b> canonicals</span>
     <span><b>{n_with_palette}</b> with palette</span>
   </div>
+
+  {unknown_panel}
 
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="clusters" onclick="showTab({week_idx},'clusters')">📊 Clusters ({n_clusters})</button>
@@ -1495,62 +1501,59 @@ def _build_week_section(
 </section>"""
 
 
-def _load_unknown_signals() -> list[dict[str, Any]]:
-    """outputs/unknown_signals.json (spec §4.2 hashtag tracker 결과) 로드.
-    파일 없거나 빈 dict 면 [] 반환.
+def _load_unknown_signals_weekly() -> dict[str, list[dict[str, Any]]]:
+    """outputs/unknown_signals_weekly.json (spec §4.2/§8.3 v2.2 emergence 결과) 로드.
+
+    Returns: {week_start_iso: [signal dict, ...]} — week_start_date 가 안카 그 주 월요일.
     """
-    path = _REPO / "outputs" / "unknown_signals.json"
+    path = _REPO / "outputs" / "unknown_signals_weekly.json"
     if not path.exists():
-        return []
+        return {}
     try:
         with path.open() as f:
             state = json.load(f)
     except json.JSONDecodeError:
-        return []
+        return {}
     if not isinstance(state, dict):
-        return []
-    rows: list[dict[str, Any]] = []
-    for tag, entry in state.items():
-        if not isinstance(entry, dict):
+        return {}
+    weeks = state.get("weeks") or {}
+    if not isinstance(weeks, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for week_iso, signals in weeks.items():
+        if not isinstance(signals, list):
             continue
-        buckets = entry.get("buckets") or {}
-        if not isinstance(buckets, dict):
-            continue
-        count_3day = sum(buckets.values())
-        if count_3day < 10:
-            continue  # spec §4.2 threshold
-        first_seen = min(buckets.keys()) if buckets else ""
-        rows.append({
-            "tag": f"#{tag}",
-            "count_3day": count_3day,
-            "first_seen": first_seen,
-            "likely_category": entry.get("likely_category"),
-            "reviewed": bool(entry.get("reviewed", False)),
-        })
-    rows.sort(key=lambda r: -r["count_3day"])
-    return rows
+        out[week_iso] = sorted(
+            (s for s in signals if isinstance(s, dict)),
+            key=lambda r: -int(r.get("count_recent_window", 0)),
+        )
+    return out
 
 
 def _render_unknown_signals_panel(signals: list[dict[str, Any]]) -> str:
-    """spec §4.2 — 매핑 외 신규 해시태그 시그널 패널 (검수용)."""
+    """spec §4.2/§8.3 v2.2 — 매핑 외 emergence hashtag panel (그 주 surface).
+
+    surface 룰: baseline window 부재 + spike window K회 + ethnic_co_share R 통과.
+    빈 list 면 빈 문자열 (panel 자체 미렌더).
+    """
     if not signals:
         return ""
     rows_html = "".join(
         f'<tr>'
-        f'<td><code>{_esc(s["tag"])}</code></td>'
-        f'<td class="num">{s["count_3day"]}</td>'
-        f'<td>{_esc(s["first_seen"])}</td>'
+        f'<td><code>{_esc(s.get("tag", ""))}</code></td>'
+        f'<td class="num">{s.get("count_recent_window", 0)}</td>'
+        f'<td>{_esc(s.get("first_seen", ""))}</td>'
         f'<td>{_esc(s.get("likely_category") or "—")}</td>'
-        f'<td>{"✓" if s["reviewed"] else "—"}</td>'
+        f'<td>{"✓" if s.get("reviewed") else "—"}</td>'
         f'</tr>'
-        for s in signals[:30]  # 상위 30 개
+        for s in signals[:30]
     )
     return f'''
-<details class="unknown-signals-panel">
-  <summary>🆕 신규 시그널 감지 — 매핑 외 해시태그 ({len(signals)}건, 3일 ≥10) ▼</summary>
-  <p class="muted">spec §4.2 — 자동 감지된 해시태그. 매핑에 추가 또는 noise 무시 검토.</p>
+<details class="unknown-signals-panel" open>
+  <summary>🆕 emergence 신규 시그널 — 이 주 surface ({len(signals)}건, baseline 부재 + spike) ▼</summary>
+  <p class="muted">spec §4.2/§8.3 v2.2 — 매핑 외 hashtag 가 baseline window (default 56일) 에 없다가 spike window (default 14일) 에 K회 이상 등장 + ethnic 맥락 (co_share ≥ 0.5). 매핑에 추가 또는 noise 무시 검토.</p>
   <table class="unknown-signals-table">
-    <thead><tr><th>tag</th><th>count_3day</th><th>first_seen</th><th>likely_category</th><th>reviewed</th></tr></thead>
+    <thead><tr><th>tag</th><th>spike count</th><th>first_seen</th><th>likely_category</th><th>reviewed</th></tr></thead>
     <tbody>{rows_html}</tbody>
   </table>
 </details>'''
@@ -1566,15 +1569,19 @@ def build_multi_week_html(
     """
     if not weeks:
         raise ValueError("weeks must be non-empty")
+    # 주별 emergence signals — week_start_iso 매칭. label 첫 10자 ("2026-04-20 ~ ...") = monday.
+    weekly_signals = _load_unknown_signals_weekly()
     sections = "\n".join(
-        _build_week_section(idx, label, enr, summ, html_dir)
+        _build_week_section(
+            idx, label, enr, summ, html_dir,
+            unknown_signals=weekly_signals.get(label[:10], []),
+        )
         for idx, (label, enr, summ) in enumerate(weeks)
     )
     options = "".join(
         f'<option value="{idx}">{_esc(label)}</option>'
         for idx, (label, _, _) in enumerate(weeks)
     )
-    unknown_signals_html = _render_unknown_signals_panel(_load_unknown_signals())
     return f"""<!DOCTYPE html>
 <html lang="ko"><head>
 <meta charset="utf-8">
@@ -1591,8 +1598,6 @@ def build_multi_week_html(
     </select>
   </label>
 </div>
-
-{unknown_signals_html}
 
 {sections}
 
