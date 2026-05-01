@@ -274,15 +274,16 @@ def compute_weekly_emergence(
     Returns:
       week_counters: 그 주 (week_start ~ anchor) 안 post 만 카운트. hashtag_weekly
         적재 source — 매 주 row = 그 주 안 hashtag 분포 (partition by week).
-      signals: emergence rule 통과 surface. evaluate 는 baseline + spike 윈도우
-        (anchor -70 ~ anchor) 안 post 카운트 기반.
+      signals: emergence rule 통과 surface. evaluate 는 전체 history counters
+        (filter 없음) 로 baseline + spike windowed sum + cumulative co_occur 평가.
+        co_occur 를 전체 history 로 측정해야 min_posts threshold stability 충분.
     """
     week_start = _monday_of(anchor)
-    # week-only counters — emit_hashtag_weekly 에 dump
+    # week-only counters — emit_hashtag_weekly 에 dump (partition by week)
     week_counters = build_counters(items, from_date=week_start, to_date=anchor)
-    # emergence eval counters — baseline + spike 윈도우 (anchor -N-M+1 ~ anchor)
-    eval_from = anchor - timedelta(days=params.baseline_days + params.spike_days - 1)
-    eval_counters = build_counters(items, from_date=eval_from, to_date=anchor)
+    # emergence eval — 전체 history counters. evaluate_at 가 windowed sum 으로 평가,
+    # co_occur 는 cumulative (stability).
+    eval_counters = build_counters(items)
     signals = evaluate_at(eval_counters, anchor, params)
     return week_counters, signals
 
