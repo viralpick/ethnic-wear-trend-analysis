@@ -75,5 +75,4 @@ def test_trend_cluster_summary_fixture_bootstrap() -> None:
     assert summary.schema_version == CONTRACT_VERSION
     assert summary.cluster_key == "kurta_set__chikankari__cotton"
     assert summary.data_maturity == DataMaturity.BOOTSTRAP
-    assert summary.daily_direction.value == "flat"
     assert summary.weekly_direction.value == "flat"

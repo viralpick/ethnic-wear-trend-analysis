@@ -50,18 +50,29 @@ def test_direction_below_threshold_is_down() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# weekly direction: <3 일 → FLAT 강제
+# weekly direction: baseline 부재 → FLAT 강제 (spec §3.4)
 # --------------------------------------------------------------------------- #
 
-def test_weekly_direction_forced_flat_when_days_less_than_three() -> None:
-    # days_collected < 3 이면 변화율과 무관하게 flat.
-    assert classify_weekly_direction(50.0, 5.0, days_collected=1) == Direction.FLAT
-    assert classify_weekly_direction(-50.0, 5.0, days_collected=2) == Direction.FLAT
+def test_weekly_direction_flat_when_baseline_missing() -> None:
+    # weekly baseline (7일 전 entry) 가 없으면 변화율과 무관하게 flat.
+    assert classify_weekly_direction(
+        50.0, 5.0, weekly_baseline_exists=False
+    ) == Direction.FLAT
+    assert classify_weekly_direction(
+        -50.0, 5.0, weekly_baseline_exists=False
+    ) == Direction.FLAT
 
 
-def test_weekly_direction_uses_threshold_when_enough_days() -> None:
-    assert classify_weekly_direction(12.0, 5.0, days_collected=7) == Direction.UP
-    assert classify_weekly_direction(-12.0, 5.0, days_collected=7) == Direction.DOWN
+def test_weekly_direction_uses_threshold_when_baseline_exists() -> None:
+    assert classify_weekly_direction(
+        12.0, 5.0, weekly_baseline_exists=True
+    ) == Direction.UP
+    assert classify_weekly_direction(
+        -12.0, 5.0, weekly_baseline_exists=True
+    ) == Direction.DOWN
+    assert classify_weekly_direction(
+        3.0, 5.0, weekly_baseline_exists=True
+    ) == Direction.FLAT
 
 
 # --------------------------------------------------------------------------- #

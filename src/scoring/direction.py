@@ -1,7 +1,7 @@
 """Direction / lifecycle / data_maturity 판정 (spec §9.3, §9.4).
 
 Early-data 규칙 (non-negotiable):
-- weekly_direction 은 days_collected < 3 일 때 FLAT 로 강제.
+- weekly_direction 은 weekly baseline 부재 (history 에 7일 전 entry 없음) 시 FLAT.
 - momentum 은 denominator 0 일 때 growth factors = 0 (score_momentum.compute 참고).
 - lifecycle 은 post_count_total < early_post_count_threshold 이면 점수와 관계없이 EARLY.
 - data_maturity 는 days_collected 만으로 결정.
@@ -26,10 +26,16 @@ def classify_direction(change_pct: float, threshold_pct: float) -> Direction:
 def classify_weekly_direction(
     change_pct: float,
     threshold_pct: float,
-    days_collected: int,
+    *,
+    weekly_baseline_exists: bool,
 ) -> Direction:
-    """days_collected < 3 이면 FLAT 강제 (baseline 부재). 그 외는 classify_direction 과 동일."""
-    if days_collected < 3:
+    """spec §3.4 — weekly baseline 부재면 FLAT, 그 외엔 ±threshold 분류.
+
+    옛 시그니처는 days_collected<3 으로 FLAT 강제했으나 backfill 시
+    collection_start_date 와 anchor 가 어긋나면 항상 FLAT 으로 박히는 버그가
+    있어 baseline 존재 여부 가드로 변경 (2026-05-01).
+    """
+    if not weekly_baseline_exists:
         return Direction.FLAT
     return classify_direction(change_pct, threshold_pct)
 

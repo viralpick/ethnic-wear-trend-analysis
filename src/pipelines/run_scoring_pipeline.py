@@ -30,7 +30,6 @@ from scoring.compute_scores import score_clusters, total_score
 from scoring.direction import (
     change_pct,
     classify_data_maturity,
-    classify_direction,
     classify_lifecycle,
     classify_weekly_direction,
 )
@@ -284,21 +283,16 @@ def _decide_clusters(
         bd = breakdowns[ctx.cluster_key]
         total = total_score(bd)
 
-        daily_base = history.get_daily_baseline(ctx.cluster_key, target_date)
         weekly_base = history.get_weekly_baseline(ctx.cluster_key, target_date)
-
-        daily_change = change_pct(total, daily_base) if daily_base is not None else 0.0
         weekly_change = change_pct(total, weekly_base) if weekly_base is not None else 0.0
 
         decisions[ctx.cluster_key] = ClusterDecision(
             score_breakdown=bd,
-            daily_direction=classify_direction(
-                daily_change, settings.scoring.direction_threshold_pct
-            ),
             weekly_direction=classify_weekly_direction(
-                weekly_change, settings.scoring.direction_threshold_pct, days_collected
+                weekly_change,
+                settings.scoring.direction_threshold_pct,
+                weekly_baseline_exists=weekly_base is not None,
             ),
-            daily_change_pct=daily_change,
             weekly_change_pct=weekly_change,
             lifecycle_stage=classify_lifecycle(
                 total, ctx.post_count_total, "flat", settings.scoring.lifecycle

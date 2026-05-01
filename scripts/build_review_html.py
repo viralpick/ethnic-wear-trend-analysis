@@ -749,7 +749,7 @@ def _render_cluster_card(
     </div>
     <div class="cluster-meta-row">
       <span class="score">{s.get("score", 0):.1f}</span>
-      <span class="meta-pill direction">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))}</span>
+      <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
     </div>
   </header>
@@ -1031,7 +1031,7 @@ def _render_cluster_detail(
     </div>
     <div class="cluster-meta-row">
       <span class="score">{s.get("score", 0):.1f}</span>
-      <span class="meta-pill direction">{_esc(s.get("daily_direction"))}/{_esc(s.get("weekly_direction"))}</span>
+      <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
       <span class="muted">{n_contrib} contributors</span>
     </div>

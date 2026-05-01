@@ -96,9 +96,8 @@ class TrendClusterSummary(BaseModel):
     score_breakdown: ScoreBreakdown
 
     # 방향성 + 라이프사이클 + 데이터 성숙도 (spec §9.3, §9.4)
-    daily_direction: Direction
+    # daily_* 폐기 (2026-05-01) — weekly cadence only. spec §3.4 / pipeline_spec.
     weekly_direction: Direction
-    daily_change_pct: float
     weekly_change_pct: float
     lifecycle_stage: LifecycleStage
     data_maturity: DataMaturity

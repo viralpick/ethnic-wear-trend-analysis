@@ -61,9 +61,7 @@ ItemWithShare = tuple[EnrichedContentItem, float]
 class ClusterDecision:
     """한 클러스터에 대한 스코어링/라이프사이클 결정 묶음."""
     score_breakdown: ScoreBreakdown
-    daily_direction: Direction
     weekly_direction: Direction
-    daily_change_pct: float
     weekly_change_pct: float
     lifecycle_stage: LifecycleStage
     data_maturity: DataMaturity
@@ -337,9 +335,7 @@ def build_summary(
         date=target_date,
         score=total_score(decision.score_breakdown),
         score_breakdown=decision.score_breakdown,
-        daily_direction=decision.daily_direction,
         weekly_direction=decision.weekly_direction,
-        daily_change_pct=decision.daily_change_pct,
         weekly_change_pct=decision.weekly_change_pct,
         lifecycle_stage=decision.lifecycle_stage,
         data_maturity=decision.data_maturity,
