@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS canonical_group (
     item_contribution_score DOUBLE         NULL      COMMENT '§2.7 group → item',
     n_objects               INT            NULL,
     mean_area_ratio         DOUBLE         NULL,
-    schema_version          VARCHAR(32)    NOT NULL
+    schema_version          VARCHAR(32)    NOT NULL,
+    url_short_tag           VARCHAR(64)    NULL      COMMENT 'v2 (migration 004): IG shortcode / YT video_id, NULL=parse fail'
 )
 ENGINE=OLAP
 DUPLICATE KEY (item_source, item_source_post_id, canonical_index, computed_at)
