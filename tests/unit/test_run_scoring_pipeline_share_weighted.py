@@ -120,15 +120,33 @@ def _enriched(
         methods["technique"] = ClassificationMethod.RULE
     if f is not None:
         methods["fabric"] = ClassificationMethod.RULE
+    # 2026-05-02: canonical=0 → fan-out 미참여 정책. 옛 fixture (canonicals=[]) 의도
+    # 보존 위해 g/f 채워진 케이스는 자동 canonical 1개 주입 (vision 통과 시뮬).
+    if canonicals is None:
+        canonicals = _auto_canonical(g, t, f)
     return EnrichedContentItem(
         normalized=_normalized(post_id, source=source, engagement=engagement, handle=handle),
         garment_type=g,
         fabric=f,
         technique=t,
-        canonicals=canonicals or [],
+        canonicals=canonicals,
         classification_method_per_attribute=methods,
         trend_cluster_key=cluster_key,
     )
+
+
+def _auto_canonical(
+    g: GarmentType | None, t: Technique | None, f: Fabric | None,
+) -> list[CanonicalOutfit]:
+    """g/f 둘 다 None 이면 빈 list (canonical=0 = fan-out 미참여). 하나라도 있으면
+    enum value 기반 canonical 1개 주입 (vision 통과 시뮬)."""
+    if g is None and f is None:
+        return []
+    return [_canonical_with_garment(
+        upper=g.value if g else "kurta",
+        fabric=f.value if f else "cotton",
+        technique=t.value if t else "chikankari",
+    )]
 
 
 def _canonical_with_garment(

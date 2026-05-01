@@ -86,8 +86,11 @@ def _canonical_cluster_entries(
     distribution_builder 와 동일 로직 재활용.
 
     canonical 내 garment 또는 fabric 이 normalize 외 단어면 그 canonical 미참여.
-    canonical 0 인 item (text-only) → enriched.garment_type + enriched.fabric 으로
-    single entry mass=item_base_unit (default 1.0).
+    canonical 0 인 item (vision 실패 / text-only) → 빈 결과 (2026-05-02). 옛 text-only
+    fallback (item.garment_type+fabric 으로 단일 cluster) 은 환각 리스크 (셀럽 reels 의
+    #CelebrityStyle hashtag → ethnic_dress 강제 라벨, project_youtube_text_attr_risk
+    참고) + canonical_cluster_shares 와의 비대칭 (review HTML contributor map 0)
+    때문에 제거. DB 적재는 enriched item-level 로 보존되어 디버그 손실 없음.
 
     Phase 3 (2026-04-30): item_base_unit 가중 — caller (rep phase) 가 growth rate
     factor (1.0 ~ 2.0) 주입. 모든 canonical share 에 곱해져 cluster mass 자연 가중.
@@ -130,13 +133,7 @@ def _canonical_cluster_entries(
             out.append((cluster_key, share))
         return out
 
-    # text-only fallback: canonical 0 인 item — enriched.garment_type + enriched.fabric
-    g_text = item.garment_type.value if item.garment_type else None
-    f_text = item.fabric.value if item.fabric else None
-    if g_text is None and f_text is None:
-        return []
-    cluster_key = build_exact_key_strs(g_text or "unknown", f_text or "unknown")
-    return [(cluster_key, 1.0 * item_base_unit)]
+    return []
 
 
 def group_by_cluster(

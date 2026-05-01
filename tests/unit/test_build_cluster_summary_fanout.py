@@ -25,6 +25,7 @@ from contracts.common import (
 )
 from contracts.enriched import EnrichedContentItem
 from contracts.normalized import NormalizedContentItem
+from contracts.vision import CanonicalOutfit, EthnicOutfit, OutfitMember
 
 
 def _normalized(post_id: str) -> NormalizedContentItem:
@@ -57,15 +58,43 @@ def _enriched(
         methods["technique"] = ClassificationMethod.RULE
     if f is not None:
         methods["fabric"] = ClassificationMethod.RULE
+    # 2026-05-02: canonical=0 → fan-out 미참여 정책. 옛 fixture (canonicals=[]) 의도
+    # 보존 위해 g/f 채워진 케이스는 자동 canonical 1개 주입 (vision 통과 시뮬).
     return EnrichedContentItem(
         normalized=_normalized(post_id),
         garment_type=g,
         fabric=f,
         technique=t,
-        canonicals=[],
+        canonicals=_auto_canonical(g, t, f),
         classification_method_per_attribute=methods,
         trend_cluster_key=cluster_key,
     )
+
+
+def _auto_canonical(
+    g: GarmentType | None, t: Technique | None, f: Fabric | None,
+) -> list[CanonicalOutfit]:
+    """g/f 둘 다 None 이면 빈 list. 하나라도 있으면 enum value 기반 canonical 1개."""
+    if g is None and f is None:
+        return []
+    bbox = (0.1, 0.1, 0.5, 0.7)
+    outfit = EthnicOutfit(
+        person_bbox=bbox,
+        person_bbox_area_ratio=0.35,
+        upper_garment_type=g.value if g else "kurta",
+        upper_is_ethnic=True,
+        lower_garment_type="palazzo",
+        lower_is_ethnic=True,
+        dress_as_single=False,
+        fabric=f.value if f else "cotton",
+        technique=t.value if t else "chikankari",
+        color_preset_picks_top3=[],
+    )
+    return [CanonicalOutfit(
+        canonical_index=0,
+        representative=outfit,
+        members=[OutfitMember(image_id="img_0", outfit_index=0, person_bbox=bbox)],
+    )]
 
 
 # --------------------------------------------------------------------------- #
