@@ -663,7 +663,7 @@ def _cluster_summary_body(
       <h4>counts</h4>
       <div class="counts-line">
         <span>total={s.get("post_count_total", 0):.1f}</span>
-        <span>today={s.get("post_count_today", 0):.1f}</span>
+        <span>this week={s.get("post_count_today", 0):.1f}</span>
         <span>views={s.get("total_video_views", 0):,}</span>
       </div>
     </section>
@@ -1252,11 +1252,35 @@ a:hover { text-decoration: underline; }
                     transition: transform 0.15s; }
 .contrib-card-img:hover { transform: scale(1.05); z-index: 5;
                           position: relative; }
-.contrib-card-img:focus { position: fixed; top: 50%; left: 50%;
-                          transform: translate(-50%,-50%); width: 90vw;
-                          height: 90vh; aspect-ratio: auto; object-fit: contain;
-                          z-index: 1000; background: rgba(0,0,0,0.9);
-                          cursor: zoom-out; outline: none; }
+.contrib-card-img:focus { outline: 2px solid #2a5db8; outline-offset: 2px; }
+/* lightbox modal — contributor 사진 확대 + ←/→/Esc nav (2026-05-01) */
+.lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+                    z-index: 10000; display: none;
+                    align-items: center; justify-content: center; }
+.lightbox-overlay.open { display: flex; }
+.lightbox-img { max-width: 92vw; max-height: 92vh; object-fit: contain;
+                box-shadow: 0 8px 40px rgba(0,0,0,0.6); border-radius: 4px; }
+.lightbox-btn { position: fixed; top: 50%; transform: translateY(-50%);
+                background: rgba(255,255,255,0.15); color: #fff;
+                border: 1px solid rgba(255,255,255,0.3); border-radius: 50%;
+                width: 56px; height: 56px; font-size: 32px; line-height: 1;
+                cursor: pointer; user-select: none;
+                transition: background 0.15s; padding: 0; }
+.lightbox-btn:hover { background: rgba(255,255,255,0.3); }
+.lightbox-btn[disabled] { opacity: 0.25; cursor: default; }
+.lightbox-prev { left: 24px; }
+.lightbox-next { right: 24px; }
+.lightbox-close { position: fixed; top: 24px; right: 24px;
+                  background: rgba(255,255,255,0.15); color: #fff;
+                  border: 1px solid rgba(255,255,255,0.3); border-radius: 50%;
+                  width: 40px; height: 40px; font-size: 18px; line-height: 1;
+                  cursor: pointer; padding: 0; }
+.lightbox-close:hover { background: rgba(255,255,255,0.3); }
+.lightbox-counter { position: fixed; bottom: 24px; left: 50%;
+                    transform: translateX(-50%); color: #fff;
+                    font-size: 12px; background: rgba(0,0,0,0.5);
+                    padding: 4px 12px; border-radius: 12px;
+                    font-family: ui-monospace, monospace; }
 .contrib-card-img-placeholder { grid-column: 1 / -1;
                                 display: flex; height: 80px;
                                 align-items: center; justify-content: center;
@@ -1601,6 +1625,14 @@ def build_multi_week_html(
 
 {sections}
 
+<div id="lightbox" class="lightbox-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+  <button class="lightbox-close" type="button" aria-label="close">✕</button>
+  <button class="lightbox-btn lightbox-prev" type="button" aria-label="previous">‹</button>
+  <img class="lightbox-img" src="" alt="" />
+  <button class="lightbox-btn lightbox-next" type="button" aria-label="next">›</button>
+  <div class="lightbox-counter"></div>
+</div>
+
 <script>
 function showWeek(idx) {{
   document.querySelectorAll('section.week-block').forEach(el => {{
@@ -1661,6 +1693,78 @@ function filterPosts(weekIdx) {{
   const counter = root.querySelector('.filter-count');
   if (counter) counter.textContent = `(${{shown}} 표시)`;
 }}
+// lightbox — contrib-card-img 클릭 시 modal 확대 + ←/→ 키/버튼 nav + Esc 닫기 (2026-05-01)
+(function () {{
+  const overlay = document.getElementById('lightbox');
+  if (!overlay) return;
+  const imgEl = overlay.querySelector('.lightbox-img');
+  const prevBtn = overlay.querySelector('.lightbox-prev');
+  const nextBtn = overlay.querySelector('.lightbox-next');
+  const closeBtn = overlay.querySelector('.lightbox-close');
+  const counter = overlay.querySelector('.lightbox-counter');
+  let group = [];
+  let idx = 0;
+  let lastFocus = null;
+
+  function render() {{
+    if (!group.length) return;
+    imgEl.src = group[idx].src;
+    imgEl.alt = group[idx].alt || '';
+    counter.textContent = (idx + 1) + ' / ' + group.length;
+    const single = group.length <= 1;
+    prevBtn.disabled = single;
+    nextBtn.disabled = single;
+  }}
+  function open(clicked) {{
+    const list = clicked.closest('.contrib-cards-list');
+    if (!list) return;
+    group = Array.from(list.querySelectorAll('.contrib-card-img'));
+    idx = Math.max(0, group.indexOf(clicked));
+    lastFocus = clicked;
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    render();
+    closeBtn.focus();
+  }}
+  function close() {{
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+    imgEl.src = '';
+    group = [];
+    if (lastFocus) {{ try {{ lastFocus.focus(); }} catch (e) {{}} }}
+  }}
+  function step(delta) {{
+    if (group.length <= 1) return;
+    idx = (idx + delta + group.length) % group.length;
+    render();
+  }}
+
+  prevBtn.addEventListener('click', function (e) {{ e.stopPropagation(); step(-1); }});
+  nextBtn.addEventListener('click', function (e) {{ e.stopPropagation(); step(1); }});
+  closeBtn.addEventListener('click', function (e) {{ e.stopPropagation(); close(); }});
+  overlay.addEventListener('click', function (e) {{ if (e.target === overlay) close(); }});
+  document.addEventListener('click', function (e) {{
+    const img = e.target.closest && e.target.closest('.contrib-card-img');
+    if (img) {{ e.preventDefault(); open(img); }}
+  }});
+  document.addEventListener('keydown', function (e) {{
+    if (overlay.classList.contains('open')) {{
+      if (e.key === 'ArrowLeft') {{ e.preventDefault(); step(-1); }}
+      else if (e.key === 'ArrowRight') {{ e.preventDefault(); step(1); }}
+      else if (e.key === 'Escape') {{ e.preventDefault(); close(); }}
+      return;
+    }}
+    if ((e.key === 'Enter' || e.key === ' ')
+        && document.activeElement
+        && document.activeElement.classList
+        && document.activeElement.classList.contains('contrib-card-img')) {{
+      e.preventDefault();
+      open(document.activeElement);
+    }}
+  }});
+}})();
 // 초기: 첫 주만 표시 + 모든 주의 filter 한 번씩 호출
 showWeek(0);
 document.querySelectorAll('section.week-block').forEach(el => {{
