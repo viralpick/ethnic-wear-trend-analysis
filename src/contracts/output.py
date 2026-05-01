@@ -116,11 +116,15 @@ class TrendClusterSummary(BaseModel):
 
 class UnknownAttributeSignal(BaseModel):
     """
-    purpose: 매핑에 없는 새 해시태그 자동 감지 (spec §4.2 / §8.3 v2.2)
+    purpose: 매핑에 없는 새 해시태그 자동 감지 (spec §4.2 / §8.3 v2.3)
     stage: output
     ownership: analysis-owned
     stability: locked
 
+    v2.3 (2026-05-02, Phase 2 Tier 1/2/4):
+    - Tier 1: IG meta stoplist drop / 자명 silhouette 매핑 추가.
+    - Tier 2: ethnic_co_share 의미 변경 — fashion_density >= D 인 fashion-context post 비율.
+    - Tier 4: vision LLM raw 단어 inject — signal_type 으로 source 분류.
     v2.2 (2026-05-01) emergence rule:
     - bucket key = post_date IST. weekly cadence 로 매 주 anchor 별 평가.
     - surface(tag) := baseline_window 부재 + spike_window K회 + ethnic_co_share R 통과.
@@ -134,3 +138,7 @@ class UnknownAttributeSignal(BaseModel):
     first_seen: date
     likely_category: str | None = None      # 예: "technique?"
     reviewed: bool = False
+    # v2.3 (2026-05-02) — source 분류. 'hashtag' / 'vision_garment' / 'vision_fabric' /
+    # 'vision_technique' / 'llm_classified'. tag 가 여러 source 에 모두 등장하면 hashtag
+    # 우선 (=primary signal). DDL 의 signal_type column 과 1:1.
+    signal_type: str = "hashtag"

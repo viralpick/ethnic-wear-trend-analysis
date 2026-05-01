@@ -234,3 +234,154 @@ def test_evaluate_at_window_boundaries() -> None:
     # anchor=4/12 → spike=[3/30, 4/12]: 4/20 IST post 들이 spike 밖 → surface 안 됨
     out2 = evaluate_at(counters, anchor=date(2026, 4, 12))
     assert out2 == []
+
+
+# ---- v2.3: Tier 1 IG meta stoplist ----
+
+def test_meta_stoplist_drops_love_reels(tmp_path: Path) -> None:
+    """meta tag (love/reels*) 는 hashtag list 에서 drop → buckets/co_occur 에 안 들어감."""
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#love", "#reelsindia", "#handloom", "#saree"],
+              post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    counters, _ = load_state(path)
+    assert "love" not in counters.buckets
+    assert "reelsindia" not in counters.buckets
+    assert "handloom" in counters.buckets
+    assert "saree" in counters.buckets
+
+
+def test_meta_stoplist_does_not_block_fashion_context(tmp_path: Path) -> None:
+    """post 에 meta tag 만 있고 fashion tag 가 같이 있으면 fashion-context 통과."""
+    path = tmp_path / "signals.json"
+    # #handloom + #saree(known fashion) + #love(stoplist) → density = 2/2 = 1.0 (love drop 후)
+    items = [
+        _make(["#handloom", "#saree", "#love"],
+              post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    assert len(signals) == 1
+    assert signals[0].tag == "#handloom"
+
+
+# ---- v2.3: Tier 2 fashion-density 임계 ----
+
+def test_fashion_density_excludes_meta_only_post(tmp_path: Path) -> None:
+    """post 가 unknown tag + 일반 noise (meta 제외 후 known 0개) → fashion_density 0.
+
+    옛 룰은 has_known_fashion=False 라도 카운트했으나 v2.3 은 fashion_density >= 0.3
+    필요. 이 케이스는 co_occur numerator 0 → ethnic_co_share 0 → surface 차단.
+    """
+    path = tmp_path / "signals.json"
+    # #handloom 만 + 임의 unknown tag (둘 다 unknown). known_fashion 0개. density 0.
+    items = [
+        _make(["#handloom", "#randomthing"],
+              post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26))
+    assert signals == []
+
+
+def test_fashion_density_threshold_override(tmp_path: Path) -> None:
+    """fashion_density 0.0 으로 풀면 density 무시 → 옛 v2.2 와 같은 효과."""
+    from attributes.unknown_signal_tracker import EmergenceParams
+    path = tmp_path / "signals.json"
+    items = [
+        _make(["#handloom", "#randomthing"],
+              post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    params = EmergenceParams(fashion_density=0.0)
+    signals = run_weekly_replay(items, path, anchor=date(2026, 4, 26), params=params)
+    # density 0 도 통과 → 모든 post 가 fashion-context → co_occur n_fc=n_tot → ethnic_co_share=1.0
+    assert len(signals) >= 1
+
+
+# ---- v2.3: Tier 4 vision raw input + signal_type ----
+
+def test_vision_extra_tags_inject_signal_type(tmp_path: Path) -> None:
+    """extra_tags_per_post 에서 vision_garment category 로 들어온 단어가 surface 시 signal_type=vision_garment."""
+    from attributes.unknown_signal_tracker import compute_weekly_emergence
+    items = [
+        _make([], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    extra = {f"p{i}": {"vision_garment": ["futurewear"]} for i in range(6)}
+    counters, signals = compute_weekly_emergence(
+        items, anchor=date(2026, 4, 26), extra_tags_per_post=extra,
+    )
+    assert len(signals) == 1
+    sig = signals[0]
+    assert sig.tag == "#futurewear"
+    assert sig.signal_type == "vision_garment"
+    assert "vision_garment" in counters.sources["futurewear"]
+
+
+def test_vision_signal_hashtag_overrides_vision(tmp_path: Path) -> None:
+    """같은 tag 가 hashtag + vision 양쪽 source 면 hashtag 우선."""
+    from attributes.unknown_signal_tracker import compute_weekly_emergence
+    items = [
+        _make(["#newthing"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    extra = {f"p{i}": {"vision_fabric": ["newthing"]} for i in range(6)}
+    _, signals = compute_weekly_emergence(
+        items, anchor=date(2026, 4, 26), extra_tags_per_post=extra,
+    )
+    # vision injected → fashion-context 자동 통과 → surface
+    assert len(signals) == 1
+    assert signals[0].signal_type == "hashtag"  # hashtag 우선
+
+
+def test_vision_only_post_is_fashion_context_auto(tmp_path: Path) -> None:
+    """post 에 hashtag 0개 + vision word 만 있어도 fashion-context (auto)."""
+    from attributes.unknown_signal_tracker import compute_weekly_emergence
+    # post 의 hashtag 는 비어있고, vision_garment 만 inject
+    items = [
+        _make([], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    extra = {f"p{i}": {"vision_garment": ["mysteryword"]} for i in range(6)}
+    _, signals = compute_weekly_emergence(
+        items, anchor=date(2026, 4, 26), extra_tags_per_post=extra,
+    )
+    assert len(signals) == 1
+    assert signals[0].tag == "#mysteryword"
+
+
+def test_state_persistence_includes_sources(tmp_path: Path) -> None:
+    """sources field 는 save → load 라운드트립 보존."""
+    from attributes.unknown_signal_tracker import compute_weekly_emergence, save_state
+    items = [
+        _make(["#handloom", "#saree"], post_date=datetime(2026, 4, 19, 18, 30), post_id=f"p{i}")
+        for i in range(6)
+    ]
+    extra = {f"p{i}": {"vision_garment": ["futuretag"]} for i in range(6)}
+    counters, _ = compute_weekly_emergence(
+        items, anchor=date(2026, 4, 26), extra_tags_per_post=extra,
+    )
+    path = tmp_path / "signals.json"
+    save_state(path, counters, {})
+
+    counters2, _ = load_state(path)
+    assert counters2.sources.get("handloom") == {"hashtag"}
+    assert counters2.sources.get("futuretag") == {"vision_garment"}
+
+
+# ---- mapping_tables 자명 누락 ----
+
+def test_known_hashtags_includes_new_silhouettes() -> None:
+    """12w eval 자명 누락 — Tier 1 매핑 추가 검증."""
+    from attributes.mapping_tables import all_known_hashtags
+    known = all_known_hashtags()
+    for t in (
+        "salwarkameez", "punjabisuit", "partywearsuits", "designersuits",
+        "cottonsuits", "shortkurti", "sareeindia",
+        "weddingfashion", "weddingcollection",
+    ):
+        assert t in known, f"missing {t}"

@@ -421,6 +421,7 @@ def run_representative_phase(
     from pipelines.load_enriched import (  # noqa: I001
         compute_growth_rate,
         dedup_by_url_short_tag,
+        extract_vision_raw_tags,
         filter_by_date_range,
         growth_rate_factor_map,
         load_enriched_files,
@@ -491,7 +492,13 @@ def run_representative_phase(
     state_path = settings.paths.outputs / "unknown_signals_weekly.json"
     emergence_pool = dedup_by_url_short_tag(pool) if pool else pool
     normalized_pool = [it.normalized for it in emergence_pool]
-    counters, signals = compute_weekly_emergence(normalized_pool, end_date, params=params)
+    # spec §4.2 v2.3 Tier 4 — vision LLM raw garment/fabric/technique 단어 inject.
+    # ethnic_co_share 자동 1.0 (vision LLM 이 이미 ethnic 판정한 post).
+    extra_tags_per_post = extract_vision_raw_tags(emergence_pool) if emergence_pool else {}
+    counters, signals = compute_weekly_emergence(
+        normalized_pool, end_date, params=params,
+        extra_tags_per_post=extra_tags_per_post,
+    )
     # state file persist (review HTML 호환)
     _, weeks_state = load_state(state_path)
     weeks_state[_monday_of(end_date).isoformat()] = [_serialize_signal(s) for s in signals]
@@ -500,11 +507,11 @@ def run_representative_phase(
     n_hashtag = emit_hashtag_weekly(counters, _monday_of(end_date), writer)
     n_signal = emit_unknown_signals(signals, writer)
     logger.info(
-        "emergence anchor=%s baseline=%d spike=%d K=%d floor=%d R=%.2f min=%d "
-        "hashtag_weekly=%d unknown_signals=%d (surfaced=%d)",
+        "emergence anchor=%s baseline=%d spike=%d K=%d floor=%d R=%.2f min=%d D=%.2f "
+        "vision_post=%d hashtag_weekly=%d unknown_signals=%d (surfaced=%d)",
         end_date, params.baseline_days, params.spike_days, params.spike_threshold,
-        params.baseline_floor, params.co_share, params.min_posts,
-        n_hashtag, n_signal, len(signals),
+        params.baseline_floor, params.co_share, params.min_posts, params.fashion_density,
+        len(extra_tags_per_post), n_hashtag, n_signal, len(signals),
     )
 
     if sink == "dry_run":

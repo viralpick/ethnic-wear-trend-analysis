@@ -260,3 +260,45 @@ def filter_by_date_range(
         start_date, end_date, len(items), len(out),
     )
     return out
+
+
+def extract_vision_raw_tags(
+    enriched: list[EnrichedContentItem],
+) -> dict[str, dict[str, list[str]]]:
+    """post_id → category → vision LLM raw 단어 list (Phase 2 Tier 4).
+
+    각 EnrichedContentItem 의 canonicals[*].representative 에서 free-form lowercase
+    단어를 category 별로 모음. spec §4.2 v2.3 Tier 4 — unknown_signal_tracker 의
+    extra_tags input. signal_type 분류용 source category 동시 보존.
+
+    category 매핑:
+    - vision_garment: upper_garment_type / lower_garment_type / outer_layer
+    - vision_fabric:  fabric
+    - vision_technique: technique
+
+    vision LLM 이 이미 ethnic 판정한 post 라 fashion-context 자동 인정 (build_counters
+    안 has_vision_signal 분기). dedup 은 단어 set, 빈 단어/None 제외.
+    """
+    category_attrs: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("vision_garment", ("upper_garment_type", "lower_garment_type", "outer_layer")),
+        ("vision_fabric", ("fabric",)),
+        ("vision_technique", ("technique",)),
+    )
+    out: dict[str, dict[str, list[str]]] = {}
+    for item in enriched:
+        per_category: dict[str, set[str]] = {}
+        for canonical in item.canonicals:
+            ref = canonical.representative
+            for category, attrs in category_attrs:
+                bucket = per_category.setdefault(category, set())
+                for attr in attrs:
+                    v = getattr(ref, attr, None)
+                    if v:
+                        bucket.add(str(v).lower())
+        if any(per_category.values()):
+            out[item.normalized.source_post_id] = {
+                category: sorted(words)
+                for category, words in per_category.items()
+                if words
+            }
+    return out

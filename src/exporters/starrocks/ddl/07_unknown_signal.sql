@@ -6,7 +6,7 @@
 -- _latest view 가 (tag, week_start_date) 별 최신 (computed_at MAX) 1 row 노출.
 --
 -- count_3day 는 옛 v1 호환 컬럼 — sink 가 count_recent_window 와 같은 값 dump.
--- 신규 컬럼은 v2.2 에서 추가됨 (migration 005).
+-- 신규 컬럼은 v2.2 에서 추가됨 (migration 005). v2.3 에서 signal_type 추가 (migration 007).
 
 CREATE TABLE IF NOT EXISTS unknown_signal (
     tag                  VARCHAR(128)  NOT NULL  COMMENT '해시태그 (# prefix 포함, lowercase)',
@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS unknown_signal (
     first_seen           DATE          NOT NULL  COMMENT '최초 발견일 (IST)',
     likely_category      VARCHAR(64)   NULL      COMMENT 'technique? / fabric? 등 추정',
     reviewed             TINYINT       NOT NULL  COMMENT '0=pending, 1=reviewed',
-    schema_version       VARCHAR(32)   NOT NULL  COMMENT 'pipeline_v2.2',
+    schema_version       VARCHAR(32)   NOT NULL  COMMENT 'pipeline_v2.3',
     week_start_date      DATE          NULL      COMMENT 'weekly anchor 의 주 시작일 (월요일, IST). v2.2 신규',
-    count_recent_window  INT           NULL      COMMENT 'spike window 안 등장 횟수. v2.2 신규'
+    count_recent_window  INT           NULL      COMMENT 'spike window 안 등장 횟수. v2.2 신규',
+    signal_type          VARCHAR(32)   NULL      COMMENT 'v2.3 source — hashtag / vision_garment / vision_fabric / vision_technique / llm_classified. NULL = legacy v2.2'
 ) ENGINE = OLAP
 DUPLICATE KEY (tag, computed_at)
 DISTRIBUTED BY HASH (tag) BUCKETS 4
