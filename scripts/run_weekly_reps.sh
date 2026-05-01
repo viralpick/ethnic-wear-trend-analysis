@@ -16,21 +16,36 @@ cd "$(dirname "$0")/.."
 GLOB="${1:-outputs/backfill/page_*_enriched.json}"
 SINK="${SINK:-starrocks}"
 
-# 12 주차 — 각 주의 Sunday (end_date). oldest first.
-WEEKS=(
-  2026-02-08  # 1주차 (가장 과거)
-  2026-02-15
-  2026-02-22
-  2026-03-01
-  2026-03-08
-  2026-03-15
-  2026-03-22
-  2026-03-29
-  2026-04-05
-  2026-04-12
-  2026-04-19
-  2026-04-26  # 12주차 (이번 주)
-)
+# WEEKS 환경변수로 override 가능 (공백 구분 string). default 는 12주.
+# 24주: WEEKS="2025-11-16 2025-11-23 ... 2026-04-26" bash scripts/run_weekly_reps.sh
+# 또는 N_WEEKS env + LATEST_SUNDAY 로 자동 생성.
+if [[ -n "${WEEKS:-}" ]]; then
+  read -r -a WEEKS <<<"$WEEKS"
+elif [[ -n "${N_WEEKS:-}" ]]; then
+  LATEST="${LATEST_SUNDAY:-2026-04-26}"
+  WEEKS=()
+  # macOS date: oldest 부터 newest 까지 N개
+  for ((i = N_WEEKS - 1; i >= 0; i--)); do
+    days=$((i * 7))
+    WEEKS+=("$(date -j -v-"${days}d" -f "%Y-%m-%d" "$LATEST" "+%Y-%m-%d")")
+  done
+else
+  # 기본 12주차 — 각 주의 Sunday (end_date). oldest first.
+  WEEKS=(
+    2026-02-08  # 1주차 (가장 과거)
+    2026-02-15
+    2026-02-22
+    2026-03-01
+    2026-03-08
+    2026-03-15
+    2026-03-22
+    2026-03-29
+    2026-04-05
+    2026-04-12
+    2026-04-19
+    2026-04-26  # 12주차 (이번 주)
+  )
+fi
 
 OUT_DIR="outputs/weekly_review"
 mkdir -p "$OUT_DIR"
