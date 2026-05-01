@@ -300,9 +300,13 @@ def test_emit_representative_row_pulls_from_summary(populated_weekly_history) ->
     assert row["weekly_direction"] == Direction.UP.value
     assert row["weekly_change_pct"] == 15.0
     assert row["display_name"] == "kurta set / block print / cotton"
-    # score_breakdown 4 키 unwrap.
+    # score_breakdown 5 키 — momentum_components nested (B-2 IG/YT 분리, 2026-05-01 fix).
     assert row["score_breakdown"] == {
         "social": 30.0, "youtube": 20.0, "cultural": 10.0, "momentum": 20.0,
+        "momentum_components": {
+            "post_growth": 0.5, "hashtag_velocity": 0.2,
+            "new_ig_account_ratio": 0.1, "new_yt_channel_ratio": 0.0,
+        },
     }
     # color_palette = drilldown 그대로 (cluster-level palette = representative palette).
     assert row["color_palette"] is not None

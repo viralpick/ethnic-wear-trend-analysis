@@ -153,7 +153,7 @@ def _summary_color_palette(
 
 def _summary_score_breakdown(
     summary: TrendClusterSummary | None,
-) -> dict[str, float] | None:
+) -> dict[str, Any] | None:
     if summary is None:
         return None
     bd = summary.score_breakdown
@@ -162,6 +162,7 @@ def _summary_score_breakdown(
         "youtube": bd.youtube,
         "cultural": bd.cultural,
         "momentum": bd.momentum,
+        "momentum_components": bd.momentum_components.model_dump(),
     }
 
 

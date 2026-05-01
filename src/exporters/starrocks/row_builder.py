@@ -295,7 +295,7 @@ def build_representative_row(
     week_start_date: str,
     computed_at: str,
     score_total: float | None,
-    score_breakdown: dict[str, float] | None,
+    score_breakdown: dict[str, Any] | None,
     lifecycle_stage: str | None,
     weekly_change_pct: float | None,
     weekly_direction: str | None,
@@ -315,7 +315,9 @@ def build_representative_row(
         brand 는 로직 C (log-scale 균등 분배 + top 5 + threshold) 결과.
       color_palette: representative 단위 palette (spec §2.3 — caller 가 cluster 합성).
       trajectory: 최근 12주 score (부족분 0). 길이 12 권장.
-      score_breakdown: {social, youtube, cultural, momentum} 부분 점수.
+      score_breakdown: {social, youtube, cultural, momentum, momentum_components}
+        부분 점수. momentum_components 는 nested {post_growth, hashtag_velocity,
+        new_ig_account_ratio, new_yt_channel_ratio} (B-2 IG/YT 분리, sub-signal).
       effective_item_count: Phase β1 (2026-04-28) — multiplier-scaled batch 분모.
         view-layer normalize (`score_total / effective_item_count`) 용. None 이면
         NULL 적재 (β1 wiring 안된 호출자 backward-compat).
