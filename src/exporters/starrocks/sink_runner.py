@@ -57,6 +57,7 @@ GROUP_TABLE = "canonical_group"
 OBJECT_TABLE = "canonical_object"
 REPRESENTATIVE_TABLE = "representative_weekly"
 UNKNOWN_SIGNAL_TABLE = "unknown_signal"
+HASHTAG_WEEKLY_TABLE = "hashtag_weekly"
 
 _DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
 _EVIDENCE_TOP_K = 4
@@ -225,11 +226,13 @@ def emit_unknown_signals(
     *,
     computed_at: str | None = None,
 ) -> int:
-    """spec §4.2 — 매핑에 없는 새 해시태그 적재.
+    """spec §4.2 / §8.3 v2.2 — 매핑에 없는 새 해시태그 적재.
 
     signals: list[UnknownAttributeSignal]. 빈 list 면 적재 skip.
-    DUPLICATE KEY (tag, computed_at) — 같은 tag day-by-day 변화 추적, _latest view 가
-    최신 1 row 노출.
+    DUPLICATE KEY (tag, computed_at) — 같은 (tag, week_start_date) 의 재산출 history
+    추적. _latest view 가 (tag, week_start_date) 별 max(computed_at) 1 row 노출.
+
+    옛 count_3day 컬럼은 NOT NULL 호환 — count_recent_window 와 같은 값 dump (deprecated).
     """
     if not signals:
         logger.info("emit_unknown_signals skip — empty list")
@@ -239,16 +242,57 @@ def emit_unknown_signals(
         {
             "tag": s.tag,
             "computed_at": computed,
-            "count_3day": s.count_3day,
+            "count_3day": s.count_recent_window,  # legacy NOT NULL — 같은 값
+            "count_recent_window": s.count_recent_window,
+            "week_start_date": s.week_start_date.isoformat(),
             "first_seen": s.first_seen.isoformat(),
             "likely_category": s.likely_category,
             "reviewed": 1 if s.reviewed else 0,
-            "schema_version": "pipeline_v1.0",
+            "schema_version": "pipeline_v2.2",
         }
         for s in signals
     ]
     n = writer.write_batch(UNKNOWN_SIGNAL_TABLE, rows)
     logger.info("emit_unknown_signals done count=%d", n)
+    return n
+
+
+def emit_hashtag_weekly(
+    counters,  # EmergenceCounters — runtime import 회피
+    week_start_date,  # date
+    writer: StarRocksWriter,
+    *,
+    computed_at: str | None = None,
+) -> int:
+    """spec §4.2 v2.2 — hashtag_weekly raw 카운트 + co-occurrence 적재.
+
+    counters: tracker.EmergenceCounters (buckets / co_occur / known).
+    매핑 안/밖 모든 hashtag 적재 — emergence rule 평가 source / LLM 분류 input cache.
+
+    같은 (tag, week_start_date) 의 재산출은 computed_at 차이로 누적, view 가 dedup.
+    """
+    if not counters or not counters.buckets:
+        logger.info("emit_hashtag_weekly skip — empty counters")
+        return 0
+    computed = computed_at or _now_utc_str()
+    week_iso = week_start_date.isoformat()
+    rows = []
+    for tag, b in counters.buckets.items():
+        n_instances = sum(b.values())
+        # n_posts = post-level dedup count (co_occur 의 n_total)
+        n_kf, n_total = counters.co_occur.get(tag, (0, n_instances))
+        rows.append({
+            "tag": tag,  # # 미포함 lowercase
+            "week_start_date": week_iso,
+            "computed_at": computed,
+            "n_posts": int(n_total),
+            "n_instances": int(n_instances),
+            "n_posts_with_known_fashion": int(n_kf),
+            "is_known_mapping": 1 if counters.known.get(tag, False) else 0,
+            "schema_version": "pipeline_v2.2",
+        })
+    n = writer.write_batch(HASHTAG_WEEKLY_TABLE, rows)
+    logger.info("emit_hashtag_weekly done count=%d week=%s", n, week_iso)
     return n
 
 

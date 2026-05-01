@@ -396,6 +396,7 @@ def run_representative_phase(
     end_date: date,
     sink: str,
     dedup_by_url: bool = False,
+    emergence_params=None,  # EmergenceParams | None — None 이면 default
 ) -> None:
     """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → growth rate 계산
     → url_short_tag dedup → growth-weighted score → representative 적재.
@@ -462,6 +463,42 @@ def run_representative_phase(
         enriched, summaries, target_date, writer,
         weekly_history_path=weekly_history_path,
     )
+
+    # spec §4.2 / §8.3 v2.2 — weekly emergence + hashtag_weekly. anchor=end_date.
+    # 입력은 window filter 전 전체 pool — baseline window (anchor -70 ~ -14일) 가
+    # representative window 보다 넓어서. url_short_tag dedup 만 적용.
+    # hashtag_weekly: 모든 hashtag (known + unknown) 의 그 주 카운트 + co-occurrence
+    # 적재. emergence rule reuse / LLM 분류 input cache.
+    # unknown_signal: emergence rule 통과한 surface 만.
+    from attributes.unknown_signal_tracker import (  # noqa: I001
+        EmergenceParams,
+        _monday_of,
+        compute_weekly_emergence,
+        save_state,
+        load_state,
+        _serialize_signal,
+    )
+    from exporters.starrocks.sink_runner import emit_hashtag_weekly, emit_unknown_signals  # noqa: I001
+    params = emergence_params if emergence_params is not None else EmergenceParams()
+    state_path = settings.paths.outputs / "unknown_signals_weekly.json"
+    emergence_pool = dedup_by_url_short_tag(pool) if pool else pool
+    normalized_pool = [it.normalized for it in emergence_pool]
+    counters, signals = compute_weekly_emergence(normalized_pool, end_date, params=params)
+    # state file persist (review HTML 호환)
+    _, weeks_state = load_state(state_path)
+    weeks_state[_monday_of(end_date).isoformat()] = [_serialize_signal(s) for s in signals]
+    save_state(state_path, counters, weeks_state)
+    # DB 적재 — hashtag_weekly + unknown_signal
+    n_hashtag = emit_hashtag_weekly(counters, _monday_of(end_date), writer)
+    n_signal = emit_unknown_signals(signals, writer)
+    logger.info(
+        "emergence anchor=%s baseline=%d spike=%d K=%d floor=%d R=%.2f min=%d "
+        "hashtag_weekly=%d unknown_signals=%d (surfaced=%d)",
+        end_date, params.baseline_days, params.spike_days, params.spike_threshold,
+        params.baseline_floor, params.co_share, params.min_posts,
+        n_hashtag, n_signal, len(signals),
+    )
+
     if sink == "dry_run":
         from exporters.starrocks.dry_run import log_dry_run_summary  # noqa: I001
         log_dry_run_summary(writer, counts)
@@ -571,7 +608,41 @@ def _parse_args() -> argparse.Namespace:
         help="--phase representative: raw DB url 기준 동일 post 중 1 건만 keep "
              "(cluster score inflate 방지).",
     )
+    # spec §4.2 / §8.3 v2.2 — unknown_signal emergence rule override.
+    parser.add_argument("--unknown-baseline-days", type=int, default=None,
+                        help="emergence baseline window 길이 (default 56일).")
+    parser.add_argument("--unknown-spike-days", type=int, default=None,
+                        help="emergence spike window 길이 (default 14일).")
+    parser.add_argument("--unknown-spike-threshold", type=int, default=None,
+                        help="emergence spike count 임계 K (default 3).")
+    parser.add_argument("--unknown-baseline-floor", type=int, default=None,
+                        help="emergence baseline 등장 허용치 floor (default 0).")
+    parser.add_argument("--unknown-co-share", type=float, default=None,
+                        help="ethnic_co_share 임계 R (default 0.5). known fashion hashtag "
+                             "와 같이 등장한 post 비율.")
+    parser.add_argument("--unknown-min-posts", type=int, default=None,
+                        help="measurement stability 임계 (default 5).")
     return parser.parse_args()
+
+
+def _build_emergence_params(args: argparse.Namespace):
+    """argparse 의 --unknown-* override → EmergenceParams (spec §4.2 v2.2)."""
+    from attributes.unknown_signal_tracker import EmergenceParams  # noqa: I001
+    defaults = EmergenceParams()
+    return EmergenceParams(
+        baseline_days=args.unknown_baseline_days
+            if args.unknown_baseline_days is not None else defaults.baseline_days,
+        spike_days=args.unknown_spike_days
+            if args.unknown_spike_days is not None else defaults.spike_days,
+        spike_threshold=args.unknown_spike_threshold
+            if args.unknown_spike_threshold is not None else defaults.spike_threshold,
+        baseline_floor=args.unknown_baseline_floor
+            if args.unknown_baseline_floor is not None else defaults.baseline_floor,
+        co_share=args.unknown_co_share
+            if args.unknown_co_share is not None else defaults.co_share,
+        min_posts=args.unknown_min_posts
+            if args.unknown_min_posts is not None else defaults.min_posts,
+    )
 
 
 def _resolve_target_date(cli: str | None, settings_target: date | None) -> date:
@@ -752,6 +823,7 @@ def main() -> None:
             end_date=end,
             sink=args.sink,
             dedup_by_url=args.dedup_by_url,
+            emergence_params=_build_emergence_params(args),
         )
         return
 
