@@ -69,10 +69,32 @@ def _wrap(per_object_clusters: list[list[WeightedCluster]]) -> list[tuple[list[W
 def test_hybrid_config_default_matches_module_const() -> None:
     """settings 격리 규칙으로 settings.py 가 vision 을 import 못 함 → hardcode.
     drift 가 일어나면 pinning 으로 즉시 발견."""
+    from vision.hybrid_palette import (
+        CHROMA_RATIO_MIN, CHROMA_VIVID, HUE_NEAR_DEG,
+        R2_MERGE_DELTAE76, R3_DROP_DELTAE76, R2_MIN_SHARE,
+    )
     cfg = HybridPaletteConfig()
     assert cfg.pick_match_deltae76 == R3_DROP_DELTAE76 == 28.0
     assert cfg.r2_min_share == R2_MIN_SHARE == 0.10
+    assert cfg.chroma_vivid == CHROMA_VIVID == 15.0
+    assert cfg.hue_near_deg == HUE_NEAR_DEG == 30.0
+    assert cfg.r2_merge_deltae76 == R2_MERGE_DELTAE76 == 40.0
+    assert cfg.chroma_ratio_min == CHROMA_RATIO_MIN == 0.5
     assert cfg.top_n == 3
+
+
+def test_post_palette_config_default_matches_module_const() -> None:
+    """vision/post_palette.py 모듈 상수 ↔ PostPaletteConfig default drift 가드."""
+    from settings import PostPaletteConfig
+    from vision.post_palette import (
+        MAX_POST_PALETTE_CLUSTERS,
+        MIN_POST_PALETTE_SHARE,
+        POST_PALETTE_MERGE_DELTA_E,
+    )
+    cfg = PostPaletteConfig()
+    assert cfg.max_clusters == MAX_POST_PALETTE_CLUSTERS == 3
+    assert cfg.merge_deltae76_threshold == POST_PALETTE_MERGE_DELTA_E == 10.0
+    assert cfg.min_cluster_share == MIN_POST_PALETTE_SHARE == 0.05
 
 
 # --------------------------------------------------------------------------- #
