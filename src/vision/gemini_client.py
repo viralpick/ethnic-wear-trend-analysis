@@ -129,6 +129,18 @@ class GeminiVisionLLMClient:
                 temperature=0.0,
             ),
         )
+        # Cost baseline (2026-05-01): token rate 측정 — frame resize 안 하면 384×384 이하
+        # (~258 tok) vs 1024+ (~1,290 tok, 5×). 1주 운영 후 평균 산출 → resize/quality
+        # tuning 의사결정 데이터. usage_metadata 누락 시 silent skip (정책상 안전).
+        usage = getattr(resp, "usage_metadata", None)
+        if usage is not None:
+            logger.info(
+                "gemini_usage model=%s image_bytes=%d prompt_tokens=%s output_tokens=%s",
+                self._model_id,
+                len(image_bytes),
+                getattr(usage, "prompt_token_count", None),
+                getattr(usage, "candidates_token_count", None),
+            )
         raw = resp.text or ""
         if not raw.strip():
             raise ValueError("gemini returned empty text")
