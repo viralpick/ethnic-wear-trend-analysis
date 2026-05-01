@@ -344,8 +344,8 @@ class VideoFrameConfig(BaseModel):
     n_candidate 균등 sampling → quality score (Laplacian + brightness gate) → scene
     diversity NMS (HSV H+S corr) → top n_final.
     """
-    n_candidate: int = 50
-    n_final: int = 20
+    n_candidate: int = 30
+    n_final: int = 15
     blur_min: float = 100.0
     brightness_range: tuple[float, float] = (30.0, 225.0)
     # scene change 임계 (cv2.HISTCMP_CORREL ∈ [-1,1]). 0.85 = 강한 컷 차단 + 같은 의상

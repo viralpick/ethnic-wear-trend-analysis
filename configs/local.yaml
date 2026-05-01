@@ -332,8 +332,11 @@ vision:
   # → scene diversity NMS (HSV H+S corr) → top n_final 만 Pipeline B 통과.
   # 길이 무관 cost 일정: decode 50 × ~10ms ≈ 500ms / 영상.
   video_frame:
-    n_candidate: 50
-    n_final: 20
+    # 2026-05-01 P0-2: 50/20 → 30/15. n_candidate=30 으로 메모리 ~310 MB → ~185 MB
+    # 감 (40%↓), n_final=15 로 다양성 drop 비율 50% 보존 + Gemini call 25%↓.
+    # frame 수 ↓ 가 색 추출 정확도에 미치는 영향은 1주 smoke 후 평가.
+    n_candidate: 30
+    n_final: 15
     blur_min: 100.0           # Laplacian variance < 100 = motion blur drop
     brightness_range: [30.0, 225.0]  # 30 미만 under / 225 초과 over exposure drop
     # 같은 장면 best frame 중복 차단 (HSV H+S corr ≥ 0.85 = 같은 장면).

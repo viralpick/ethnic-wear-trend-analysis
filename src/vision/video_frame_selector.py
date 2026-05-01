@@ -24,8 +24,8 @@ from vision.frame_quality import compute_quality_score, histogram_correlation
 @dataclass(frozen=True)
 class VideoFrameSelectorConfig:
     """frame selection 파라미터. 모든 magic value 단일 source."""
-    n_candidate: int = 50
-    n_final: int = 20
+    n_candidate: int = 30
+    n_final: int = 15
     blur_min: float = 100.0
     brightness_range: tuple[float, float] = (30.0, 225.0)
     # scene change 임계값 (cv2 HISTCMP_CORREL). 이 값 이상이면 "같은 장면" 으로 보고 skip.

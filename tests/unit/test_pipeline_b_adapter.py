@@ -536,6 +536,21 @@ def test_encode_jpeg_deterministic_distinct_inputs_distinct_bytes() -> None:
     assert _encode_jpeg_deterministic(rgb_red) != _encode_jpeg_deterministic(rgb_green)
 
 
+def test_video_frame_config_default_matches_selector_default() -> None:
+    """settings.VideoFrameConfig default ↔ vision.VideoFrameSelectorConfig default drift 가드.
+
+    yaml/settings/vision dataclass 셋 중 한 곳만 갱신되면 drift. 같은 default 값 byte-동일.
+    """
+    settings_default = VideoFrameConfig()
+    vision_default = VideoFrameSelectorConfig()
+    assert settings_default.n_candidate == vision_default.n_candidate == 30
+    assert settings_default.n_final == vision_default.n_final == 15
+    assert settings_default.blur_min == vision_default.blur_min
+    assert tuple(settings_default.brightness_range) == vision_default.brightness_range
+    assert settings_default.scene_corr_max == vision_default.scene_corr_max
+    assert settings_default.histogram_bins == vision_default.histogram_bins
+
+
 def test_to_selector_cfg_field_by_field_mapping() -> None:
     """VideoFrameConfig (Pydantic) → VideoFrameSelectorConfig (frozen dataclass) 6 필드 1:1.
 
