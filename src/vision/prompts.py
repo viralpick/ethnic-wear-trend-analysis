@@ -45,14 +45,25 @@ Phase 0 에서 v0.1 확정 (scripts/pilot_llm_bbox.py). 이후 수정 이력:
          upper 와 lower 가 동일 fabric/print/색조로 매칭된 set 여부). 색 픽 규칙은 v0.7
          그대로 (color regression 방지). dress_as_single=True 시 is_co_ord_set=null.
          derive_styling_from_outfit 의 P1 매핑 (M3.I) 의 입력으로 사용 — 추가 LLM call 0.
+  v0.9 — 2026-05-02, garment / fabric / technique 3-tier escape 강제. (a) taxonomy
+         enum 매핑 시 그 정확한 단어, (b) ethnic 인데 enum 외 → SINGLE lowercase raw 단어
+         (Phase 2 emergence pipeline 의 input 으로 누적), (c) non-ethnic / 식별불가 → null.
+         기존 free-form (예시만 제공) 가 noise (kurti_dress / saree-blouse 등) 를
+         만들어 normalize 단계에서 None 으로 빠지면 cluster 진입 실패하던 문제 해소.
+         cluster fan-out 은 enum 매핑된 것만 (옵션 C: g_val is None → drop), raw 는
+         enriched JSON 에 보존. project_canonical_zero_fallback_removal_2026_05_02 +
+         후속 (Phase 2: unknown_signal_tracker 확장) 참조.
 """
 from __future__ import annotations
 
-from contracts.common import Silhouette
+from contracts.common import Fabric, GarmentType, Silhouette, Technique
 
-PROMPT_VERSION = "v0.8"
+PROMPT_VERSION = "v0.9"
 
 _SILHOUETTE_ENUM = [s.value for s in Silhouette]
+_GARMENT_ENUM = [g.value for g in GarmentType]
+_FABRIC_ENUM = [f.value for f in Fabric]
+_TECHNIQUE_ENUM = [t.value for t in Technique]
 
 SYSTEM_PROMPT = (
     "You are an analyzer for Indian ethnic wear content. Given a single image and "
@@ -93,10 +104,19 @@ SYSTEM_PROMPT = (
     "- person_bbox_area_ratio = w * h.\n"
     "- For a single-piece outfit (saree drape, lehenga choli viewed as single, ethnic dress), "
     "set dress_as_single=true and use upper_garment_type only; lower_garment_type=null.\n"
-    "- upper_garment_type / lower_garment_type MUST be a SINGLE lowercase word "
-    "(e.g. \"kurta\", \"saree\", \"anarkali\", \"sherwani\", \"palazzo\", \"churidar\"). "
-    "NO slash, NO OR, NO parentheses, NO multiple values. "
-    "If unsure, pick the best single guess or null.\n"
+    f"- upper_garment_type — TIER selection (MUST be SINGLE lowercase word):\n"
+    f"  (a) If garment matches taxonomy, use the EXACT value from {_GARMENT_ENUM}.\n"
+    f"  (b) If garment is CLEARLY ETHNIC (Indian traditional / festive) but does NOT "
+    f"match (a), write the actual garment name as a SINGLE lowercase word "
+    f"(e.g. \"phulkari\", \"ghagra\", \"angarkha\", \"sherwani\", \"kurti\", \"choli\"). "
+    f"Only when upper_is_ethnic=true.\n"
+    f"  (c) Use null when garment is non-ethnic (T-shirt, blouse, jeans, western dress, "
+    f"swimwear) or unidentifiable / fully occluded.\n"
+    f"  NO slash, NO OR, NO parentheses, NO multiple values, NO multi-word.\n"
+    f"- lower_garment_type — same TIER selection (a)/(b)/(c) as upper_garment_type. "
+    f"For (b), examples: \"palazzo\", \"churidar\", \"salwar\", \"sharara\", \"lehenga\", "
+    f"\"dhoti\", \"ghagra\". For (c), western bottoms (jeans, leggings, shorts, mini "
+    f"skirt) → null.\n"
     "- upper_is_ethnic: judge INDEPENDENTLY whether upper_garment_type belongs to the "
     "Indian ethnic/traditional family (kurta, kurti, anarkali, saree blouse/choli, "
     "sherwani, angrakha, ethnic tunic, kurta-style dress, etc.). Western tops like "
@@ -156,17 +176,21 @@ SYSTEM_PROMPT = (
     "(e.g. green + cream weave → \"mint_green\"). Pick the dominant individual colors "
     "actually present (background + 1–2 most prominent motif colors). If individual "
     "colors are too small/scattered to call confidently, prefer fewer picks.\n"
-    "- fabric MUST be a SINGLE lowercase word describing the DOMINANT visible material "
-    "(e.g. \"cotton\", \"linen\", \"silk\", \"chiffon\", \"georgette\", \"rayon\", "
-    "\"khadi\", \"chanderi\", \"organza\", \"velvet\", \"net\", \"satin\"). "
-    "NO slash, NO multi-word (\"cotton_silk\" or \"cotton/silk\" NOT allowed — "
-    "pick the dominant single material). If unsure, null.\n"
-    "- technique MUST be a SINGLE lowercase word describing the DOMINANT decoration / "
-    "construction technique (e.g. \"chikankari\", \"block_print\", \"bandhani\", "
-    "\"zardosi\", \"kalamkari\", \"mirror_work\", \"gotapatti\", \"embroidery\", "
-    "\"schiffli\", \"ikat\", \"pintuck\", \"plain\"). "
-    "Use \"plain\" only when the garment is visibly undecorated. If the garment has "
-    "decoration but the specific technique is unclear, null. NO multi-word.\n"
+    f"- fabric — TIER selection (DOMINANT visible material, SINGLE lowercase word):\n"
+    f"  (a) If matches taxonomy, use EXACT value from {_FABRIC_ENUM}.\n"
+    f"  (b) If clearly a distinct fabric outside (a) (e.g. \"brocade_silk\" → no, but "
+    f"\"tulle\", \"taffeta\", \"banarasi\" as fabric → yes), write SINGLE lowercase word.\n"
+    f"  (c) null if unidentifiable / occluded / generic.\n"
+    f"  NO slash, NO multi-word (\"cotton_silk\" or \"cotton/silk\" NOT allowed — "
+    f"pick the dominant single material).\n"
+    f"- technique — TIER selection (DOMINANT decoration / construction, SINGLE "
+    f"lowercase word):\n"
+    f"  (a) If matches taxonomy, use EXACT value from {_TECHNIQUE_ENUM}.\n"
+    f"  (b) If clearly an ethnic decoration outside (a) (e.g. \"phulkari\", \"shibori\", "
+    f"\"applique\"), write SINGLE lowercase word.\n"
+    f"  (c) null when garment has decoration but the specific technique is unclear, "
+    f"or when garment is plain (use enum value \"solid\" for visibly undecorated). "
+    f"NO multi-word.\n"
     "- outer_layer: a SINGLE lowercase word for any traditional drape / outer worn "
     "OVER the upper garment (\"dupatta\", \"shawl\", \"stole\", \"jacket\", \"cardigan\", "
     "\"nehru\", \"shrug\"). Pick the most prominent one if multiple. Null if the outfit "

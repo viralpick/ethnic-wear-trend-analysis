@@ -182,7 +182,7 @@ vision_llm:
   #     drape 또는 outer 의류, 없으면 null), (2) is_co_ord_set (bool — upper+lower 가
   #     동일 fabric/print/색조로 의도적으로 매칭된 set 여부). 색 픽 규칙은 v0.7 그대로
   #     (color regression 방지). v0.7 cache 자동 무효화.
-  prompt_version: v0.8
+  prompt_version: v0.9
   # LocalJSONCache 저장 루트. outputs/ 하위 (gitignore 대상).
   cache_dir: outputs/llm_cache
 

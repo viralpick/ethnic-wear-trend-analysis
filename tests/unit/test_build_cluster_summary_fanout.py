@@ -204,3 +204,65 @@ def test_same_cluster_two_items_aggregated() -> None:
 
 def test_empty_input_returns_empty_dict() -> None:
     assert group_by_cluster([]) == {}
+
+
+# --------------------------------------------------------------------------- #
+# 옵션 C — garment None canonical drop, fabric None canonical keep (2026-05-02)
+# --------------------------------------------------------------------------- #
+
+
+def _enriched_with_canonical(
+    post_id: str, *, upper: str | None, fabric: str | None,
+) -> EnrichedContentItem:
+    """raw 단어 (enum 외 포함) 로 canonical 1개 직접 삽입. _GARMENT_MAP / _FABRIC_MAP
+    매핑 외 단어 → normalize None → 옵션 C 동작 검증용."""
+    bbox = (0.1, 0.1, 0.5, 0.7)
+    outfit = EthnicOutfit(
+        person_bbox=bbox,
+        person_bbox_area_ratio=0.35,
+        upper_garment_type=upper,
+        upper_is_ethnic=True if upper else None,
+        lower_garment_type=None,
+        lower_is_ethnic=None,
+        dress_as_single=True,
+        fabric=fabric,
+        technique=None,
+        color_preset_picks_top3=[],
+    )
+    canonical = CanonicalOutfit(
+        canonical_index=0,
+        representative=outfit,
+        members=[OutfitMember(image_id="img_0", outfit_index=0, person_bbox=bbox)],
+    )
+    return EnrichedContentItem(
+        normalized=_normalized(post_id),
+        garment_type=None,
+        fabric=None,
+        technique=None,
+        canonicals=[canonical],
+        classification_method_per_attribute={},
+        trend_cluster_key=None,
+    )
+
+
+def test_option_c_garment_unknown_raw_drops_canonical() -> None:
+    """prompt v0.9 (b) tier — vision LLM 이 enum 외 raw 단어 (예: phulkari) 답.
+    normalize None → 옵션 C: cluster fan-out 미참여 → grouping 0."""
+    item = _enriched_with_canonical("p1", upper="phulkari", fabric="silk")
+    grouped = group_by_cluster([item])
+    assert grouped == {}, "garment None → drop (fabric=silk 만 있어도 미참여)"
+
+
+def test_option_c_fabric_unknown_keeps_canonical() -> None:
+    """garment 명확 (saree → CASUAL_SAREE) + fabric raw (banarasi enum 외) →
+    casual_saree__unknown cluster keep. fabric None 은 옵션 C 가 허용."""
+    item = _enriched_with_canonical("p1", upper="saree", fabric="banarasi")
+    grouped = group_by_cluster([item])
+    assert "casual_saree__unknown" in grouped
+
+
+def test_option_c_both_enum_keeps_canonical() -> None:
+    """양축 enum 매핑 OK 시 정상 cluster_key 사용."""
+    item = _enriched_with_canonical("p1", upper="kurta", fabric="cotton")
+    grouped = group_by_cluster([item])
+    assert "straight_kurta__cotton" in grouped
