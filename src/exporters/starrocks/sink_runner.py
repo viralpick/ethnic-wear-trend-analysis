@@ -226,13 +226,14 @@ def emit_unknown_signals(
     *,
     computed_at: str | None = None,
 ) -> int:
-    """spec §4.2 / §8.3 v2.2 — 매핑에 없는 새 해시태그 적재.
+    """spec §4.2 / §8.3 v2.3 — 매핑에 없는 새 해시태그 적재.
 
     signals: list[UnknownAttributeSignal]. 빈 list 면 적재 skip.
     DUPLICATE KEY (tag, computed_at) — 같은 (tag, week_start_date) 의 재산출 history
     추적. _latest view 가 (tag, week_start_date) 별 max(computed_at) 1 row 노출.
 
     옛 count_3day 컬럼은 NOT NULL 호환 — count_recent_window 와 같은 값 dump (deprecated).
+    v2.3 신규 signal_type column — source 분류 (hashtag / vision_*). migration 007.
     """
     if not signals:
         logger.info("emit_unknown_signals skip — empty list")
@@ -248,7 +249,8 @@ def emit_unknown_signals(
             "first_seen": s.first_seen.isoformat(),
             "likely_category": s.likely_category,
             "reviewed": 1 if s.reviewed else 0,
-            "schema_version": "pipeline_v2.2",
+            "schema_version": "pipeline_v2.3",
+            "signal_type": s.signal_type,
         }
         for s in signals
     ]

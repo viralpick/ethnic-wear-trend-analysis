@@ -25,8 +25,17 @@ class AttributeMapping:
 # --------------------------------------------------------------------------- #
 GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
     GarmentType.KURTA_SET: AttributeMapping(
-        hashtags=("kurtaset", "kurtasets", "kurtiset", "kurtapalazzoset", "kurtasetsonline", "kurtastyle"),
-        keywords=("kurta set", "kurta palazzo set", "kurta pant set", "3 piece set"),
+        hashtags=(
+            "kurtaset", "kurtasets", "kurtiset", "kurtapalazzoset", "kurtasetsonline", "kurtastyle",
+            # 2026-05-02 — 12w eval 자명 누락 (suits 변형 / salwar kameez)
+            "salwarkameez", "salwarsuit", "suits", "suit", "punjabisuit",
+            "partywearsuits", "partywearsuit", "designersuits", "designersuit",
+            "cottonsuits", "cottonsuit", "weddingsuits",
+        ),
+        keywords=(
+            "kurta set", "kurta palazzo set", "kurta pant set", "3 piece set",
+            "salwar kameez", "salwar suit", "punjabi suit",
+        ),
     ),
     GarmentType.ANARKALI: AttributeMapping(
         hashtags=("anarkali", "anarkalisuit", "anarkalikurta", "anarkalidress"),
@@ -41,7 +50,10 @@ GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
         keywords=("kurta dress", "ethnic dress"),
     ),
     GarmentType.CASUAL_SAREE: AttributeMapping(
-        hashtags=("saree", "sareelove", "readytowearsaree", "casualsaree", "officesaree"),
+        hashtags=(
+            "saree", "sareelove", "readytowearsaree", "casualsaree", "officesaree",
+            "sareeindia", "sareesofinstagram", "sareeswag", "sari",
+        ),
         keywords=("saree", "sari", "ready to wear saree"),
     ),
     GarmentType.STRAIGHT_KURTA: AttributeMapping(
@@ -49,7 +61,7 @@ GARMENT_TYPE_MAPPINGS: dict[GarmentType, AttributeMapping] = {
         keywords=("straight kurta", "straight cut"),
     ),
     GarmentType.TUNIC: AttributeMapping(
-        hashtags=("kurti", "tunic", "ethnictunic"),
+        hashtags=("kurti", "tunic", "ethnictunic", "shortkurti", "longkurti", "kurties"),
         keywords=("kurti", "tunic"),
     ),
     GarmentType.FUSION_TOP: AttributeMapping(
@@ -219,6 +231,8 @@ OCCASION_MAPPINGS: dict[Occasion, AttributeMapping] = {
             "sangeet", "haldi", "reception", "engagement",
             "navratri", "diwali", "eid", "durgapuja", "ganeshchaturthi",
             "festivewear", "functionwear", "familyfunction",
+            # 2026-05-02 — 12w eval 자명 누락
+            "weddingfashion", "weddingcollection", "weddingedit", "weddinginspiration",
         ),
         keywords=(
             "festive", "puja", "small function", "get together", "akshaya tritiya",
@@ -303,3 +317,54 @@ def all_known_hashtags() -> frozenset[str]:
         | OCCASION_TAG_INDEX.keys()
         | STYLING_TAG_INDEX.keys()
     )
+
+
+# --------------------------------------------------------------------------- #
+# IG meta stoplist (2026-05-02, Phase 2 Tier 1) — 12w eval 결과 noise 차단.
+# stoplist 태그는 unknown_signal_tracker 가 hashtag list 자체에서 drop —
+# buckets/co_occur 양쪽 미카운트. emergence rule 평가 대상도 아님.
+# 기준:
+#   - 보편 IG 메타 (universal across all post genres): love / instagood / viral / trending /
+#     instadaily / photooftheday / aesthetic / lifestyle / vibes
+#   - reels family (regex prefix 등가): reel*
+#   - 일반 SMB / handmade: supportsmallbusiness / smallbusiness / handmade / shopnow
+#   - 일반 marketing meta (fashion 비특정): designer / fashion / fashionblogger / ootd /
+#     style / trends / luxurywear / traditional / indiantraditionalwear / menswear /
+#     mensethnicwear (project scope = women's ethnic)
+# 변경 시 신중 — 정규 fashion 단어 (kurta, saree 등) 와 구분되어야 함.
+# --------------------------------------------------------------------------- #
+IG_META_STOPLIST_EXACT: frozenset[str] = frozenset((
+    # universal IG meta
+    "love", "instagood", "viral", "trending", "instadaily", "photooftheday",
+    "picoftheday", "aesthetic", "vibes", "lifestyle", "follow", "like", "explore",
+    "explorepage", "foryou", "foryoupage", "fyp",
+    # SMB / handmade
+    "supportsmallbusiness", "smallbusiness", "handmade", "shopnow", "shoplocal",
+    "supportlocal",
+    # marketing meta — fashion 비특정
+    "designer", "designers", "fashion", "fashionblogger", "fashionista",
+    "fashiongram", "fashionstyle", "ootd", "style", "stylish", "styleblogger",
+    "styleinspo", "trends",
+    # luxury/category meta
+    "luxurywear", "luxury", "traditional", "indiantraditionalwear",
+    # 남성 wear (프로젝트 scope = 여성 ethnic)
+    "menswear", "mensethnicwear", "menfashion", "mensfashion",
+    # location/culture generic
+    "india", "indian", "mumbai", "delhi", "bangalore", "bollywood",
+))
+
+
+# `reels` prefix family — `reels`, `reelsindia`, `reelsinstagram`, `reelitfeelit` 등
+IG_META_STOPLIST_PREFIXES: tuple[str, ...] = (
+    "reels", "reel",
+)
+
+
+def is_meta_hashtag(tag: str) -> bool:
+    """IG meta / 일반 marketing noise 인지. tag 는 '#' 제외 lowercase 전제.
+
+    spec §4.2 Tier 1 stoplist (2026-05-02). exact match + prefix family 양쪽 검사.
+    """
+    if tag in IG_META_STOPLIST_EXACT:
+        return True
+    return any(tag.startswith(p) for p in IG_META_STOPLIST_PREFIXES)
