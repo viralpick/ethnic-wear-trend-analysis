@@ -95,7 +95,7 @@ def test_prompt_version_match_no_warning(monkeypatch, tmp_path, caplog):
     cfg = VisionLLMConfig(
         provider="gemini",
         model_id="gemini-2.5-flash",
-        prompt_version="v0.8",  # M3.I styling_combo P1 schema slot 적용 후 match 기준
+        prompt_version="v0.9",  # garment/fabric/technique 3-tier escape 적용 후 match 기준
         cache_dir=tmp_path / "llm_cache",
     )
     with caplog.at_level(logging.WARNING, logger="vision.factory"):
