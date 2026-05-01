@@ -327,6 +327,7 @@ class PipelineBColorExtractor:
         self._cfg = cfg
         self._dyn_cfg = cfg.dynamic_palette
         self._hybrid_cfg = hybrid_cfg or cfg.hybrid_palette
+        self._post_cfg = cfg.post_palette
         self._vision_llm = vision_llm
         self._llm_preset = llm_preset
         self._matcher_entries = matcher_entries
@@ -388,7 +389,12 @@ class PipelineBColorExtractor:
         return ColorExtractionResult(
             source_post_id=item.source_post_id,
             canonicals=canonicals,
-            post_palette=build_post_palette(canonicals),
+            post_palette=build_post_palette(
+                canonicals,
+                merge_deltae76_threshold=self._post_cfg.merge_deltae76_threshold,
+                min_cluster_share=self._post_cfg.min_cluster_share,
+                max_clusters=self._post_cfg.max_clusters,
+            ),
         )
 
     def _attach_palette(
@@ -411,9 +417,12 @@ class PipelineBColorExtractor:
             build_object_palette(
                 pool.rgb_pixels, pool.picks, self._dyn_cfg,
                 self._matcher_entries, frame_area=pool.frame_area,
+                drop_threshold=self._hybrid_cfg.pick_match_deltae76,
+                r2_min_share=self._hybrid_cfg.r2_min_share,
                 chroma_vivid=self._hybrid_cfg.chroma_vivid,
                 hue_near_deg=self._hybrid_cfg.hue_near_deg,
                 r2_merge_deltae76=self._hybrid_cfg.r2_merge_deltae76,
+                chroma_ratio_min=self._hybrid_cfg.chroma_ratio_min,
             )
             for pool in pools
         ]

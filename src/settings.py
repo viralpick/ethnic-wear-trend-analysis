@@ -245,7 +245,23 @@ class HybridPaletteConfig(BaseModel):
     chroma_vivid: float = 15.0
     hue_near_deg: float = 30.0
     r2_merge_deltae76: float = 40.0
+    chroma_ratio_min: float = 0.5
     top_n: int = 3
+
+
+class PostPaletteConfig(BaseModel):
+    """post-level palette aggregation 임계 (vision/post_palette.py).
+
+    canonical 들의 palette 를 area_ratio × within-share 가중으로 ΔE76 greedy merge 후
+    share<min_cluster_share drop, max_clusters cap.
+
+    default 는 vision/post_palette.py 모듈 상수 (MAX_POST_PALETTE_CLUSTERS=3,
+    POST_PALETTE_MERGE_DELTA_E=10.0, MIN_POST_PALETTE_SHARE=0.05) 와 일치. drift
+    방지는 pinning 테스트.
+    """
+    max_clusters: int = 3
+    merge_deltae76_threshold: float = 10.0
+    min_cluster_share: float = 0.05
 
 
 class InstanceConfig(BaseModel):
@@ -343,6 +359,7 @@ class VisionConfig(BaseModel):
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
     dynamic_palette: DynamicPaletteConfig = DynamicPaletteConfig()
     hybrid_palette: HybridPaletteConfig = HybridPaletteConfig()
+    post_palette: PostPaletteConfig = PostPaletteConfig()
     instance: InstanceConfig = InstanceConfig()
     scene_filter: SceneFilterConfig = SceneFilterConfig()
     video_frame: VideoFrameConfig = VideoFrameConfig()
