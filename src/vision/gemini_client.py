@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_ID = "gemini-2.5-flash"
 
+# llm-safety §3 — timeout 가드 필수. Gemini 2.5 Flash 평균 ~12s/call (Phase 0 실측),
+# 60s 는 image+prompt 안정 + hang 차단. SDK 가 ms 단위.
+_GEMINI_TIMEOUT_MS = 60_000
+
 
 class GeminiVisionLLMClient:
     """google-genai SDK 기반 vision LLM 클라이언트. VisionLLMClient Protocol 구현."""
@@ -59,7 +63,10 @@ class GeminiVisionLLMClient:
         if api_key is None:
             load_dotenv()
             api_key = os.environ["GEMINI_API_KEY"]
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
+        )
         self._model_id = model_id
         self._prompt_version = prompt_version
         self._cache = cache

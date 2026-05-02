@@ -38,6 +38,9 @@ from contracts.normalized import NormalizedContentItem
 
 logger = logging.getLogger(__name__)
 
+# llm-safety §3 — timeout 가드 필수. 60s 는 batch 10 post × 800 char 응답 충분 + hang 차단.
+_LLM_TIMEOUT_SECONDS = 60
+
 _SYSTEM_PROMPT = f"""You are a fashion attribute extractor for Indian ethnic wear content.
 Extract structured attributes from Instagram captions and hashtags (or YouTube titles/descriptions).
 
@@ -108,30 +111,29 @@ class AzureOpenAILLMClient:
     def _extract_batch(
         self, posts: list[NormalizedContentItem]
     ) -> list[LLMExtractionResult]:
+        """배치 LLM 호출 → list[LLMExtractionResult]. 실패 정책 (모듈 docstring):
+
+        - openai.OpenAIError (rate-limit / timeout / connection / 5xx / auth 등) → raise
+        - json.JSONDecodeError (LLM 이 비-JSON 반환) → raise
+        - per-post ValidationError → 해당 post drop + info 로그 (정상 흐름)
+        """
         user_content = json.dumps(
             [{"post_id": p.source_post_id, "text": p.text_blob[:800]} for p in posts],
             ensure_ascii=False,
         )
-        try:
-            response = self._client.chat.completions.create(
-                model=self._deployment,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format={"type": "json_object"},
-                seed=self._seed,
-            )
-        except openai.OpenAIError as exc:
-            logger.warning("llm_batch_error reason=%s", exc)
-            return []
+        response = self._client.chat.completions.create(
+            model=self._deployment,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            seed=self._seed,
+            timeout=_LLM_TIMEOUT_SECONDS,
+        )
 
         raw = response.choices[0].message.content or "{}"
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.warning("llm_json_parse_error reason=%s raw=%s", exc, raw[:200])
-            return []
+        payload = json.loads(raw)
 
         results: list[LLMExtractionResult] = []
         for item in payload.get("results", []):

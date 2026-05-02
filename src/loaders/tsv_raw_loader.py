@@ -26,7 +26,9 @@ from typing import Iterator
 
 from contracts.common import InstagramSourceType
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
+from loaders._datetime import parse_db_timestamp, parse_iso_z, parse_yyyymmdd
 from loaders.raw_loader import RawDailyBatch
+from loaders.url_parsing import extract_yt_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,23 +38,7 @@ _HASHTAG_SEARCH_FILE = "png_india_ai_fashionash_tag_search_result.tsv"
 _YOUTUBE_FILE = "png_india_ai_fashion_youtube_posting.tsv"
 
 _HASHTAG_RE = re.compile(r"#\w+")
-_YT_VIDEO_ID_RE = re.compile(r"[?&]v=([\w-]+)")
 _HASHTAG_SEARCH_PLACEHOLDER_DATE = datetime(2026, 4, 15, tzinfo=timezone.utc)
-
-
-def _parse_iso_z(raw: str) -> datetime:
-    """2026-04-19T23:49:20Z 형식. Z 를 +00:00 로 치환."""
-    return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-
-
-def _parse_db_timestamp(raw: str) -> datetime:
-    """2026-04-20 23:15:01 형식 (naive). UTC 로 가정."""
-    return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
-
-
-def _parse_yyyymmdd(raw: str) -> datetime:
-    """20260304 → 2026-03-04T00:00:00+00:00."""
-    return datetime.strptime(raw, "%Y%m%d").replace(tzinfo=timezone.utc)
 
 
 def _extract_hashtags(caption: str) -> list[str]:
@@ -104,8 +90,8 @@ def _build_posting(
             likes=int(row[8]),
             comments_count=int(row[9]),
             saves=None,
-            post_date=_parse_iso_z(row[5]),
-            collected_at=_parse_db_timestamp(row[11]),
+            post_date=parse_iso_z(row[5]),
+            collected_at=parse_db_timestamp(row[11]),
         )
     except (ValueError, KeyError) as exc:
         logger.info("tsv_posting_skip post_id=%s reason=%s", row[1] if len(row) > 1 else "?", exc)
@@ -132,7 +118,7 @@ def _build_hashtag_search(row: list[str]) -> RawInstagramPost | None:
             saves=None,
             # TSV 에 post_date 없음 — 크롤러 팀에 요청. 일단 placeholder (agenda §1.x).
             post_date=_HASHTAG_SEARCH_PLACEHOLDER_DATE,
-            collected_at=_parse_db_timestamp(row[8]),
+            collected_at=parse_db_timestamp(row[8]),
         )
     except (ValueError, KeyError) as exc:
         logger.info("tsv_hashtag_skip post_id=%s reason=%s", row[1] if len(row) > 1 else "?", exc)
@@ -143,14 +129,14 @@ def _build_youtube(row: list[str]) -> RawYouTubeVideo | None:
     """youtube_posting.tsv row → RawYouTubeVideo. 실패 시 None."""
     if len(row) < 18:
         return None
-    match = _YT_VIDEO_ID_RE.search(row[3])
-    if match is None:
-        logger.info("tsv_yt_skip ulid=%s reason=no_video_id_in_url", row[1])
+    video_id = extract_yt_video_id(row[3])
+    if video_id is None:
+        logger.warning("tsv_yt_skip ulid=%s reason=no_video_id_in_url", row[1])
         return None
     try:
-        published = _parse_yyyymmdd(row[10])
+        published = parse_yyyymmdd(row[10])
         return RawYouTubeVideo(
-            video_id=match.group(1),
+            video_id=video_id,
             channel=row[4],
             title=row[6],
             description=row[7],

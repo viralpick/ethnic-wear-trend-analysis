@@ -19,6 +19,18 @@ _YT_VIDEO_ID_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]+)")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]+)")
 
 
+def extract_yt_video_id(url: str | None) -> str | None:
+    """YT URL → video_id (`watch?v=` 또는 `youtu.be/`). 매칭 실패 시 None.
+
+    loaders/* 가 raw row 의 url 컬럼에서 video_id 를 뽑을 때 사용. 자체 정규식 정의 금지 —
+    이 함수가 single source 이므로 패턴 변경은 여기에서만.
+    """
+    if not url:
+        return None
+    m = _YT_VIDEO_ID_RE.search(url) or _YT_SHORT_RE.search(url)
+    return m.group(1) if m else None
+
+
 def extract_url_short_tag(url: str | None) -> str | None:
     """외부 게시물 unique key — IG shortcode / YT video_id.
 

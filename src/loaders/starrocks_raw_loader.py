@@ -28,12 +28,13 @@ from dotenv import load_dotenv
 
 from contracts.common import InstagramSourceType
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
+from loaders._datetime import parse_iso_z, parse_yyyymmdd
+from loaders.url_parsing import extract_yt_video_id
 from loaders.raw_loader import RawDailyBatch
 
 logger = logging.getLogger(__name__)
 
 _HASHTAG_RE = re.compile(r"#\w+")
-_YT_VIDEO_ID_RE = re.compile(r"[?&]v=([\w-]+)")
 
 # IG download_urls 가 image+video 혼입 (jpg/mp4 한 row 안에 섞임 — IG carousel 구조).
 # loader 에서 확장자 기반으로 split. 알려지지 않은 확장자는 image_urls 로 분류 (보수).
@@ -47,14 +48,6 @@ _BOLLYWOOD_HANDLES: frozenset[str] = frozenset({
     "celebrities_outfit_decode",
     "bollydressdecode",
 })
-
-
-def _parse_iso_z(raw: str) -> datetime:
-    return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-
-
-def _parse_yyyymmdd(raw: str) -> datetime:
-    return datetime.strptime(raw, "%Y%m%d").replace(tzinfo=timezone.utc)
 
 
 def _split_csv(cell: str) -> list[str]:
@@ -89,6 +82,9 @@ def _source_type(entry: str, user: str) -> InstagramSourceType:
 
 def _build_ig_post(row: dict[str, Any]) -> RawInstagramPost | None:
     try:
+        created_at = row.get("created_at")
+        if not created_at:
+            raise ValueError("missing created_at")
         images, videos = _split_image_video(_split_csv(row["download_urls"] or ""))
         return RawInstagramPost(
             post_id=row["id"],
@@ -103,28 +99,32 @@ def _build_ig_post(row: dict[str, Any]) -> RawInstagramPost | None:
             likes=int(row["like_count"] or 0),
             comments_count=int(row["comment_count"] or 0),
             saves=None,
-            post_date=_parse_iso_z(row["posting_at"]),
-            collected_at=row["created_at"].replace(tzinfo=timezone.utc)
-            if row["created_at"]
-            else datetime.now(timezone.utc),
+            post_date=parse_iso_z(row["posting_at"]),
+            collected_at=created_at.replace(tzinfo=timezone.utc),
         )
-    except Exception as exc:
-        logger.info("starrocks_ig_skip id=%s reason=%s", row.get("id"), exc)
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.warning("starrocks_ig_skip id=%s reason=%s", row.get("id"), exc)
         return None
 
 
 def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
     url = row.get("url") or ""
-    match = _YT_VIDEO_ID_RE.search(url)
-    if not match:
-        logger.info("starrocks_yt_skip id=%s reason=no_video_id url=%s", row.get("id"), url[:60])
+    video_id = extract_yt_video_id(url)
+    if not video_id:
+        logger.warning("starrocks_yt_skip id=%s reason=no_video_id url=%s", row.get("id"), url[:60])
         return None
     try:
+        upload_date = row.get("upload_date")
+        if not upload_date:
+            raise ValueError("missing upload_date")
+        created_at = row.get("created_at")
+        if not created_at:
+            raise ValueError("missing created_at")
         # M3.H — YT 도 download_urls 가 mp4. IG 와 달리 video 만 (image 혼입 없음).
         # 확장자 검사로 video 만 필터 (보수: 알 수 없는 확장자는 drop).
         _, videos = _split_image_video(_split_csv(row.get("download_urls") or ""))
         return RawYouTubeVideo(
-            video_id=match.group(1),
+            video_id=video_id,
             video_url=url,
             channel=row["channel"] or "",
             channel_follower_count=int(row.get("channel_follower_count") or 0),
@@ -136,16 +136,12 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
             like_count=int(row["like_count"] or 0),
             comment_count=int(row["comment_count"] or 0),
             top_comments=_split_pipe(row["comments"] or ""),
-            published_at=_parse_yyyymmdd(row["upload_date"])
-            if row.get("upload_date")
-            else datetime.now(timezone.utc),
-            collected_at=row["created_at"].replace(tzinfo=timezone.utc)
-            if row.get("created_at")
-            else datetime.now(timezone.utc),
+            published_at=parse_yyyymmdd(upload_date),
+            collected_at=created_at.replace(tzinfo=timezone.utc),
             video_urls=videos,
         )
-    except Exception as exc:
-        logger.info("starrocks_yt_skip id=%s reason=%s", row.get("id"), exc)
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.warning("starrocks_yt_skip id=%s reason=%s", row.get("id"), exc)
         return None
 
 

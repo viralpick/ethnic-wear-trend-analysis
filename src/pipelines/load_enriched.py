@@ -69,21 +69,32 @@ def _to_ist_date(dt: datetime) -> date:
 
 
 def load_raw_post_urls() -> dict[str, str]:
-    """raw DB 의 IG/YT 테이블에서 post_id → 외부 URL 매핑 로드. 실패 시 빈 dict.
+    """raw DB 의 IG/YT 테이블에서 post_id → 외부 URL 매핑 로드.
 
     dedup_by_raw_url 의 사전 입력. raw DB 의 동일 url 가진 다른 post_id 들 (재크롤링
-    등) 을 중복으로 인식하기 위해 필요. STARROCKS_* 환경변수 미설정 시 빈 dict 반환
-    (dedup 미적용).
+    등) 을 중복으로 인식하기 위해 필요.
+
+    실패 분류 (룰 §4 silent drop 금지):
+    - `[db]` extras 미설치 (`ImportError`) → 빈 dict (dedup 자동 비활성)
+    - `STARROCKS_HOST` 미설정 → 빈 dict (의도된 dedup 비활성, 로컬 smoke 등)
+    - 일시 network / connection 실패 (`pymysql.MySQLError`) → log warning + 빈 dict
+    - 그 외 (auth / 스키마 / 쿼리 버그) → raise (dedup 누락은 score inflate 원인)
     """
     import os
     out: dict[str, str] = {}
     try:
-        import pymysql  # noqa: I001
-        from dotenv import load_dotenv
-        from pathlib import Path
-        load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
-        if not os.environ.get("STARROCKS_HOST"):
-            return out
+        import pymysql  # noqa: I001  — `[db]` extras 가드
+    except ImportError:
+        logger.info("load_raw_post_urls disabled: pymysql extras missing — dedup will skip")
+        return out
+
+    if not os.environ.get("STARROCKS_HOST"):
+        return out
+
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
+    try:
         conn = pymysql.connect(
             host=os.environ["STARROCKS_HOST"],
             port=int(os.environ.get("STARROCKS_PORT", "9030")),
@@ -107,8 +118,10 @@ def load_raw_post_urls() -> dict[str, str]:
             for r in cur.fetchall():
                 out[r["id"]] = r["url"]
         conn.close()
-    except Exception as exc:
-        logger.warning("load_raw_post_urls failed: %r — dedup will skip", exc)
+    except (pymysql.OperationalError, pymysql.InterfaceError) as exc:
+        # 일시 network / connection 실패 — dedup skip 후 batch 계속.
+        # auth / 쿼리 / 스키마 버그는 raise (silent score inflate 차단).
+        logger.warning("load_raw_post_urls transient failure: %r — dedup will skip", exc)
     return out
 
 

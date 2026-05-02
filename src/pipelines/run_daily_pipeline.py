@@ -293,7 +293,9 @@ def _build_signal_classifier(settings: Settings):
             prompt_version=AzureOpenAILLMSignalClassifier.PROMPT_VERSION,
         )
         return AzureOpenAILLMSignalClassifier(cache=cache)
-    except Exception as exc:  # extras 미설치 / Azure creds 누락 등
+    except (ImportError, KeyError) as exc:
+        # extras 미설치 (`[llm]`) 또는 AZURE_OPENAI_* 환경변수 누락 — Tier 3 비활성.
+        # Azure auth/network 실패는 raise (silent skip 시 운영 환경에서 진단 어려움).
         logger.warning("llm_signal_classifier_disabled reason=%r", exc)
         return None
 
