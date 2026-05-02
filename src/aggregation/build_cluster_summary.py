@@ -85,19 +85,21 @@ def _canonical_cluster_entries(
     log-scale (G = log2(Σn_objects+1), group_to_item_contrib 비례 분배) — 기존
     distribution_builder 와 동일 로직 재활용.
 
-    canonical 내 garment 또는 fabric 이 normalize 외 단어면 그 canonical 미참여.
+    canonical 내 garment 와 fabric 둘 다 normalize 외 (None) 면 그 canonical 미참여.
     canonical 0 인 item (vision 실패 / text-only) → 빈 결과 (2026-05-02). 옛 text-only
     fallback (item.garment_type+fabric 으로 단일 cluster) 은 환각 리스크 (셀럽 reels 의
     #CelebrityStyle hashtag → ethnic_dress 강제 라벨, project_youtube_text_attr_risk
     참고) + canonical_cluster_shares 와의 비대칭 (review HTML contributor map 0)
     때문에 제거. DB 적재는 enriched item-level 로 보존되어 디버그 손실 없음.
 
-    옵션 C (2026-05-02): garment None → cluster fan-out 미참여. fabric None 만 허용
-    (예: casual_saree__unknown — saree 정체성 명확하면 fabric 미상이어도 keep).
-    옛 동작 (g_val None 시 "unknown__fabric" 표면) 은 narrative 가치 낮은 cluster
-    만들어 데모 신뢰 저해 → garment 가 cluster 정체성의 핵심이라 strict drop.
-    raw 단어 (prompt v0.9 (b) tier — phulkari/angarkha 등) 는 enriched JSON 에 보존
-    되어 Phase 2 unknown_signal_tracker 확장의 input 으로 누적.
+    옵션 C 롤백 (2026-05-02): garment None 이어도 fabric 만 있으면 cluster 적재 keep
+    (예: `unknown__silk`). 옛 옵션 C 동작 (garment None drop) 는 partial cluster 두
+    종류 (`g__unknown` 과 `unknown__f`) 중 한쪽만 적재되는 비대칭을 만들어
+    `representative_weekly` 와 `canonical_cluster_shares` 사이 mismatch 발생 +
+    summary_keys ⊂ aggregate_keys drift warning. FE 에는 partial cluster 둘 다 안
+    노출 (별도 view 또는 FE-side filter)하지만 DB 적재 + score 산출은 일관되게 양쪽
+    유지. raw 단어 (prompt v0.9 (b) tier — phulkari/angarkha 등) 는 enriched JSON 에
+    보존되어 Phase 2 unknown_signal_tracker 확장의 input 으로도 누적.
 
     Phase 3 (2026-04-30): item_base_unit 가중 — caller (rep phase) 가 growth rate
     factor (1.0 ~ 2.0) 주입. 모든 canonical share 에 곱해져 cluster mass 자연 가중.
@@ -129,10 +131,10 @@ def _canonical_cluster_entries(
             return []
         out: list[tuple[str, float]] = []
         for (g_val, f_val, _snap), c in zip(canonical_g_f, contribs, strict=True):
-            # 옵션 C: garment None → drop (fabric None 은 keep — saree__unknown 등)
-            if g_val is None:
+            # 2026-05-02 옵션 C 롤백: 양쪽 다 None 인 canonical 만 drop. partial 은 keep.
+            if g_val is None and f_val is None:
                 continue
-            cluster_key = build_exact_key_strs(g_val, f_val or "unknown")
+            cluster_key = build_exact_key_strs(g_val or "unknown", f_val or "unknown")
             share = g * c / denom * item_base_unit
             if share <= 0.0:
                 continue
