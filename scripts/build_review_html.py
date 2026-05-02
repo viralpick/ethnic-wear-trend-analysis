@@ -690,6 +690,8 @@ def _render_cluster_card(
     html_dir: Path,
     *,
     top_n_thumb: int = 3,
+    score_history: list[float] | None = None,
+    history_idx: int = 0,
 ) -> str:
     """cluster summary card (클릭하면 detail 로 이동) — list view 용.
     상단에 IG/YT 각 top N 의 thumbnail 1장씩 표시 (검수 시 cluster 성격 빠른 파악).
@@ -739,6 +741,7 @@ def _render_cluster_card(
         f'</section>'
     )
 
+    spark_html = _render_cluster_spark(score_history or [], history_idx)
     return f'''
 <article class="cluster cluster-summary" data-cluster-key="{_esc(cluster_key)}"
          onclick="showClusterDetail(this.dataset.weekIdx, this.dataset.clusterKey)"
@@ -749,6 +752,7 @@ def _render_cluster_card(
     </div>
     <div class="cluster-meta-row">
       <span class="score">{s.get("score", 0):.1f}</span>
+      {spark_html}
       <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
     </div>
@@ -1009,6 +1013,9 @@ def _render_cluster_detail(
     contributors: list[tuple[dict[str, Any], float]] | None,
     html_dir: Path,
     week_idx: int,
+    *,
+    score_history: list[float] | None = None,
+    history_idx: int = 0,
 ) -> str:
     """cluster detail panel — list 에서 cluster 카드 클릭 시 노출. 상단 cluster info,
     하단 contributor 인라인 카드 (share desc).
@@ -1020,6 +1027,7 @@ def _render_cluster_detail(
         _render_compact_contributor(it, sh, html_dir, cluster_key=cluster_key)
         for it, sh in contributors
     ) or '<div class="muted">contributor 없음</div>'
+    spark_html = _render_cluster_spark(score_history or [], history_idx)
     return f'''
 <article class="cluster cluster-detail" data-cluster-key="{_esc(cluster_key)}" style="display:none">
   <div class="detail-nav">
@@ -1031,6 +1039,7 @@ def _render_cluster_detail(
     </div>
     <div class="cluster-meta-row">
       <span class="score">{s.get("score", 0):.1f}</span>
+      {spark_html}
       <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
       <span class="muted">{n_contrib} contributors</span>
@@ -1083,6 +1092,10 @@ small { color: #888; font-size: 0.85em; }
 .cluster .score { font-size: 20px; font-weight: bold; color: #d35400;
                   background: rgba(211,84,0,0.08); padding: 2px 10px;
                   border-radius: 4px; }
+.cluster-spark-wrap { display: inline-flex; align-items: center;
+                      background: #f4f6fa; border: 1px solid #dfe5ee;
+                      border-radius: 4px; padding: 1px 4px; }
+.cluster-spark { display: block; }
 .cluster .cluster-key { display: block; }
 .cluster .cluster-key code { display: inline-block; font-size: 14px;
                               font-weight: bold; background: #fff3cd;
@@ -1425,6 +1438,54 @@ def _build_cluster_contributors(
     return dict(out)
 
 
+def _build_score_history_map(
+    weeks: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]],
+) -> dict[str, list[float]]:
+    """cluster_key → list[float] (oldest→newest, 빠진 주 0.0).
+
+    weeks 는 newest→oldest 순서로 들어옴 (`--weeks` 입력 순서) 이라 reversed 로 enumerate.
+    """
+    n = len(weeks)
+    out: dict[str, list[float]] = {}
+    for time_idx, (_label, _enr, summ) in enumerate(reversed(weeks)):
+        for s in summ:
+            ck = s.get("cluster_key") or ""
+            if not ck:
+                continue
+            history = out.setdefault(ck, [0.0] * n)
+            history[time_idx] = float(s.get("score") or 0.0)
+    return out
+
+
+def _render_cluster_spark(history: list[float], current_idx: int) -> str:
+    """16-week score sparkline SVG. score 0~100 가정 (lifecycle 상한 기준).
+
+    current_idx = oldest→newest 시계열에서 이 카드가 속한 주의 위치 (0=oldest).
+    빈 history 또는 모든 score 0 이면 빈 문자열 (cluster card noise 방지).
+    """
+    if not history or max(history) <= 0.0:
+        return ""
+    n = len(history)
+    W, H, PAD = 84, 22, 2
+    span = max(1, n - 1)
+    xs = [PAD + i * ((W - 2 * PAD) / span) for i in range(n)]
+    ys = [H - PAD - (min(s, 100.0) / 100.0) * (H - 2 * PAD) for s in history]
+    points = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    cx = xs[current_idx] if 0 <= current_idx < n else xs[-1]
+    cy = ys[current_idx] if 0 <= current_idx < n else ys[-1]
+    title = " / ".join(f"{s:.1f}" for s in history)
+    return (
+        f'<span class="cluster-spark-wrap" '
+        f'title="16w score (oldest→newest): {title}">'
+        f'<svg class="cluster-spark" viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
+        f'preserveAspectRatio="none" role="img" aria-label="16-week score history">'
+        f'<polyline points="{points}" fill="none" stroke="#6b8aa6" stroke-width="1.4"/>'
+        f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="2.2" fill="#d35400"/>'
+        f'</svg>'
+        f'</span>'
+    )
+
+
 def _build_week_section(
     week_idx: int,
     label: str,
@@ -1433,6 +1494,8 @@ def _build_week_section(
     html_dir: Path,
     *,
     unknown_signals: list[dict[str, Any]] | None = None,
+    score_history_map: dict[str, list[float]] | None = None,
+    history_idx: int = 0,
 ) -> str:
     """주차별 section — Clusters tab + Items tab 구조. id prefix `w<idx>-` 로 anchor 충돌 방지."""
     # view-단 dedup: raw url 기준 동일 post 중 engagement 최대 1건만 keep.
@@ -1452,8 +1515,13 @@ def _build_week_section(
 
     # cluster summary cards (list view) — onclick 의 week_idx 채워넣기
     sorted_summaries = sorted(summaries, key=lambda s: -s.get("score", 0))
+    history_map = score_history_map or {}
     cluster_cards_raw = "\n".join(
-        _render_cluster_card(s, contributors_map.get(s.get("cluster_key", "")), html_dir)
+        _render_cluster_card(
+            s, contributors_map.get(s.get("cluster_key", "")), html_dir,
+            score_history=history_map.get(s.get("cluster_key", "")),
+            history_idx=history_idx,
+        )
         for s in sorted_summaries
     )
     cluster_cards = cluster_cards_raw.replace("{week_idx}", str(week_idx))
@@ -1462,6 +1530,8 @@ def _build_week_section(
     cluster_details = "\n".join(
         _render_cluster_detail(
             s, contributors_map.get(s.get("cluster_key", "")), html_dir, week_idx,
+            score_history=history_map.get(s.get("cluster_key", "")),
+            history_idx=history_idx,
         )
         for s in sorted_summaries
     )
@@ -1595,10 +1665,15 @@ def build_multi_week_html(
         raise ValueError("weeks must be non-empty")
     # 주별 emergence signals — week_start_iso 매칭. label 첫 10자 ("2026-04-20 ~ ...") = monday.
     weekly_signals = _load_unknown_signals_weekly()
+    # cluster_key → 16-week score 시계열 (oldest→newest, 빠진 주 0). weeks 는 newest→oldest.
+    score_history_map = _build_score_history_map(weeks)
+    n_weeks = len(weeks)
     sections = "\n".join(
         _build_week_section(
             idx, label, enr, summ, html_dir,
             unknown_signals=weekly_signals.get(label[:10], []),
+            score_history_map=score_history_map,
+            history_idx=n_weeks - 1 - idx,
         )
         for idx, (label, enr, summ) in enumerate(weeks)
     )
