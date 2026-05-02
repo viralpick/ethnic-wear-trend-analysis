@@ -14,6 +14,7 @@ ColorExtractor 선택 (Step D):
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -264,6 +265,39 @@ def _build_writer(sink: str):
     raise ValueError(f"unknown sink: {sink!r}")
 
 
+
+def _build_signal_classifier(settings: Settings):
+    """Tier 3 LLM signal classifier (gpt-5-mini) — surface unknown_signal 의
+    likely_category 보강용. spec §4.2 v2.3.
+
+    enable rules:
+    - env UNKNOWN_SIGNAL_LLM_CLASSIFY=0 → disable (graceful skip, return None)
+    - 그 외 (default) → AzureOpenAILLMSignalClassifier 생성 시도
+    - extras/creds 미설치 (ImportError, KeyError) → warning + None (graceful skip)
+    - 그 외 예외 → warning + None (안전한 fallback)
+
+    Returns: LLMSignalClassifier | None. None 이면 caller 가 annotate skip.
+    """
+    if os.environ.get("UNKNOWN_SIGNAL_LLM_CLASSIFY", "1") == "0":
+        logger.info("llm_signal_classifier_disabled reason=env_off")
+        return None
+    try:
+        from attributes.llm_signal_classifier import (  # noqa: I001
+            AzureOpenAILLMSignalClassifier,
+            LocalSignalCache,
+        )
+        cache_dir = settings.paths.outputs / "llm_signal_cache"
+        cache = LocalSignalCache(
+            cache_dir,
+            model_id=AzureOpenAILLMSignalClassifier.MODEL_ID,
+            prompt_version=AzureOpenAILLMSignalClassifier.PROMPT_VERSION,
+        )
+        return AzureOpenAILLMSignalClassifier(cache=cache)
+    except Exception as exc:  # extras 미설치 / Azure creds 누락 등
+        logger.warning("llm_signal_classifier_disabled reason=%r", exc)
+        return None
+
+
 def run_pipeline(
     settings: Settings,
     target_date: date,
@@ -473,12 +507,12 @@ def run_representative_phase(
         weekly_history_path=weekly_history_path,
     )
 
-    # spec §4.2 / §8.3 v2.2 — weekly emergence + hashtag_weekly. anchor=end_date.
+    # spec §4.2 / §8.3 v2.3 — weekly emergence + hashtag_weekly. anchor=end_date.
     # 입력은 window filter 전 전체 pool — baseline window (anchor -70 ~ -14일) 가
     # representative window 보다 넓어서. url_short_tag dedup 만 적용.
     # hashtag_weekly: 모든 hashtag (known + unknown) 의 그 주 카운트 + co-occurrence
     # 적재. emergence rule reuse / LLM 분류 input cache.
-    # unknown_signal: emergence rule 통과한 surface 만.
+    # unknown_signal: emergence rule 통과한 surface 만 (Tier 3 LLM 분류로 likely_category 보강).
     from attributes.unknown_signal_tracker import (  # noqa: I001
         EmergenceParams,
         _monday_of,
@@ -499,19 +533,33 @@ def run_representative_phase(
         normalized_pool, end_date, params=params,
         extra_tags_per_post=extra_tags_per_post,
     )
-    # state file persist (review HTML 호환)
+    # spec §4.2 v2.3 Tier 3 — LLM signal classifier (gpt-5-mini batch).
+    # env UNKNOWN_SIGNAL_LLM_CLASSIFY=0 으로 disable, extras/creds 미설치 시 graceful skip.
+    n_classified = 0
+    n_dropped = 0
+    classifier = _build_signal_classifier(settings)
+    if classifier is not None and signals:
+        from attributes.llm_signal_classifier import annotate_signals  # noqa: I001
+        signals, dropped = annotate_signals(signals, classifier, drop_non_ethnic=True)
+        n_classified = len(signals)
+        n_dropped = len(dropped)
+        logger.info(
+            "llm_signal_classified anchor=%s kept=%d dropped=%d",
+            end_date, n_classified, n_dropped,
+        )
+    # state file persist (review HTML 호환) — annotated signals 기준
     _, weeks_state = load_state(state_path)
     weeks_state[_monday_of(end_date).isoformat()] = [_serialize_signal(s) for s in signals]
     save_state(state_path, counters, weeks_state)
-    # DB 적재 — hashtag_weekly + unknown_signal
+    # DB 적재 — hashtag_weekly + unknown_signal (likely_category LLM 보강 후)
     n_hashtag = emit_hashtag_weekly(counters, _monday_of(end_date), writer)
     n_signal = emit_unknown_signals(signals, writer)
     logger.info(
         "emergence anchor=%s baseline=%d spike=%d K=%d floor=%d R=%.2f min=%d D=%.2f "
-        "vision_post=%d hashtag_weekly=%d unknown_signals=%d (surfaced=%d)",
+        "vision_post=%d hashtag_weekly=%d unknown_signals=%d (surfaced=%d, llm_dropped=%d)",
         end_date, params.baseline_days, params.spike_days, params.spike_threshold,
         params.baseline_floor, params.co_share, params.min_posts, params.fashion_density,
-        len(extra_tags_per_post), n_hashtag, n_signal, len(signals),
+        len(extra_tags_per_post), n_hashtag, n_signal, len(signals), n_dropped,
     )
 
     if sink == "dry_run":
