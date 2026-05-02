@@ -351,6 +351,11 @@ IG_META_STOPLIST_EXACT: frozenset[str] = frozenset((
     "menswear", "mensethnicwear", "menfashion", "mensfashion",
     # location/culture generic
     "india", "indian", "mumbai", "delhi", "bangalore", "bollywood",
+    # 2026-05-02 v2.3 검수 — desi 류 marketing meta + saree slogan
+    # (16w 백필 surface 결과 #desiaesthetic / #desilook / #sareenotsorry 부분 정리)
+    "desiaesthetic", "desilook", "desistyle", "desivibes",
+    "desigirl", "desiwear", "desifashion", "desibride", "desigram",
+    "sareenotsorry", "sareelover", "sareeobsession",
 ))
 
 
