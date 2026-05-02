@@ -207,7 +207,8 @@ def test_empty_input_returns_empty_dict() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 옵션 C — garment None canonical drop, fabric None canonical keep (2026-05-02)
+# 옵션 C 롤백 (2026-05-02) — partial cluster 양쪽 (g__unknown, unknown__f) 모두 keep.
+# 둘 다 None 인 canonical 만 drop. FE 노출은 별도 view/FE-side filter 가 처리.
 # --------------------------------------------------------------------------- #
 
 
@@ -245,20 +246,30 @@ def _enriched_with_canonical(
     )
 
 
-def test_option_c_garment_unknown_raw_drops_canonical() -> None:
-    """prompt v0.9 (b) tier — vision LLM 이 enum 외 raw 단어 (예: phulkari) 답.
-    normalize None → 옵션 C: cluster fan-out 미참여 → grouping 0."""
+def test_option_c_rollback_garment_unknown_keeps_canonical() -> None:
+    """옵션 C 롤백 (2026-05-02) — garment None / fabric known 도 partial cluster keep.
+    prompt v0.9 (b) tier raw 단어 (phulkari) → garment None, fabric=silk → unknown__silk.
+    옛 옵션 C 는 drop 했으나, partial cluster 두 종류 일관성 위해 keep 으로 롤백."""
     item = _enriched_with_canonical("p1", upper="phulkari", fabric="silk")
     grouped = group_by_cluster([item])
-    assert grouped == {}, "garment None → drop (fabric=silk 만 있어도 미참여)"
+    assert "unknown__silk" in grouped, (
+        "garment None + fabric known → partial cluster keep (옵션 C 롤백)"
+    )
 
 
-def test_option_c_fabric_unknown_keeps_canonical() -> None:
+def test_option_c_rollback_fabric_unknown_keeps_canonical() -> None:
     """garment 명확 (saree → CASUAL_SAREE) + fabric raw (banarasi enum 외) →
-    casual_saree__unknown cluster keep. fabric None 은 옵션 C 가 허용."""
+    casual_saree__unknown cluster keep. fabric None 도 partial cluster 로 적재."""
     item = _enriched_with_canonical("p1", upper="saree", fabric="banarasi")
     grouped = group_by_cluster([item])
     assert "casual_saree__unknown" in grouped
+
+
+def test_option_c_rollback_both_unknown_drops_canonical() -> None:
+    """양축 None — 양쪽 다 enum 매핑 실패면 narrative 가치 0 → drop 유지."""
+    item = _enriched_with_canonical("p1", upper="phulkari", fabric="banarasi")
+    grouped = group_by_cluster([item])
+    assert grouped == {}, "양축 None → drop (옵션 C 롤백 후에도 유지)"
 
 
 def test_option_c_both_enum_keeps_canonical() -> None:
