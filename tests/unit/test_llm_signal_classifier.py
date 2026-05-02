@@ -103,3 +103,28 @@ def test_annotate_signals_preserves_signal_type() -> None:
     assert annotated[0].signal_type == "vision_technique"
     # likely_category 만 LLM 결과로 갱신
     assert annotated[0].likely_category == "technique"
+
+
+# ---- run_representative_phase wire-up (Phase 2 v2.3 Tier 3) ----
+
+def test_build_signal_classifier_env_disable(monkeypatch, tmp_path) -> None:
+    """env UNKNOWN_SIGNAL_LLM_CLASSIFY=0 → None."""
+    from pipelines.run_daily_pipeline import _build_signal_classifier
+    from settings import load_settings
+    monkeypatch.setenv("UNKNOWN_SIGNAL_LLM_CLASSIFY", "0")
+    s = load_settings()
+    assert _build_signal_classifier(s) is None
+
+
+def test_build_signal_classifier_init_failure_graceful(monkeypatch) -> None:
+    """ImportError / KeyError 등 초기화 실패 시 graceful skip — exception swallow + None."""
+    from pipelines.run_daily_pipeline import _build_signal_classifier
+    from settings import load_settings
+    monkeypatch.delenv("UNKNOWN_SIGNAL_LLM_CLASSIFY", raising=False)
+    s = load_settings()
+    # Azure classifier 가 raise 하도록 monkeypatch.
+    import attributes.llm_signal_classifier as mod
+    def _boom(*a, **kw):
+        raise RuntimeError("boom — extras 미설치 시뮬레이션")
+    monkeypatch.setattr(mod, "AzureOpenAILLMSignalClassifier", _boom)
+    assert _build_signal_classifier(s) is None

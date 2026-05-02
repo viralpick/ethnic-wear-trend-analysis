@@ -11,11 +11,52 @@
 
 ---
 
-## 0. v1 → v2 변경 요약 (2026-04-30 sync 누적)
+## 0. ver 3 → ver 4 변경 요약 (2026-05-02 Phase 2 — unknown_signal v2.3)
+
+### Unknown Signal / 새 시그널 룰
+
+| 항목 | ver 3 (~2026-05-01) | ver 4 (2026-05-02~) |
+|---|---|---|
+| Surface 룰 ethnic_co_share | post 에 known_fashion tag 1개 이상이면 +1 (binary co-occurrence) | **post 의 fashion_density >= D (default 0.3) 인 fashion-context post 비율 ≥ R (default 0.5)** |
+| IG meta stoplist | 없음 — `#love` / `#reelsindia` / `#supportsmallbusiness` 등이 universal noise 로 surface | **`mapping_tables.IG_META_STOPLIST_EXACT` + `_PREFIXES`** (love/reels\*/aesthetic/instagood/viral/designer/menswear/luxurywear/indian 등 약 40여 태그). stoplist 는 hashtag list 자체에서 drop → buckets/co_occur 양쪽 미카운트 → hashtag_weekly 에도 미적재 |
+| 자명 silhouette/occasion 매핑 | `salwarkameez` / `suits` / `partywearsuits` / `punjabisuit` / `shortkurti` / `sareeindia` / `weddingfashion` 등 18개 매핑 누락으로 false-emerge | mapping_tables 에 흡수 (KURTA_SET / TUNIC / CASUAL_SAREE / FESTIVE_LITE 등으로 라우팅) — 부수효과로 text-LLM 추출 매칭율 ↑ |
+| Vision raw 단어 활용 | 없음 (hashtag 만 분석) | **EthnicOutfit (upper/lower_garment_type/outer_layer/fabric/technique) free-form 단어 → unknown_signal_tracker 의 extra_tags inject**. category 별 분리 (vision_garment/_fabric/_technique). vision LLM 이 ethnic 판정한 post 라 fashion-context 자동 인정 (`has_vision_signal` 분기로 density 우회) |
+| Signal source 분류 | 단일 (hashtag) | **`signal_type` column** — `hashtag` / `vision_garment` / `vision_fabric` / `vision_technique` / `llm_classified`. hashtag/vision 동시 source 시 hashtag 우선 |
+| LLM signal classifier | 없음 | **`src/attributes/llm_signal_classifier.py`** (신규 모듈) — gpt-5-mini batch + `LocalSignalCache` + cap 100/run + `FakeLLMSignalClassifier` (Protocol 분리). `annotate_signals()` 가 surface 결과의 `likely_category` 보강 + `drop_non_ethnic` 옵션. 모듈 ready, 자동 wire-up 보류 (16w 백필 LLM 비용 통제 — 데모 후 옵션 wire-up 검토) |
+
+### Sink schema 변경
+
+| 변경 | 적용 상태 |
+|---|---|
+| `unknown_signal.signal_type VARCHAR(32) NULL` (migration 007) | PR #60 + prod 적용 (2026-05-02 07:57 KST) |
+| `unknown_signal_latest` view 컬럼-list refresh (DROP+CREATE, 10 cols 노출) | prod 적용 (CREATE OR REPLACE 만으론 frozen view 회피 X — `feedback_starrocks_view_column_frozen` 재확인) |
+| `hashtag_weekly` column comment 정렬 (migration 008, MODIFY COLUMN) | PR #61 + prod 적용 (2026-05-02 08:07 KST) |
+| `unknown_signal` schema_version | `pipeline_v2.2` → `pipeline_v2.3` (신규 row 한정, 옛 row 잔존) |
+| `hashtag_weekly` schema_version | `pipeline_v2.2` → `pipeline_v2.3` (silent drift 정정용 row 단위 분기 키) |
+
+### BE / FE read-side 통지 항목 (silent drift 포함)
+
+| 항목 | drift 유형 | BE 대응 |
+|---|---|---|
+| `unknown_signal.signal_type` | 신규 column | values: `hashtag` / `vision_garment` / `vision_fabric` / `vision_technique` / `llm_classified`. NULL = legacy v2.2 (BE 가 default `hashtag` 로 read) |
+| `unknown_signal_latest` view | 컬럼 1개 추가 (10 cols) | `SELECT *` 사용 시 자동 노출. 컬럼 list 명시 query 면 추가 필요 |
+| `hashtag_weekly.n_posts_with_known_fashion` | **DDL 동일, 값 의미 변경 (silent)** | ver 4 row: post 의 fashion_density ≥ 0.3 (fashion-context post 수). ver 3 row: post 에 known_fashion 1개 이상 (binary). 분기 키: `schema_version` (`pipeline_v2.3` vs `pipeline_v2.2`) |
+| `hashtag_weekly` 적재 대상 | IG meta stoplist 추가 | ver 4 부터 `love` / `reelsindia` / `instagood` 등 약 40여 universal noise 태그가 적재에서 제외 (옛 ver 3 row 는 그대로 잔존) |
+| 다른 4 테이블 (item / canonical_group / canonical_object / representative_weekly) | 영향 없음 | DDL / 값 의미 변경 없음 |
+
+### Tests / 운영
+
+- 886 unit + 2 integration 통과 (regression 0)
+- 16w 백필 진입 (2026-05-02 07:59 KST, 페이스 ~12분/page, 종료 추정 16:00 KST) — ver 4 룰로 fresh 재산출 후 `unknown_signal_latest` / `hashtag_weekly_latest` 갱신
+- 다른 영역 (representative / scoring / vision pipeline B / canonical clustering / brand registry) 영향 없음 — Phase 2 = unknown_signal 정확도 작업
+
+---
+
+## 0a. ver 2 → ver 3 변경 요약 (2026-04-30 sync 누적)
 
 ### 트렌드 클러스터 / 기여도
 
-| 항목 | v1 (~2026-04-29) | v2 (2026-04-30~) |
+| 항목 | ver 2 (~2026-04-29) | ver 3 (2026-04-30~) |
 |---|---|---|
 | Cluster axis | `g__t__f` (3축) | **`g__f` (2축)**. Technique 은 cluster 안 distribution |
 | 매칭 multiplier | 5.0 / 2.5 / 1.0 (N=3/2/1) | **2.5 / 1.0** (N=2 full / N=1 partial). N=3 폐지 |
@@ -26,7 +67,7 @@
 
 ### Item / 측정값
 
-| 항목 | v1 | v2 |
+| 항목 | ver 2 | ver 3 |
 |---|---|---|
 | URL dedup | 없음 (raw ULID 별 별개 row) | **url_short_tag** 기준 dedup (IG shortcode / YT video_id) |
 | Engagement Score | `likes + comments×2 + saves×3` 절대량 | **`(likes/max(followers,100))×1 + (comments/max(followers,100))×2`** rate-based. saves 제외 |
@@ -39,9 +80,9 @@
 
 ### 새 시그널 / 검수
 
-| 항목 | v1 | v2 |
+| 항목 | ver 2 | ver 3 |
 |---|---|---|
-| 새 해시태그 추천 | 없음 | **`unknown_signal` 테이블 + `_latest` view** (v2.2 emergence rule: baseline 부재 + spike + co-occurrence). **`hashtag_weekly`** raw count source. 검수 HTML weekly panel |
+| 새 해시태그 추천 | 없음 | **`unknown_signal` 테이블 + `_latest` view** (v2.3 emergence rule: baseline + spike + fashion-density 기반 co-share + Tier 1 stoplist + Tier 4 vision raw inject + signal_type column). **`hashtag_weekly`** raw count source (v2.3 — `n_posts_with_known_fashion` 의미 변경). 검수 HTML weekly panel. LLM signal classifier (`llm_signal_classifier.py`) 옵션 wire-up |
 | `_latest` view 정책 | freeze 명목으로 backup 가리킴 | **main 가리킴 + 신 데이터 filter** (G__F 2축만 / url_short_tag IS NOT NULL) |
 | 옛 데이터 보존 | — | `*_v1_gtf_backup` 4 테이블 보존 (롤백 가능) |
 
@@ -56,6 +97,8 @@
 | `item / canonical_group / canonical_object.url_short_tag VARCHAR(64)` (migration 004) | 머지 완료 |
 | `unknown_signal` 테이블 + view (DDL 07/08) | 신규 |
 | `hashtag_weekly` 테이블 + view (DDL 09/10, v2.2) | 신규 |
+| `unknown_signal.signal_type VARCHAR(32) NULL` (migration 007, v2.3) | 머지 완료 (PR #60, prod 적용 2026-05-02) |
+| `hashtag_weekly` column comment 정렬 (migration 008, v2.3 의미 변경) | 머지 완료 (PR #61, prod 적용 2026-05-02) |
 
 ### 검수 페이지 (review HTML)
 
@@ -170,18 +213,30 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적 / 디버깅
 | `bbox` | `[x, y, w, h]` normalized | vision |
 | `schema_version`, `computed_at` | — | 머리말 |
 
-### 1.5 Unknown Signal — `unknown_signal` (v2.2 emergence rule)
+### 1.5 Unknown Signal — `unknown_signal` (v2.3 emergence rule + Tier 1/2/3/4)
 
-> spec §4.2 / §8.3. 매핑 외 hashtag 가 emergence 룰 (baseline 부재 + spike + co-occurrence) 통과하면 surface. weekly cadence (representative_weekly 와 정합).
+> spec §4.2 / §8.3. 매핑 외 hashtag 가 emergence 룰 통과하면 surface. weekly cadence (representative_weekly 와 정합). 2026-05-02 v2.3 갱신 — Tier 1 stoplist + Tier 2 fashion-density + Tier 3 LLM classifier (모듈 ready) + Tier 4 vision raw inject + signal_type column.
+
+#### v2.3 Tier 1 — IG meta stoplist
+`mapping_tables.IG_META_STOPLIST_EXACT` (love/instagood/viral/aesthetic/supportsmallbusiness/designer/menswear/luxurywear 등) + `IG_META_STOPLIST_PREFIXES` (`reels`, `reel`). stoplist 태그는 `unknown_signal_tracker.build_counters` 에서 hashtag list 자체에서 drop → buckets/co_occur 양쪽 미카운트 → hashtag_weekly 에도 미적재. Tier 1 자명 silhouette/occasion 매핑 추가 (salwarkameez/suits 변형/shortkurti/sareeindia/weddingfashion 등).
+
+#### v2.3 Tier 2 — fashion-density 임계
+post-level metric: `fashion_density(post) = n_known_fashion / n_total_after_stoplist` (post-level dedup). `D` 임계 (default 0.3) 이상이면 fashion-context post.
 
 #### Surface 룰 (모두 통과)
 
 1. **baseline 부재** — 직전 N일 (default 56) 동안 등장 ≤ floor (default 0)
 2. **spike 발생** — 최근 M일 (default 14) 동안 등장 ≥ K (default 3)
-3. **ethnic_co_share** — tag 가진 post 들 중 known fashion hashtag 도 가진 비율 ≥ R (default 0.5)
+3. **ethnic_co_share (v2.3 의미 변경)** — tag 가 등장한 post 들 중 fashion-context post (density ≥ D) 비율 ≥ R (default 0.5). 옛 v2.2 binary "known_fashion 1개 이상" 기준 폐기.
 4. **min_posts** — 최소 N posts (default 5) 에서 등장 — measurement stability
 
-CLI override: `--unknown-baseline-days / --unknown-spike-days / --unknown-spike-threshold / --unknown-baseline-floor / --unknown-co-share / --unknown-min-posts`.
+CLI override: `--unknown-baseline-days / --unknown-spike-days / --unknown-spike-threshold / --unknown-baseline-floor / --unknown-co-share / --unknown-min-posts`. v2.3 `EmergenceParams.fashion_density` 도 별도 override 가능.
+
+#### v2.3 Tier 3 — LLM signal classifier (`src/attributes/llm_signal_classifier.py`)
+Tier 1/2 통과 surface 결과를 gpt-5-mini batch 로 보강. cap 100/run, `LocalSignalCache` (word-level JSON), Fake/Protocol 분리. output: `{word, is_ethnic, category, variant_canonical, confidence}`. category ∈ {garment / fabric / technique / styling_combo / occasion / brand / stoplist / uncategorized}. 기본 wire-up 안 됨 (16w 백필 비용 통제) — `annotate_signals()` 가 surface 결과의 `likely_category` 보강 + `drop_non_ethnic` 옵션. 데모 후 `run_representative_phase` 옵션 wire-up 검토.
+
+#### v2.3 Tier 4 — vision raw input
+`pipelines/load_enriched.py::extract_vision_raw_tags(enriched)` 가 `EthnicOutfit.upper/lower_garment_type/outer_layer/fabric/technique` free-form 단어를 source category 별 dict 로 추출. `vision_garment` / `vision_fabric` / `vision_technique` 3 카테고리. `build_counters` 가 nested dict (`extra_tags_per_post[post_id][category] -> list[str]`) 받아 sources tracking. vision LLM 이 ethnic 판정한 post 라 fashion-context 자동 인정 (`has_vision_signal` 분기로 density 평가 우회).
 
 #### 컬럼
 
@@ -193,30 +248,31 @@ CLI override: `--unknown-baseline-days / --unknown-spike-days / --unknown-spike-
 | `count_recent_window` | spike window 안 등장 instance 수. v2.2 신규 |
 | `count_3day` | v1 호환 컬럼 — `count_recent_window` 와 같은 값 dump (deprecated) |
 | `first_seen` | 최초 발견일 (IST). counters 안 가장 오래된 bucket date |
-| `likely_category` | technique? / fabric? 등 추정 (NULL 허용) |
+| `likely_category` | technique? / fabric? 등 추정 (NULL 허용). v2.3 LLM 분류 시 `category[:variant]` 형식 |
 | `reviewed` | 0=pending, 1=reviewed |
-| `schema_version` | `"pipeline_v2.2"` |
+| `signal_type` | v2.3 신규 — source 분류. `hashtag` / `vision_garment` / `vision_fabric` / `vision_technique` / `llm_classified`. NULL = legacy v2.2 (BE 가 `hashtag` 로 read). hashtag/vision 동시 source 면 hashtag 우선 |
+| `schema_version` | v2.3: `"pipeline_v2.3"`. 옛 v2.2 row 도 잔존 |
 
-`unknown_signal_latest` view = (tag, week_start_date) 별 MAX(computed_at) 1 row (week_start_date IS NOT NULL filter).
+`unknown_signal_latest` view = (tag, week_start_date) 별 MAX(computed_at) 1 row (week_start_date IS NOT NULL filter). v2.3 적용 시 view 도 column-list refresh 필요 (DROP + CREATE — `feedback_starrocks_view_column_frozen`).
 
-### 1.6 Hashtag Weekly — `hashtag_weekly` (v2.2 신규)
+### 1.6 Hashtag Weekly — `hashtag_weekly` (v2.3, 의미 변경)
 
-> spec §4.2/§8.3. emergence rule 평가 source. 모든 hashtag (known + unknown) 의 주별 raw count + co-occurrence. LLM 분류 도입 시 input cache 로 reuse.
+> spec §4.2/§8.3. emergence rule 평가 source. 모든 hashtag (known + unknown) 의 주별 raw count + co-occurrence. LLM 분류 도입 시 input cache 로 reuse. v2.3 (2026-05-02) — 컬럼 정의 동일하나 `n_posts_with_known_fashion` 의 의미가 binary co-occurrence → fashion-density 기반 fashion-context post 수로 변경. silent drift 방지 위해 schema_version 으로 row 단위 분기.
 
 | 필드 | 정의 |
 |---|---|
-| `tag` | 해시태그 (# 미포함, lowercase) |
+| `tag` | 해시태그 (# 미포함, lowercase). v2.3 부터 IG meta stoplist 태그는 적재 안 됨 |
 | `week_start_date` | IST 월요일 (anchor 의 주) |
 | `computed_at` | 적재 시각 (UTC) |
 | `n_posts` | post-level dedup 카운트 (post 안 같은 tag 여러 번 = +1) |
-| `n_instances` | raw instance 카운트 (post 안 중복 포함) |
-| `n_posts_with_known_fashion` | 같은 post 에 known fashion hashtag 도 있는 post 수 (co-occurrence numerator) |
+| `n_instances` | raw instance 카운트 (post 안 중복 포함). v2.3 부터 vision-only tag 는 +1/post (extract_vision_raw_tags dedup) |
+| `n_posts_with_known_fashion` | **v2.3**: post 의 fashion_density ≥ 0.3 (fashion-context) 인 post 수. **v2.2** (legacy row): post 에 known_fashion 1개 이상 있는 binary co-occurrence. 컬럼명/타입 동일, 값 의미만 변경. |
 | `is_known_mapping` | 0=매핑 외, 1=mapping_tables 의 known hashtag |
-| `schema_version` | `"pipeline_v2.2"` |
+| `schema_version` | v2.3: `"pipeline_v2.3"`. 옛 v2.2 row 잔존 — semantic drift 구분 키 |
 
 `hashtag_weekly_latest` view = (tag, week_start_date) 별 MAX(computed_at) 1 row.
 
-ethnic_co_share = `n_posts_with_known_fashion / n_posts`.
+ethnic_co_share = `n_posts_with_known_fashion / n_posts` (v2.3 의미 = fashion-context post 비율).
 
 ---
 
@@ -588,8 +644,8 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 | `item` | `(source, source_post_id)` post 단위 | `(source, source_post_id, computed_at)` | append-only. `_latest` view dedup 키 = `url_short_tag` |
 | `canonical_group` | `(item, canonical_index)` outfit 단위 | `(item_source, item_source_post_id, canonical_index, computed_at)` | append-only. `group_id VARCHAR(96)` redundant |
 | `canonical_object` | `(group, member_index)` BBOX 단위 | `(item_source, item_source_post_id, canonical_index, member_index, computed_at)` | append-only. `object_id VARCHAR(112)` + `group_id` redundant |
-| `unknown_signal` (v2.2 emergence) | `(tag, computed_at)` | `(tag, computed_at)` | append-only. weekly cadence (week_start_date 컬럼). emergence rule 통과만 surface |
-| `hashtag_weekly` (v2.2 신규) | `(tag, week_start_date, computed_at)` | `(tag, week_start_date, computed_at)` | append-only. 모든 hashtag (known+unknown) 의 주별 raw count + co-occurrence |
+| `unknown_signal` (v2.3 emergence + signal_type) | `(tag, computed_at)` | `(tag, computed_at)` | append-only. weekly cadence (week_start_date 컬럼). emergence rule 통과만 surface. v2.3 — `signal_type VARCHAR(32) NULL` 추가 (hashtag/vision_garment/vision_fabric/vision_technique/llm_classified). NULL = legacy v2.2 |
+| `hashtag_weekly` (v2.3, 의미 변경) | `(tag, week_start_date, computed_at)` | `(tag, week_start_date, computed_at)` | append-only. 모든 hashtag (known+unknown, IG meta stoplist 제외) 의 주별 raw count + co-occurrence. v2.3 — `n_posts_with_known_fashion` 의미가 fashion_density ≥ 0.3 인 fashion-context post 수로 변경 (옛 binary co-occurrence 폐기). schema_version 으로 row 단위 분기 |
 
 **FK 연결 (논리적, StarRocks 실 FK 없음)**:
 - `canonical_object.group_id` ↔ `canonical_group.group_id`
@@ -666,7 +722,7 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 
 ---
 
-## 8. 구현 갭 체크 (v2 시점)
+## 8. 구현 갭 체크 (v2.3 시점)
 
 1. ✅ `frame_source.py` frame_index/total emit — M3.G (IG) + M3.H (YT video_urls). e2e smoke 검증 완료
 2. ✅ `LLMExtractionResult` 에 silhouette 필드 부재 → 의도 (vision-only)
@@ -680,10 +736,11 @@ Default = weekly. monthly toggle 시 §3.3 4-week rolling 합성.
 10. ✅ `factor_contribution` (instagram/youtube 합=1.0) — `RepresentativeAggregate.factor_contribution` 적재 단계 계산
 11. ✅ Object palette — `OutfitMember.palette` + `cut_off_share` + B1 BBOX 단위 KMeans
 12. ✅ (v2 신규) `effective_item_count` 컬럼 prod ALTER 적용 + v6 적재로 채움
-13. ✅ (v2 신규 + v2.2 갱신) `unknown_signal` 테이블 + view + sink_runner emit + 검수 HTML weekly panel — emergence rule (baseline + spike + co-occurrence)
-14. ✅ (v2.2 신규) `hashtag_weekly` 테이블 + view — emergence rule source / LLM 분류 cache
-14. ✅ (v2 신규) `url_short_tag` 컬럼 ALTER + `_latest` view dedup 키 swap
-15. ✅ (v2 신규) `NormalizedContentItem.collected_at` + `compute_growth_rate` 시계열 정상 동작 (옛 enriched 는 `scripts/backfill_collected_at.py` 로 마이그)
+13. ✅ (v2 신규 + v2.2 갱신 + v2.3 통합) `unknown_signal` — emergence rule (baseline + spike + ethnic_co_share + min_posts) + Tier 1 stoplist + Tier 2 fashion-density + Tier 4 vision raw inject + signal_type column. PR #60 + migration 007 prod 적용 (2026-05-02)
+14. ✅ (v2.2 신규 + v2.3 의미 변경) `hashtag_weekly` — emergence rule source / LLM 분류 cache. v2.3 에서 `n_posts_with_known_fashion` 의미 변경 (fashion-context post). PR #61 + migration 008 prod 적용 (2026-05-02)
+15. 🟡 (v2.3) LLM signal classifier (`src/attributes/llm_signal_classifier.py`) — gpt-5-mini batch + LocalSignalCache + Fake/Protocol + cap 100/run + `annotate_signals()`. 모듈 ready, `run_representative_phase` wire-up 보류 (16w 백필 비용 통제)
+16. ✅ (v2 신규) `url_short_tag` 컬럼 ALTER + `_latest` view dedup 키 swap
+17. ✅ (v2 신규) `NormalizedContentItem.collected_at` + `compute_growth_rate` 시계열 정상 동작 (옛 enriched 는 `scripts/backfill_collected_at.py` 로 마이그)
 
 ---
 
