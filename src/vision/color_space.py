@@ -104,8 +104,28 @@ def lab_to_rgb(lab: np.ndarray) -> np.ndarray:
 
 
 def delta_e76(lab_a: np.ndarray, lab_b: np.ndarray) -> float:
-    """LAB 공간 유클리드 거리 (CIE76). 방법론 비교 / palette chip 간 유사도 판정용."""
+    """LAB 공간 유클리드 거리 (CIE76). 방법론 비교 / palette chip 간 유사도 판정용.
+
+    ⚠️ numpy `linalg.norm` 경유 — BLAS 잠재 비결정성 (`feedback_kmeans_blas_nondeterminism`).
+    palette merge / cluster pair-merge 같이 hex byte-identical 결정성이 critical 한 위치에서는
+    `delta_e76_tuple()` 사용 (pure-Python float 산술).
+    """
     return float(np.linalg.norm(np.asarray(lab_a) - np.asarray(lab_b)))
+
+
+def delta_e76_tuple(
+    lab_a: tuple[float, float, float],
+    lab_b: tuple[float, float, float],
+) -> float:
+    """ΔE76 — pure-Python float 산술 (BLAS 우회).
+
+    `delta_e76` 의 numpy linalg.norm 경로는 BLAS 비결정성 가능. palette merge / cluster
+    pair-merge 처럼 hex byte-identical 결정성이 critical 한 위치에서는 이 함수를 사용해
+    항상 동일 float64 sequence 보장. tuple 입력으로 dataclass `lab` 필드 그대로 호출 가능.
+    """
+    aL, aa, ab = lab_a
+    bL, ba, bb = lab_b
+    return ((aL - bL) ** 2 + (aa - ba) ** 2 + (ab - bb) ** 2) ** 0.5
 
 
 # --------------------------------------------------------------------------- #

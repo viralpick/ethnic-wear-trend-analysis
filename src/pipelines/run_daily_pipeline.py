@@ -293,7 +293,9 @@ def _build_signal_classifier(settings: Settings):
             prompt_version=AzureOpenAILLMSignalClassifier.PROMPT_VERSION,
         )
         return AzureOpenAILLMSignalClassifier(cache=cache)
-    except Exception as exc:  # extras 미설치 / Azure creds 누락 등
+    except (ImportError, KeyError) as exc:
+        # extras 미설치 (`[llm]`) 또는 AZURE_OPENAI_* 환경변수 누락 — Tier 3 비활성.
+        # Azure auth/network 실패는 raise (silent skip 시 운영 환경에서 진단 어려움).
         logger.warning("llm_signal_classifier_disabled reason=%r", exc)
         return None
 
@@ -400,7 +402,11 @@ def run_item_resync_phase(
     )
     from exporters.starrocks.sink_runner import emit_items_only
 
-    pool = load_enriched_files(enriched_glob)
+    pool = load_enriched_files(
+        enriched_glob,
+        pre_filter_start=start_date,
+        pre_filter_end=end_date,
+    )
     if start_date is not None and end_date is not None:
         enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
     else:
@@ -462,7 +468,11 @@ def run_representative_phase(
     )
     from exporters.starrocks.sink_runner import emit_representatives_only
 
-    pool = load_enriched_files(enriched_glob)
+    pool = load_enriched_files(
+        enriched_glob,
+        pre_filter_start=start_date,
+        pre_filter_end=end_date,
+    )
     enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
 
     # Phase 3 (2026-04-30): growth rate 계산 (dedup 전 시계열 사용)

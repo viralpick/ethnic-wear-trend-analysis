@@ -7,7 +7,10 @@ Container:
   AZURE_STORAGE_CONTAINER 또는 기본값 `collectify`.
 
 idempotent: 같은 blob 을 두 번 요청해도 로컬 파일이 이미 있으면 네트워크 호출 없이 skip.
-실패한 blob 은 raise 하지 않고 log 후 None 반환 (batch 처리의 다른 blob 은 계속 진행).
+실패 분류 (룰 §4 silent drop 금지):
+  - `ResourceNotFoundError` (blob 없음) / `ServiceRequestError` (네트워크/timeout)
+    → log warning 후 None 반환 (batch 다른 blob 진행).
+  - 그 외 (`ClientAuthenticationError`, `HttpResponseError` 4xx/5xx 등) → raise.
 
 이 모듈은 top-level 로 azure-storage-blob / python-dotenv 를 import. `[blob]` extras 미설치
 시 모듈 import 자체가 ImportError — core 는 이 모듈을 절대 top-level import 하지 말 것.
@@ -18,6 +21,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 
@@ -62,7 +66,12 @@ class BlobDownloader:
         return cls(service=service, container=selected)
 
     def download(self, blob_path: str, dest_dir: Path) -> Path | None:
-        """blob_path → 로컬 파일 경로. 이미 존재하면 skip. 실패 시 None + log."""
+        """blob_path → 로컬 파일 경로. 이미 존재하면 skip.
+
+        실패 분류:
+        - blob 없음 / 일시 네트워크/서버 오류 → log warning + None 반환 (batch 다른 blob 진행).
+        - 인증 오류 등 그 외 모든 예외 → raise (silent drop 금지, 룰 §4).
+        """
         blob_name = self._strip_container_prefix(blob_path)
         dest = dest_dir / Path(blob_name).name
         if dest.exists():
@@ -73,8 +82,9 @@ class BlobDownloader:
             stream = client.download_blob()
             dest.write_bytes(stream.readall())
             return dest
-        except Exception as exc:  # noqa: BLE001 — Azure SDK 예외 계보 다양, 로그 후 skip
-            logger.info("blob_download_failed path=%s reason=%s", blob_path, exc)
+        except (ResourceNotFoundError, ServiceRequestError) as exc:
+            # 알려진 transient/missing 만 drop. HttpResponseError 자식 (auth/4xx/5xx) 은 raise.
+            logger.warning("blob_download_failed path=%s reason=%s", blob_path, exc)
             return None
 
     def _strip_container_prefix(self, blob_path: str) -> str:

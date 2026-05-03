@@ -23,14 +23,9 @@ load_dotenv()
 
 
 def _connect():
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_RESULT_DATABASE", "ethnic_result"),
-        autocommit=True,
-    )
+    """result DB 연결 — `loaders.starrocks_connect.connect_result` 위임 (drift 방지)."""
+    from loaders.starrocks_connect import connect_result
+    return connect_result(autocommit=True, dict_cursor=False)
 
 
 def _q(cur, sql: str, params: tuple = ()) -> list[dict]:

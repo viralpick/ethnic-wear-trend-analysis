@@ -5,41 +5,15 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
-import pymysql
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-def _connect_raw():
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ["STARROCKS_RAW_DATABASE"],
-        cursorclass=pymysql.cursors.DictCursor,
-        charset="utf8mb4",
-    )
-
-
-def _connect_result():
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ["STARROCKS_RESULT_DATABASE"],
-        cursorclass=pymysql.cursors.DictCursor,
-        charset="utf8mb4",
-    )
+# production single source helpers (drift 방지)
+from loaders.starrocks_connect import connect_raw, connect_result  # noqa: E402
+from loaders.url_parsing import split_image_video_urls  # noqa: E402
 
 
 _RAW_QUERIES = {
@@ -134,24 +108,22 @@ _RESULT_QUERIES = {
 }
 
 
-_VIDEO_EXT = (".mp4", ".mov", ".webm", ".m4v")
-_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".heic")
-
-
 def _classify_ig_urls(rows: list[dict]) -> dict[str, float]:
+    """raw row 의 download_urls 를 production policy 와 동일하게 image/video 분류.
+
+    `loaders.url_parsing.split_image_video_urls` single source 사용 — production daily run
+    의 통계와 byte-identical 정렬 보장 (`feedback_ig_carousel_video_share` 45.7% video share).
+    """
     total_image = 0
     total_video = 0
     posts_with_video = 0
     posts_image_only = 0
     video_post_video_count = 0
     for row in rows:
-        urls = (row.get("download_urls") or "").split(",")
-        urls = [u.strip().lower() for u in urls if u.strip()]
-        img = sum(1 for u in urls if any(u.endswith(ext) or ext + "?" in u for ext in _IMAGE_EXT))
-        vid = sum(1 for u in urls if any(u.endswith(ext) or ext + "?" in u for ext in _VIDEO_EXT))
-        # 확장자 매치 안 된 url 은 보수적으로 image (raw_loader 정책 동일)
-        unclassified = max(0, len(urls) - img - vid)
-        img += unclassified
+        urls = [u.strip() for u in (row.get("download_urls") or "").split(",") if u.strip()]
+        images, videos = split_image_video_urls(urls)
+        img = len(images)
+        vid = len(videos)
         total_image += img
         total_video += vid
         if vid > 0:
@@ -176,7 +148,7 @@ def _classify_ig_urls(rows: list[dict]) -> dict[str, float]:
 
 def main() -> None:
     print("=== Raw DB (4-week window 2026-03-30 ~ 2026-04-26) ===")
-    with _connect_raw() as conn:
+    with connect_raw() as conn:
         for name, sql in _RAW_QUERIES.items():
             with conn.cursor() as cur:
                 cur.execute(sql)
@@ -196,7 +168,7 @@ def main() -> None:
                 print(f"  {name}: {val}")
 
     print("\n=== Result DB (last 7 days, computed_at) ===")
-    with _connect_result() as conn:
+    with connect_result() as conn:
         for name, sql in _RESULT_QUERIES.items():
             print(f"\n  -- {name}")
             with conn.cursor() as cur:

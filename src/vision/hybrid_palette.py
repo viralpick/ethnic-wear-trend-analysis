@@ -49,6 +49,7 @@ import numpy as np
 
 from settings import DynamicPaletteConfig
 from vision.color_family_preset import MatcherEntry
+from vision.color_space import delta_e76_tuple
 from vision.dynamic_palette import PaletteCluster as PixelCluster
 from vision.dynamic_palette import extract_dynamic_palette
 
@@ -105,11 +106,9 @@ def _min_deltae76_to_clusters(
     """pick LAB 과 KMeans clusters 중 가장 가까운 ΔE76. clusters 비면 inf."""
     if not clusters:
         return float("inf")
-    pL, pa, pb = pick_lab
     best = float("inf")
     for c in clusters:
-        cL, ca, cb = c.lab
-        d = ((pL - cL) ** 2 + (pa - ca) ** 2 + (pb - cb) ** 2) ** 0.5
+        d = delta_e76_tuple(pick_lab, c.lab)
         if d < best:
             best = d
     return best
@@ -166,11 +165,9 @@ def _resolve_anchor_for_cluster(
     """
     if not surviving_picks:
         return None
-    cL, ca, cb = cluster.lab
     best: tuple[str, float] | None = None
     for pick in surviving_picks:
-        pL, pa, pb = pick_lab_lookup[pick]
-        d = ((cL - pL) ** 2 + (ca - pa) ** 2 + (cb - pb) ** 2) ** 0.5
+        d = delta_e76_tuple(cluster.lab, pick_lab_lookup[pick])
         if d > threshold:
             continue
         if best is None or d < best[1]:
@@ -211,10 +208,8 @@ def _match_anchors_one_to_one(
     pick_priority = {pick: i for i, pick in enumerate(surviving_picks)}
     candidates: list[tuple[float, int, int, str]] = []
     for c_idx, cluster in enumerate(pixel_clusters):
-        cL, ca, cb = cluster.lab
         for pick in surviving_picks:
-            pL, pa, pb = pick_lab_lookup[pick]
-            d = ((cL - pL) ** 2 + (ca - pa) ** 2 + (cb - pb) ** 2) ** 0.5
+            d = delta_e76_tuple(cluster.lab, pick_lab_lookup[pick])
             if d > threshold:
                 continue
             candidates.append((d, pick_priority[pick], c_idx, pick))
@@ -326,13 +321,13 @@ def _resolve_merge_target(
     """
     if not anchor_targets:
         return None
-    cL, ca, cb = cluster.lab
+    cL, _ca, _cb = cluster.lab
     c_chroma = _chroma(cluster.lab)
     c_hue = _hue_deg(cluster.lab)
     best: tuple[str, float] | None = None
     for anchor_name, target_lab in anchor_targets:
-        tL, ta, tb = target_lab
-        d = ((cL - tL) ** 2 + (ca - ta) ** 2 + (cb - tb) ** 2) ** 0.5
+        tL, _ta, _tb = target_lab
+        d = delta_e76_tuple(cluster.lab, target_lab)
         if d > merge_threshold:
             continue
         t_hue = _hue_deg(target_lab)

@@ -3,7 +3,8 @@
 검증:
   - container prefix strip
   - 캐시된 파일 idempotent skip
-  - blob 없을 때 None + no raise
+  - blob 없을 때 (`ResourceNotFoundError`) None + no raise
+  - 알려지지 않은 예외 (예: 인증 오류) 는 raise (silent drop 금지)
   - from_env credential 누락 시 RuntimeError
 """
 from __future__ import annotations
@@ -16,17 +17,27 @@ import pytest
 pytest.importorskip("azure.storage.blob", reason="blob extras required")
 pytest.importorskip("dotenv", reason="blob extras required")
 
+from azure.core.exceptions import ClientAuthenticationError, ResourceNotFoundError  # noqa: E402
+
 from loaders.blob_downloader import BlobDownloader  # noqa: E402
 
 
-def _make_downloader(data_by_blob: dict[str, bytes]) -> BlobDownloader:
+def _make_downloader(
+    data_by_blob: dict[str, bytes],
+    *,
+    raise_for_blob: dict[str, Exception] | None = None,
+) -> BlobDownloader:
     service = MagicMock()
+    raise_for_blob = raise_for_blob or {}
 
     def get_blob_client(container: str, blob: str):  # noqa: ARG001
         client = MagicMock()
+        if blob in raise_for_blob:
+            client.download_blob.side_effect = raise_for_blob[blob]
+            return client
         payload = data_by_blob.get(blob)
         if payload is None:
-            client.download_blob.side_effect = RuntimeError(f"blob not found: {blob}")
+            client.download_blob.side_effect = ResourceNotFoundError(f"blob not found: {blob}")
         else:
             stream = MagicMock()
             stream.readall.return_value = payload
@@ -54,10 +65,21 @@ def test_download_idempotent_cache(tmp_path: Path) -> None:
     assert second is not None
 
 
-def test_download_returns_none_on_failure(tmp_path: Path) -> None:
-    d = _make_downloader({})  # 없는 blob
+def test_download_returns_none_on_resource_not_found(tmp_path: Path) -> None:
+    """blob 없음은 알려진 transient/missing — None 반환."""
+    d = _make_downloader({})  # 없는 blob → ResourceNotFoundError
     out = d.download("collectify/poc/missing.jpg", tmp_path)
     assert out is None
+
+
+def test_download_reraises_unknown_exception(tmp_path: Path) -> None:
+    """인증 오류 등 알려지지 않은 예외는 silent drop 하지 않고 raise (룰 §4)."""
+    d = _make_downloader(
+        {},
+        raise_for_blob={"poc/auth.jpg": ClientAuthenticationError("invalid sas")},
+    )
+    with pytest.raises(ClientAuthenticationError):
+        d.download("collectify/poc/auth.jpg", tmp_path)
 
 
 def test_strip_container_prefix_removes_when_present() -> None:

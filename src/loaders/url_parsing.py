@@ -18,6 +18,40 @@ _IG_REEL_RE = re.compile(r"instagram\.com/reel/([A-Za-z0-9_-]+)")
 _YT_VIDEO_ID_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]+)")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]+)")
 
+# IG download_urls 는 image+video 혼입 (jpg/mp4 carousel). 확장자 기반 분류 — single source.
+# 호출처: `loaders/starrocks_raw_loader._split_image_video` + `scripts/cost_audit._classify_ig_urls`
+# 등. 정책 변경은 여기서만 (drift 방지).
+VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mov", ".webm", ".m4v")
+
+
+def split_image_video_urls(urls: list[str]) -> tuple[list[str], list[str]]:
+    """확장자 기반으로 (image_urls, video_urls) 분리. unknown 확장자는 images 쪽 (보수).
+
+    URL query string (`?sig=...`) 은 분류 시 무시 (`split("?", 1)[0]`). lowercase 비교.
+    `feedback_resolve_video_paths_query_string` 에 명시된 query string 함정 처리.
+    """
+    images: list[str] = []
+    videos: list[str] = []
+    for url in urls:
+        path = url.split("?", 1)[0].lower()
+        if path.endswith(VIDEO_EXTENSIONS):
+            videos.append(url)
+        else:
+            images.append(url)
+    return images, videos
+
+
+def extract_yt_video_id(url: str | None) -> str | None:
+    """YT URL → video_id (`watch?v=` 또는 `youtu.be/`). 매칭 실패 시 None.
+
+    loaders/* 가 raw row 의 url 컬럼에서 video_id 를 뽑을 때 사용. 자체 정규식 정의 금지 —
+    이 함수가 single source 이므로 패턴 변경은 여기에서만.
+    """
+    if not url:
+        return None
+    m = _YT_VIDEO_ID_RE.search(url) or _YT_SHORT_RE.search(url)
+    return m.group(1) if m else None
+
 
 def extract_url_short_tag(url: str | None) -> str | None:
     """외부 게시물 unique key — IG shortcode / YT video_id.

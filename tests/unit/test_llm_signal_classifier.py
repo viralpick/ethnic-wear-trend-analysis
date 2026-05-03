@@ -117,14 +117,43 @@ def test_build_signal_classifier_env_disable(monkeypatch, tmp_path) -> None:
 
 
 def test_build_signal_classifier_init_failure_graceful(monkeypatch) -> None:
-    """ImportError / KeyError 등 초기화 실패 시 graceful skip — exception swallow + None."""
+    """ImportError / KeyError 만 graceful skip → None.
+
+    그 외 (RuntimeError 등 실제 장애) 는 raise (룰 §4 silent drop 금지).
+    """
     from pipelines.run_daily_pipeline import _build_signal_classifier
     from settings import load_settings
+    import pytest
     monkeypatch.delenv("UNKNOWN_SIGNAL_LLM_CLASSIFY", raising=False)
     s = load_settings()
-    # Azure classifier 가 raise 하도록 monkeypatch.
     import attributes.llm_signal_classifier as mod
-    def _boom(*a, **kw):
-        raise RuntimeError("boom — extras 미설치 시뮬레이션")
-    monkeypatch.setattr(mod, "AzureOpenAILLMSignalClassifier", _boom)
+
+    def _make_mock(exc_factory):
+        class _Mock:
+            MODEL_ID = "test-model"
+            PROMPT_VERSION = "v0"
+            def __init__(self, *a, **kw):
+                raise exc_factory()
+        return _Mock
+
+    # KeyError (env 누락) → graceful None
+    monkeypatch.setattr(
+        mod, "AzureOpenAILLMSignalClassifier",
+        _make_mock(lambda: KeyError("AZURE_OPENAI_API_KEY")),
+    )
     assert _build_signal_classifier(s) is None
+
+    # ImportError (extras 미설치) → graceful None
+    monkeypatch.setattr(
+        mod, "AzureOpenAILLMSignalClassifier",
+        _make_mock(lambda: ImportError("openai extras missing")),
+    )
+    assert _build_signal_classifier(s) is None
+
+    # 그 외 알려지지 않은 예외 → raise (silent drop 금지)
+    monkeypatch.setattr(
+        mod, "AzureOpenAILLMSignalClassifier",
+        _make_mock(lambda: RuntimeError("unexpected — should propagate")),
+    )
+    with pytest.raises(RuntimeError, match="should propagate"):
+        _build_signal_classifier(s)

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from contracts.common import ColorFamily
 from vision.color_family_preset import MatcherEntry, lab_to_family
+from vision.color_space import delta_e76_tuple
 from vision.dynamic_palette import PaletteCluster as PixelCluster
 
 PRESET_MATCH_THRESHOLD: float = 15.0
@@ -34,17 +35,16 @@ def resolve_family(
     public — `vision.hybrid_palette` 가 R1 merge 후 family 재해석 용으로 import 한다
     (private import 금지 규칙, feedback_private_symbol_import).
     """
-    cL, ca, cb = cluster.lab
     best: MatcherEntry | None = None
     best_de = float("inf")
     for entry in matcher_entries:
-        eL, ea, eb = entry.lab
-        de = ((cL - eL) ** 2 + (ca - ea) ** 2 + (cb - eb) ** 2) ** 0.5
+        de = delta_e76_tuple(cluster.lab, entry.lab)
         if de < best_de:
             best_de = de
             best = entry
     if best is not None and best_de <= threshold:
         return best.family
+    cL, ca, cb = cluster.lab
     return lab_to_family(cL, ca, cb)
 
 

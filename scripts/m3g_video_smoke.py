@@ -37,16 +37,8 @@ load_dotenv()
 
 
 def _fetch_one_post(post_id: str) -> dict:
-    import pymysql
-    conn = pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_QUERY_PORT", 9030)),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_DATABASE", "png"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    from loaders.starrocks_connect import connect_raw
+    conn = connect_raw()
     try:
         cur = conn.cursor()
         cur.execute(

@@ -74,16 +74,8 @@ def _is_ethnic_context(text: str) -> bool:
 
 
 def _fetch_ig_contents() -> list[str]:
-    import pymysql
-    conn = pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_QUERY_PORT", 9030)),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_DATABASE", "png"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    from loaders.starrocks_connect import connect_raw
+    conn = connect_raw()
     try:
         cur = conn.cursor()
         cur.execute(
@@ -96,16 +88,8 @@ def _fetch_ig_contents() -> list[str]:
 
 
 def _fetch_yt_texts() -> list[str]:
-    import pymysql
-    conn = pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_QUERY_PORT", 9030)),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_DATABASE", "png"),
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    from loaders.starrocks_connect import connect_raw
+    conn = connect_raw()
     try:
         cur = conn.cursor()
         cur.execute(
