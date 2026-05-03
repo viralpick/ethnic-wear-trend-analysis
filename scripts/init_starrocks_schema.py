@@ -32,16 +32,9 @@ _TARGET_DB_DEFAULT = "ethnic_result"
 
 
 def _connect(database: str | None = None) -> pymysql.connections.Connection:
-    """database=None 이면 system 접속 (CREATE DATABASE 용)."""
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=database or "",
-        connect_timeout=10,
-        autocommit=True,
-    )
+    """database=None 이면 system 접속 (CREATE DATABASE 용). drift 방지 helper 위임."""
+    from loaders.starrocks_connect import connect_ddl
+    return connect_ddl(database=database)
 
 
 def _split_statements(sql_text: str) -> list[str]:

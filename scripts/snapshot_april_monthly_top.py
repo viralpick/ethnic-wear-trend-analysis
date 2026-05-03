@@ -39,14 +39,8 @@ def weighted_dist(lst: list[dict], field: str) -> dict[str, float]:
 
 def main(out_path: str, note: str) -> None:
     weeks = ["2026-04-06", "2026-04-13", "2026-04-20", "2026-04-27"]
-    conn = pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_RESULT_DATABASE", "ethnic_result"),
-        autocommit=True,
-    )
+    from loaders.starrocks_connect import connect_result
+    conn = connect_result(autocommit=True, dict_cursor=False)
     rows: list[dict] = []
     try:
         with conn.cursor() as cur:

@@ -54,14 +54,9 @@ JSON_SAMPLE_FIELDS = {
 
 
 def _connect() -> pymysql.connections.Connection:
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_PORT", "9030")),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ["STARROCKS_RESULT_DATABASE"],
-        autocommit=True,
-    )
+    """result DB 연결 — `loaders.starrocks_connect.connect_result` 위임 (drift 방지)."""
+    from loaders.starrocks_connect import connect_result
+    return connect_result(autocommit=True, dict_cursor=False)
 
 
 def main() -> None:

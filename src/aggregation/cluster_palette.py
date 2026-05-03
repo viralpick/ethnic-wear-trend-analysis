@@ -12,59 +12,35 @@
 가지는 share 가 cluster_weight 에 곱해진다. 즉 `cluster_weight = post_palette_cluster.share
 × item_share_in_cluster`. multi-cluster 가 같은 post_palette 를 다른 가중으로 소비.
 
-duplication note: `_Weighted` / `_merge_greedy` / `_drop_small_and_cap` / `_to_pydantic`
-/ `_pick_family` 는 vision.post_palette 와 거의 동일. B3c 완료 후 shared util 로 추출
-예정 (safe-refactor — 한 번에 여러 모듈 대규모 변경 금지).
+merge / drop / hex 변환은 `vision.palette_merge_utils` 공용 헬퍼 (single source) —
+post_palette 와 동일 알고리즘.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-
-import numpy as np
-
-from contracts.common import ColorFamily, PaletteCluster
-from vision.color_space import hex_to_rgb, lab_to_rgb, rgb_to_hex, rgb_to_lab
+from contracts.common import PaletteCluster
+from vision.color_space import hex_to_rgb, rgb_to_lab
+from vision.palette_merge_utils import (
+    WeightedColorEntry,
+    drop_small_and_cap,
+    merge_greedy_lab,
+    to_pydantic_palette,
+)
 
 MAX_CLUSTER_PALETTE_CLUSTERS: int = 5
 CLUSTER_PALETTE_MERGE_DELTA_E: float = 10.0
 MIN_CLUSTER_PALETTE_SHARE: float = 0.05
 
 
-@dataclass(frozen=True)
-class _Weighted:
-    lab: tuple[float, float, float]
-    weight: float
-    family: ColorFamily | None
-
-
-def _family_order(family: ColorFamily | None) -> tuple[int, int]:
-    """merge tiebreak 키 — (None 후순위, enum 선언 순서)."""
-    if family is None:
-        return (1, 0)
-    members: list[Enum] = list(ColorFamily)
-    return (0, members.index(family))
-
-
-def _pick_family(
-    a_weight: float, a_family: ColorFamily | None,
-    b_weight: float, b_family: ColorFamily | None,
-) -> ColorFamily | None:
-    a_key = (-a_weight, *_family_order(a_family))
-    b_key = (-b_weight, *_family_order(b_family))
-    return a_family if a_key <= b_key else b_family
-
-
 def _flatten(
     post_palettes_with_weight: list[tuple[list[PaletteCluster], float]],
-) -> list[_Weighted]:
+) -> list[WeightedColorEntry]:
     """각 post 의 post_palette 를 평탄화 (β4 share-weighted).
 
     weight = cluster.share × post_weight (β4: post_weight = item_share_in_cluster).
     post_weight ≤ 0 이거나 cluster.share ≤ 0 이면 skip. hex → RGB → LAB 는 color_space
     의 D65 경로를 사용해 증거 체인을 유지.
     """
-    out: list[_Weighted] = []
+    out: list[WeightedColorEntry] = []
     for palette, post_weight in post_palettes_with_weight:
         if not palette or post_weight <= 0.0:
             continue
@@ -75,81 +51,12 @@ def _flatten(
             rgb = hex_to_rgb(cluster.hex)
             lab = rgb_to_lab(rgb)
             out.append(
-                _Weighted(
+                WeightedColorEntry(
                     lab=(float(lab[0]), float(lab[1]), float(lab[2])),
                     weight=weight,
                     family=cluster.family,
                 )
             )
-    return out
-
-
-def _merge_greedy(items: list[_Weighted], threshold: float) -> list[_Weighted]:
-    """post_palette._merge_greedy 와 동일 규칙. 가장 가까운 pair 부터 단일 merge.
-
-    tiebreak: (distance asc, i asc, j asc). 입력 크기 <= ~post수 × 3 이라 O(k^3) 무관.
-    """
-    working = list(items)
-    while len(working) > 1:
-        best: tuple[float, int, int] | None = None
-        for i in range(len(working)):
-            for j in range(i + 1, len(working)):
-                li = np.array(working[i].lab, dtype=np.float32)
-                lj = np.array(working[j].lab, dtype=np.float32)
-                d = float(np.linalg.norm(li - lj))
-                if d >= threshold:
-                    continue
-                if best is None or (d, i, j) < best:
-                    best = (d, i, j)
-        if best is None:
-            break
-        _d, i, j = best
-        a, b = working[i], working[j]
-        total = a.weight + b.weight
-        merged_lab = tuple(
-            (a.weight * ai + b.weight * bi) / total
-            for ai, bi in zip(a.lab, b.lab)
-        )
-        merged = _Weighted(
-            lab=(float(merged_lab[0]), float(merged_lab[1]), float(merged_lab[2])),
-            weight=total,
-            family=_pick_family(a.weight, a.family, b.weight, b.family),
-        )
-        working.pop(j)
-        working[i] = merged
-    return working
-
-
-def _drop_small_and_cap(
-    items: list[_Weighted], min_share: float, max_clusters: int,
-) -> list[_Weighted]:
-    total = sum(it.weight for it in items)
-    if total <= 0.0:
-        return []
-    kept = [it for it in items if (it.weight / total) >= min_share]
-    if not kept:
-        return []
-    kept.sort(key=lambda it: -it.weight)
-    return kept[:max_clusters]
-
-
-def _to_pydantic(items: list[_Weighted]) -> list[PaletteCluster]:
-    if not items:
-        return []
-    total = sum(it.weight for it in items)
-    if total <= 0.0:
-        return []
-    labs = np.array([it.lab for it in items], dtype=np.float32)
-    rgbs = lab_to_rgb(labs)
-    out: list[PaletteCluster] = []
-    for it, rgb in zip(items, rgbs):
-        out.append(
-            PaletteCluster(
-                hex=rgb_to_hex(rgb),
-                share=float(it.weight / total),
-                family=it.family,
-            )
-        )
     return out
 
 
@@ -170,9 +77,11 @@ def build_cluster_palette(
     flat = _flatten(post_palettes_with_weight)
     if not flat:
         return []
-    merged = _merge_greedy(flat, merge_deltae76_threshold)
-    capped = _drop_small_and_cap(merged, min_cluster_share, max_clusters)
-    return _to_pydantic(capped)
+    merged = merge_greedy_lab(flat, merge_deltae76_threshold)
+    capped = drop_small_and_cap(
+        merged, min_share=min_cluster_share, max_clusters=max_clusters,
+    )
+    return to_pydantic_palette(capped)
 
 
 __all__ = [

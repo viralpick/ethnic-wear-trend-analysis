@@ -5,44 +5,15 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
-import pymysql
-
-# production 의 image/video URL 분류 정책과 byte-identical 정렬 (drift 방지)
+# production single source helpers (drift 방지)
+from loaders.starrocks_connect import connect_raw, connect_result  # noqa: E402
 from loaders.url_parsing import split_image_video_urls  # noqa: E402
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-def _connect_raw():
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ["STARROCKS_RAW_DATABASE"],
-        cursorclass=pymysql.cursors.DictCursor,
-        charset="utf8mb4",
-    )
-
-
-def _connect_result():
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ["STARROCKS_PORT"]),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ["STARROCKS_RESULT_DATABASE"],
-        cursorclass=pymysql.cursors.DictCursor,
-        charset="utf8mb4",
-    )
 
 
 _RAW_QUERIES = {
@@ -177,7 +148,7 @@ def _classify_ig_urls(rows: list[dict]) -> dict[str, float]:
 
 def main() -> None:
     print("=== Raw DB (4-week window 2026-03-30 ~ 2026-04-26) ===")
-    with _connect_raw() as conn:
+    with connect_raw() as conn:
         for name, sql in _RAW_QUERIES.items():
             with conn.cursor() as cur:
                 cur.execute(sql)
@@ -197,7 +168,7 @@ def main() -> None:
                 print(f"  {name}: {val}")
 
     print("\n=== Result DB (last 7 days, computed_at) ===")
-    with _connect_result() as conn:
+    with connect_result() as conn:
         for name, sql in _RESULT_QUERIES.items():
             print(f"\n  -- {name}")
             with conn.cursor() as cur:

@@ -78,15 +78,8 @@ def fetch_candidates(limit: int) -> list[dict[str, Any]]:
         "ORDER BY posting_at DESC "
         "LIMIT %s"
     )
-    conn = pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_PORT", "9030")),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_RAW_DATABASE", "png"),
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=15,
-    )
+    from loaders.starrocks_connect import connect_raw
+    conn = connect_raw()
     rows: list[dict[str, Any]] = []
     with conn:
         with conn.cursor() as cur:

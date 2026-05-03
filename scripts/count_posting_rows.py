@@ -52,16 +52,9 @@ _QUERIES: dict[str, str] = {
 
 
 def _connect() -> pymysql.Connection:
-    load_dotenv()
-    return pymysql.connect(
-        host=os.environ["STARROCKS_HOST"],
-        port=int(os.environ.get("STARROCKS_PORT", "9030")),
-        user=os.environ["STARROCKS_USER"],
-        password=os.environ["STARROCKS_PASSWORD"],
-        database=os.environ.get("STARROCKS_RAW_DATABASE", "png"),
-        connect_timeout=15,
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    """raw DB 연결 — `loaders.starrocks_connect.connect_raw` 위임 (drift 방지)."""
+    from loaders.starrocks_connect import connect_raw
+    return connect_raw()
 
 
 def _run(cur: pymysql.cursors.Cursor, sql: str) -> int:
