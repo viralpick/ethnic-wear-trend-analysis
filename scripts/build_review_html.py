@@ -13,6 +13,7 @@ M3.A Step E 의 1단계 (정적 HTML). BE/FE 검수 대시보드 초석.
 from __future__ import annotations
 
 import argparse
+import functools
 import html as html_mod
 import json
 from pathlib import Path
@@ -27,6 +28,8 @@ _IMG_CACHE = _REPO / "sample_data" / "image_cache"
 # 신 normalize 적용한 share 를 재계산. summaries cluster_key 와 일치 보장.
 import sys as _sys
 _sys.path.insert(0, str(_REPO / "src"))
+
+from pydantic import ValidationError  # noqa: E402
 
 
 _POST_URL_CACHE: dict[str, str] | None = None
@@ -43,23 +46,27 @@ def _load_post_urls() -> dict[str, str]:
     if _POST_URL_CACHE is not None:
         return _POST_URL_CACHE
     out: dict[str, str] = {}
+    import os
+
+    # 실패 분류 (룰 §4 silent drop 금지):
+    # - `[db]` extras 미설치 (`ImportError`) → 빈 dict (HTML 은 account profile fallback)
+    # - `STARROCKS_HOST` 미설정 → 빈 dict (의도된 dedup 비활성, 로컬 build 등)
+    # - 일시 network/connection 실패 (`pymysql.OperationalError|InterfaceError`) → warn + 빈 dict
+    # - 그 외 (auth / 스키마 / 쿼리 버그) → raise (HTML build 중단, 진단 surface)
     try:
-        import os
         import pymysql
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=_REPO / ".env")
-        if not os.environ.get("STARROCKS_HOST"):
-            _POST_URL_CACHE = out
-            return out
-        conn = pymysql.connect(
-            host=os.environ["STARROCKS_HOST"],
-            port=int(os.environ.get("STARROCKS_PORT", "9030")),
-            user=os.environ["STARROCKS_USER"],
-            password=os.environ["STARROCKS_PASSWORD"],
-            database=os.environ.get("STARROCKS_RAW_DATABASE", "png"),
-            connect_timeout=15,
-            cursorclass=pymysql.cursors.DictCursor,
-        )
+    except ImportError:
+        print("WARN: _load_post_urls disabled (pymysql extras missing) — fallback to account profile")
+        _POST_URL_CACHE = out
+        return out
+
+    if not os.environ.get("STARROCKS_HOST"):
+        _POST_URL_CACHE = out
+        return out
+
+    try:
+        from loaders.starrocks_connect import connect_raw
+        conn = connect_raw()
         with conn.cursor() as cur:
             cur.execute("SELECT id, url FROM india_ai_fashion_inatagram_posting WHERE url IS NOT NULL AND url != ''")
             for r in cur.fetchall():
@@ -68,8 +75,8 @@ def _load_post_urls() -> dict[str, str]:
             for r in cur.fetchall():
                 out[r["id"]] = r["url"]
         conn.close()
-    except Exception as e:
-        print(f"WARN: _load_post_urls failed (fallback to account profile only): {e}")
+    except (pymysql.OperationalError, pymysql.InterfaceError) as e:
+        print(f"WARN: _load_post_urls transient failure: {e!r} — fallback to account profile")
     _POST_URL_CACHE = out
     return out
 
@@ -115,8 +122,14 @@ def _is_video_url(url: str) -> bool:
     return any(path_only.endswith(ext) for ext in _VIDEO_EXTS)
 
 
+@functools.lru_cache(maxsize=None)
 def _ffprobe_duration(video_path: Path) -> float | None:
-    """ffprobe 로 영상 duration (초) 반환. 실패 시 None."""
+    """ffprobe 로 영상 duration (초) 반환. 실패 시 None.
+
+    좁힌 except: ffprobe 미설치 / timeout / 손상된 video → None.
+    `lru_cache` — 같은 영상 (cluster card 미니썸네일 + post card + item detail 등 4중
+    호출) 이 subprocess fork 1회로 처리. 16w build 에서 가시 절감 (cold cache 시 25s/영상).
+    """
     import subprocess
     try:
         out = subprocess.run(
@@ -124,13 +137,23 @@ def _ffprobe_duration(video_path: Path) -> float | None:
              "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
             capture_output=True, text=True, timeout=10,
         )
-        return float(out.stdout.strip()) if out.returncode == 0 else None
-    except Exception:
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"WARN: ffprobe duration failed path={video_path} reason={e!r}")
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
         return None
 
 
+@functools.lru_cache(maxsize=None)
 def _ffprobe_fps(video_path: Path) -> float | None:
-    """ffprobe 로 영상 fps (frame rate) 반환. r_frame_rate "30/1" 형태 → 30.0."""
+    """ffprobe 로 영상 fps (frame rate) 반환. r_frame_rate "30/1" 형태 → 30.0.
+
+    `lru_cache` — `_ffprobe_duration` 와 동일 사유 (같은 영상 다중 호출 cache 히트).
+    """
     import subprocess
     try:
         out = subprocess.run(
@@ -139,15 +162,19 @@ def _ffprobe_fps(video_path: Path) -> float | None:
              "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
             capture_output=True, text=True, timeout=10,
         )
-        if out.returncode != 0:
-            return None
-        s = out.stdout.strip()
+    except (subprocess.SubprocessError, OSError) as e:
+        print(f"WARN: ffprobe fps failed path={video_path} reason={e!r}")
+        return None
+    if out.returncode != 0:
+        return None
+    s = out.stdout.strip()
+    try:
         if "/" in s:
             num, den = s.split("/")
             den_f = float(den)
             return float(num) / den_f if den_f != 0 else None
         return float(s)
-    except Exception:
+    except (ValueError, ZeroDivisionError):
         return None
 
 
@@ -205,10 +232,11 @@ def _selected_video_frames(
                  "-frames:v", "1", "-q:v", "3", str(thumb_path)],
                 capture_output=True, timeout=15,
             )
-            if thumb_path.exists() and thumb_path.stat().st_size > 0:
-                out.append(thumb_path)
-        except Exception:
+        except (subprocess.SubprocessError, OSError) as e:
+            print(f"WARN: ffmpeg sel-thumb failed path={video_path} idx={idx} reason={e!r}")
             continue
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            out.append(thumb_path)
     return out
 
 
@@ -241,10 +269,11 @@ def _extract_video_thumbs(
                  "-frames:v", "1", "-q:v", "3", str(thumb_path)],
                 capture_output=True, timeout=15,
             )
-            if thumb_path.exists() and thumb_path.stat().st_size > 0:
-                out_paths.append(thumb_path)
-        except Exception:
+        except (subprocess.SubprocessError, OSError) as e:
+            print(f"WARN: ffmpeg eq-thumb failed path={video_path} idx={idx} reason={e!r}")
             continue
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            out_paths.append(thumb_path)
     return out_paths
 
 
@@ -801,7 +830,8 @@ def _render_compact_contributor(
                 f = normalize_fabric(rep_model)
                 g_val = g.value if g is not None else None
                 f_val = f.value if f is not None else None
-            except Exception:
+            except ValidationError as e:
+                print(f"WARN: EthnicOutfit validate skip (cluster_card) reason={e.error_count()} errors")
                 continue
             canon_ck = f"{g_val}__{f_val}" if g_val and f_val else None
             if canon_ck == cluster_key:
@@ -849,7 +879,8 @@ def _render_compact_contributor(
                 f = normalize_fabric(rep_model)
                 g_val = g.value if g is not None else None
                 f_val = f.value if f is not None else None
-            except Exception:
+            except ValidationError:
+                # raw dict fallback — UI 가독성 우선, validate 실패는 빈번 (구버전 enriched).
                 g_val = rep_dict.get("upper_garment_type")
                 f_val = rep_dict.get("fabric")
             canon_ck = f"{g_val}__{f_val}" if g_val and f_val else None
@@ -951,7 +982,7 @@ def _render_item_full_detail(
             rm = EthnicOutfit.model_validate(rep)
             g = normalize_garment_for_cluster(rm); f = normalize_fabric(rm)
             ck_canon = f"{g.value if g else 'unknown'}__{f.value if f else 'unknown'}"
-        except Exception:
+        except ValidationError:
             ck_canon = None
         is_match = cluster_key is not None and ck_canon == cluster_key
         klass = "item-canon-block match" if is_match else "item-canon-block"
@@ -1423,16 +1454,20 @@ def _build_cluster_contributors(
     from contracts.enriched import EnrichedContentItem
 
     out: dict[str, list[tuple[dict[str, Any], float]]] = defaultdict(list)
+    skip_count = 0
     for it in enriched:
         try:
             model = EnrichedContentItem.model_validate(it)
-        except Exception:
+        except ValidationError:
+            skip_count += 1
             continue
         item_dist = enriched_to_item_distribution(model)
         shares = item_cluster_shares(item_dist)
         for ck, sh in shares.items():
             if sh > 0:
                 out[ck].append((it, sh))
+    if skip_count > 0:
+        print(f"WARN: _build_cluster_contributors EnrichedContentItem skip_count={skip_count}")
     for ck in out:
         out[ck].sort(key=lambda t: -t[1])
     return dict(out)
