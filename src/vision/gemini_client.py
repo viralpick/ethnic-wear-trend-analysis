@@ -48,6 +48,9 @@ DEFAULT_MODEL_ID = "gemini-2.5-flash"
 # 60s 는 image+prompt 안정 + hang 차단. SDK 가 ms 단위.
 _GEMINI_TIMEOUT_MS = 60_000
 
+# 절대 규칙 #5 (재현성) — `temperature=0.0` 만으론 완전 결정론 보장 X. seed 도 명시.
+_GEMINI_SEED = 42
+
 
 class GeminiVisionLLMClient:
     """google-genai SDK 기반 vision LLM 클라이언트. VisionLLMClient Protocol 구현."""
@@ -62,7 +65,12 @@ class GeminiVisionLLMClient:
     ) -> None:
         if api_key is None:
             load_dotenv()
-            api_key = os.environ["GEMINI_API_KEY"]
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "GEMINI_API_KEY missing — set in .env or pass api_key= explicitly. "
+                    "see .env.example"
+                )
         self._client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
@@ -134,6 +142,7 @@ class GeminiVisionLLMClient:
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.0,
+                seed=_GEMINI_SEED,
             ),
         )
         # Cost baseline (2026-05-01): token rate 측정 — frame resize 안 하면 384×384 이하

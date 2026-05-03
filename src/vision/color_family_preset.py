@@ -25,13 +25,27 @@ from pathlib import Path
 from contracts.common import ColorFamily
 
 
+# `lab_to_family` 6-단계 cascade 의 임계값 — F-8 (mid-L × mid-chroma 갭 수정) 도입
+# 후 회귀 위험. 모듈 상수 승격으로 변경 추적 + 단위 테스트가 임계 직접 참조 가능.
+_ACHROMATIC_CHROMA = 12.0  # chroma < 12 → WHITE/NEUTRAL
+_WHITE_LIGHTNESS = 85.0    # L > 85 + achromatic → WHITE_ON_WHITE
+_PASTEL_LIGHTNESS = 70.0   # L > 70 AND chroma ≤ 55 → PASTEL
+_PASTEL_CHROMA_MAX = 55.0  # PASTEL / EARTH 상한 chroma
+_EARTH_LIGHTNESS_LO = 25.0
+_EARTH_LIGHTNESS_HI = 65.0
+_EARTH_B_MIN = 10.0        # warm-side b 최소
+_JEWEL_LIGHTNESS_MAX = 45.0
+_JEWEL_CHROMA_MIN = 20.0
+_BRIGHT_CHROMA_MIN = 55.0
+
+
 def lab_to_family(L: float, a: float, b: float) -> ColorFamily:
     """LAB 좌표 1개 → ColorFamily. dedup 용 coarse rule.
 
     chroma-first 분기 — 기존 6-line cascade 가 mid-L × mid-chroma 영역을 NEUTRAL 로 흡수
     (pool_13 indigo / pool_29 fuchsia 등 6 색) 하던 갭 수정 (F-8).
 
-    thresholds (순서 의존):
+    thresholds (순서 의존, 모듈 상수 `_ACHROMATIC_CHROMA` 등 참조):
       1. chroma < 12 (achromatic) → L > 85 면 WHITE_ON_WHITE, else NEUTRAL
       2. L > 70 AND chroma <= 55 → PASTEL (소프트 톤)
       3. EARTH 우선: 25 < L < 65 AND a > 0 AND b > 10 AND chroma <= 55 → EARTH
@@ -43,15 +57,19 @@ def lab_to_family(L: float, a: float, b: float) -> ColorFamily:
          은 NEUTRAL 보다 JEWEL 이 dedup 정합. teal/mid-blue/lavender 등.
     """
     chroma = (a * a + b * b) ** 0.5
-    if chroma < 12:
-        return ColorFamily.WHITE_ON_WHITE if L > 85 else ColorFamily.NEUTRAL
-    if L > 70 and chroma <= 55:
+    if chroma < _ACHROMATIC_CHROMA:
+        return ColorFamily.WHITE_ON_WHITE if L > _WHITE_LIGHTNESS else ColorFamily.NEUTRAL
+    if L > _PASTEL_LIGHTNESS and chroma <= _PASTEL_CHROMA_MAX:
         return ColorFamily.PASTEL
-    if 25 < L < 65 and a > 0 and b > 10 and chroma <= 55:
+    if (
+        _EARTH_LIGHTNESS_LO < L < _EARTH_LIGHTNESS_HI
+        and a > 0 and b > _EARTH_B_MIN
+        and chroma <= _PASTEL_CHROMA_MAX
+    ):
         return ColorFamily.EARTH
-    if L <= 45 and chroma >= 20:
+    if L <= _JEWEL_LIGHTNESS_MAX and chroma >= _JEWEL_CHROMA_MIN:
         return ColorFamily.JEWEL
-    if chroma > 55:
+    if chroma > _BRIGHT_CHROMA_MIN:
         return ColorFamily.BRIGHT
     return ColorFamily.JEWEL
 

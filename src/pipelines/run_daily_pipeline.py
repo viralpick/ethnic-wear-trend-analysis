@@ -718,10 +718,7 @@ def _build_emergence_params(args: argparse.Namespace):
     )
 
 
-def _resolve_target_date(cli: str | None, settings_target: date | None) -> date:
-    if cli:
-        return datetime.strptime(cli, "%Y-%m-%d").date()
-    return settings_target or date.today()
+from pipelines._cli_common import resolve_target_date as _resolve_target_date  # noqa: E402, F401
 
 
 def _build_vision_llm(choice: str, settings: Settings):

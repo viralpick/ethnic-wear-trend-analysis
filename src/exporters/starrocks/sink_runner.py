@@ -309,17 +309,24 @@ def emit_items_only(
     writer: StarRocksWriter,
     *,
     computed_at: str | None = None,
+    _distributions_cache: (
+        tuple[list[ItemDistribution], dict[str, str]] | None
+    ) = None,
 ) -> dict[str, int]:
     """item / canonical_group / canonical_object 만 적재 — phase item 진입점.
 
     representative_weekly 는 별도 emit_representatives_only 가 처리.
+
+    `_distributions_cache`: orchestrator (`emit_to_starrocks`) 가 `_build_item_distributions`
+    1회 계산 후 두 emit 함수에 주입 — same-batch 2x 동일 fan-out 회피 (P1-B 효율).
+    None 이면 자체 계산 (단독 호출 시 backward compat).
     """
     if not enriched:
         logger.info("emit_items_only skip — empty enriched")
         return {ITEM_TABLE: 0, GROUP_TABLE: 0, OBJECT_TABLE: 0}
 
     computed = computed_at or _now_utc_str()
-    item_distributions, _ = _build_item_distributions(enriched)
+    item_distributions, _ = _distributions_cache or _build_item_distributions(enriched)
 
     item_rows: list[dict[str, Any]] = []
     group_rows: list[dict[str, Any]] = []
@@ -356,11 +363,16 @@ def emit_representatives_only(
     *,
     weekly_history_path: Path,
     computed_at: str | None = None,
+    _distributions_cache: (
+        tuple[list[ItemDistribution], dict[str, str]] | None
+    ) = None,
 ) -> dict[str, int]:
     """representative_weekly 만 적재 — phase representative 진입점.
 
     enriched 는 evidence (item_id → source_post_id) 매핑 + contribution 계산용.
     item/group/object 는 별도 emit_items_only 가 처리 (이미 적재된 상태 가정).
+
+    `_distributions_cache`: `emit_items_only` 와 동일 — orchestrator 가 1회 주입.
     """
     if not enriched:
         logger.info("emit_representatives_only skip — empty enriched")
@@ -368,7 +380,9 @@ def emit_representatives_only(
 
     computed = computed_at or _now_utc_str()
     week_start_iso = week_start_monday(target_date).isoformat()
-    item_distributions, id_map = _build_item_distributions(enriched)
+    item_distributions, id_map = (
+        _distributions_cache or _build_item_distributions(enriched)
+    )
     summaries_by_key: dict[str, TrendClusterSummary] = {
         s.cluster_key: s for s in summaries
     }
@@ -441,11 +455,17 @@ def emit_to_starrocks(
         return {ITEM_TABLE: 0, GROUP_TABLE: 0, OBJECT_TABLE: 0, REPRESENTATIVE_TABLE: 0}
 
     computed = computed_at or _now_utc_str()
-    item_counts = emit_items_only(enriched, writer, computed_at=computed)
+    # P1-B 효율: _build_item_distributions 1회 계산 후 두 emit 에 공유 (이전 2x → 1x)
+    distributions_cache = _build_item_distributions(enriched)
+    item_counts = emit_items_only(
+        enriched, writer, computed_at=computed,
+        _distributions_cache=distributions_cache,
+    )
     rep_counts = emit_representatives_only(
         enriched, summaries, target_date, writer,
         weekly_history_path=weekly_history_path,
         computed_at=computed,
+        _distributions_cache=distributions_cache,
     )
     counts = {**item_counts, **rep_counts}
     logger.info(

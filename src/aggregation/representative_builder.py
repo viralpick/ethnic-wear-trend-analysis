@@ -225,12 +225,16 @@ def aggregate_representatives(
     out: list[RepresentativeAggregate] = []
     for key in sorted(by_key.keys()):
         rows = by_key[key]
-        total = sum(r.contribution for r in rows)
+        # single-pass: total + per_source + item_ids 누적 (이전 3-pass 통합).
+        total = 0.0
+        per_source: dict[ContentSource, float] = {s: 0.0 for s in all_sources}
+        item_ids: set[str] = set()
+        for r in rows:
+            total += r.contribution
+            per_source[r.source] = per_source.get(r.source, 0.0) + r.contribution
+            item_ids.add(r.item_id)
         if total <= 0.0:
             continue
-        per_source: dict[ContentSource, float] = {s: 0.0 for s in all_sources}
-        for r in rows:
-            per_source[r.source] = per_source.get(r.source, 0.0) + r.contribution
         factor = {s: per_source[s] / total for s in all_sources}
         # 합=1.0 invariant defensive check — 부동소수 epsilon 만 허용.
         assert abs(sum(factor.values()) - 1.0) < 1e-9, (
@@ -240,7 +244,7 @@ def aggregate_representatives(
             representative_key=key,
             total_item_contribution=total,
             factor_contribution=factor,
-            member_count=len({r.item_id for r in rows}),
+            member_count=len(item_ids),
         ))
     return out
 
