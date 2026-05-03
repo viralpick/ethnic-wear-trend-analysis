@@ -308,15 +308,23 @@ STYLING_TAG_INDEX: dict[str, StylingCombo] = _build_tag_index(STYLING_COMBO_MAPP
 STYLING_KEYWORD_INDEX: dict[str, StylingCombo] = _build_keyword_index(STYLING_COMBO_MAPPINGS)
 
 
+# 5 dict union — module load 시 1회 build 후 frozen 재사용. unknown_signal_tracker 가
+# `build_counters` 마다 호출 → 16w replay 32+ 호출. 매번 재빌드 회피 (P1-B 효율).
+_ALL_KNOWN_HASHTAGS: frozenset[str] = frozenset(
+    GARMENT_TAG_INDEX.keys()
+    | TECHNIQUE_TAG_INDEX.keys()
+    | FABRIC_TAG_INDEX.keys()
+    | OCCASION_TAG_INDEX.keys()
+    | STYLING_TAG_INDEX.keys()
+)
+
+
 def all_known_hashtags() -> frozenset[str]:
-    """Unknown signal tracker 가 쓰는 전체 '알려진 해시태그' 집합 (hashtag side only)."""
-    return frozenset(
-        GARMENT_TAG_INDEX.keys()
-        | TECHNIQUE_TAG_INDEX.keys()
-        | FABRIC_TAG_INDEX.keys()
-        | OCCASION_TAG_INDEX.keys()
-        | STYLING_TAG_INDEX.keys()
-    )
+    """Unknown signal tracker 가 쓰는 전체 '알려진 해시태그' 집합 (hashtag side only).
+
+    module-level frozen 캐시 — 매 호출 재빌드 0. mapping_tables 정의 후 5 dict union 1회.
+    """
+    return _ALL_KNOWN_HASHTAGS
 
 
 # --------------------------------------------------------------------------- #
