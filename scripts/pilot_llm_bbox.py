@@ -35,9 +35,13 @@ logger = logging.getLogger("pilot_llm_bbox")
 # GeminiVisionLLMClient 와 공유). 파일럿은 얇은 wrapper — A/B 비교 / HTML 렌더만 담당.
 # repo root/src 를 path 에 넣어 `uv run python scripts/...` 로 직접 실행 가능하게.
 _SRC_ROOT = Path(__file__).resolve().parent.parent / "src"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))  # for `from scripts._html_utils import ...`
 
+from scripts._html_utils import escape as _escape  # noqa: E402, F401
 from vision.prompts import SYSTEM_PROMPT  # noqa: E402
 from vision.traditional_filter import is_outfit_traditional  # noqa: E402
 
@@ -551,8 +555,7 @@ def _render_summary(models: list[str], results: dict[str, list[PilotResult]]) ->
     )
 
 
-def _escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+# `_escape` 는 `scripts._html_utils.escape` 로 통합 (drift 차단). import alias 위에서 처리.
 
 
 _HTML_TEMPLATE = """<!doctype html>

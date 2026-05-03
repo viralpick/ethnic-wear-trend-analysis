@@ -13,23 +13,19 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO))  # for `from scripts._html_utils import ...`
 _JSON = _REPO / "outputs" / "color_preset" / "color_preset.json"
 _HTML = _REPO / "outputs" / "color_preset" / "preview.html"
+
+from scripts._html_utils import text_color_for_bg  # noqa: E402
 
 # LAB 의 a/b 평면 chroma 가 이 값 미만이면 "neutral" 로 간주. 중/저채도 전통색 감안해 12 선택.
 _NEUTRAL_CHROMA_CUTOFF = 12.0
 
 
-def _luma(hex_code: str) -> float:
-    r = int(hex_code[1:3], 16) / 255
-    g = int(hex_code[3:5], 16) / 255
-    b = int(hex_code[5:7], 16) / 255
-    return 0.299 * r + 0.587 * g + 0.114 * b
-
-
 def _card(entry: dict) -> str:
     hex_code = entry["hex"]
-    text_color = "#111" if _luma(hex_code) > 0.55 else "#f5f5f5"
+    text_color = text_color_for_bg(hex_code, dark="#111", light="#f5f5f5")
     lab = entry["lab"]
     return (
         f'<div class="card" style="background:{hex_code}; color:{text_color};">'

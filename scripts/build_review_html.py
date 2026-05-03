@@ -28,6 +28,7 @@ _IMG_CACHE = _REPO / "sample_data" / "image_cache"
 # 신 normalize 적용한 share 를 재계산. summaries cluster_key 와 일치 보장.
 import sys as _sys
 _sys.path.insert(0, str(_REPO / "src"))
+_sys.path.insert(0, str(_REPO))  # for `from scripts._html_utils import ...`
 
 from pydantic import ValidationError  # noqa: E402
 
@@ -81,8 +82,7 @@ def _load_post_urls() -> dict[str, str]:
     return out
 
 
-def _esc(s: Any) -> str:
-    return html_mod.escape(str(s)) if s is not None else ""
+from scripts._html_utils import escape as _esc, text_color_for_bg as _hex_text_color  # noqa: E402, F401
 
 
 def _rel_path(target: Path, base: Path) -> str:
@@ -287,19 +287,6 @@ def _resolve_video_local_path(url: str) -> Path | None:
         return None
     cached = _IMG_CACHE / basename
     return cached if cached.exists() else None
-
-
-def _hex_text_color(hex_v: str) -> str:
-    """배경 hex 의 luminance 기준 contrast 색상 (white/black) 결정."""
-    if not hex_v or not hex_v.startswith("#") or len(hex_v) < 7:
-        return "#000"
-    try:
-        r = int(hex_v[1:3], 16); g = int(hex_v[3:5], 16); b = int(hex_v[5:7], 16)
-    except ValueError:
-        return "#000"
-    # ITU-R BT.601 luminance
-    lum = 0.299 * r + 0.587 * g + 0.114 * b
-    return "#fff" if lum < 130 else "#000"
 
 
 def _color_bar(palette: list[dict[str, Any]]) -> str:
