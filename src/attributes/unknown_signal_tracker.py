@@ -101,6 +101,71 @@ class EmergenceCounters:
     sources: dict[str, set[str]] = field(default_factory=dict)
 
 
+def _init_counters_state(
+    base: EmergenceCounters | None,
+) -> tuple[
+    dict[str, dict[str, int]],
+    dict[str, tuple[int, int]],
+    dict[str, bool],
+    dict[str, set[str]],
+]:
+    """build_counters 의 4 state dict 초기화 — base 가 있으면 deep copy, 없으면 빈 dict."""
+    buckets: dict[str, dict[str, int]] = defaultdict(dict)
+    co_occur: dict[str, tuple[int, int]] = {}
+    known: dict[str, bool] = {}
+    sources: dict[str, set[str]] = defaultdict(set)
+    if base is not None:
+        for tag, b in base.buckets.items():
+            buckets[tag] = dict(b)
+        co_occur = dict(base.co_occur)
+        known = dict(base.known)
+        for tag, src_set in base.sources.items():
+            sources[tag] = set(src_set)
+    return buckets, co_occur, known, sources
+
+
+def _collect_post_tag_signals(
+    item: NormalizedContentItem,
+    extra_tags_per_post: dict[str, dict[str, list[str]]] | None,
+) -> tuple[dict[str, int], set[str], dict[str, set[str]], bool]:
+    """post 1건의 tag 시그널 수집 — hashtag + vision raw inject 정규화.
+
+    Returns:
+      hashtag_counts: hashtag list 의 raw instance count (stoplist 제거 후).
+      vision_only_tags: hashtag 에 없고 vision inject 에서만 등장한 tag.
+      tag_sources: tag → source set ({'hashtag', 'vision_garment', ...}).
+      has_vision_signal: vision inject 가 1개라도 있으면 True (fashion_density 자동 통과).
+
+    `is_meta_hashtag` stoplist 는 hashtag list / vision tag 양쪽에서 drop —
+    buckets/co_occur 모두 미카운트 (v2.3).
+    """
+    tag_sources: dict[str, set[str]] = defaultdict(set)
+    hashtag_counts: dict[str, int] = defaultdict(int)
+    for raw in item.hashtags:
+        t = _normalize_tag(raw)
+        if not t or is_meta_hashtag(t):
+            continue
+        hashtag_counts[t] += 1
+        tag_sources[t].add("hashtag")
+
+    has_vision_signal = False
+    vision_tags: set[str] = set()
+    if extra_tags_per_post is not None:
+        per_category = extra_tags_per_post.get(item.source_post_id, {})
+        for category, words in per_category.items():
+            if not words:
+                continue
+            has_vision_signal = True
+            for raw in words:
+                t = _normalize_tag(raw)
+                if not t or is_meta_hashtag(t):
+                    continue
+                tag_sources[t].add(category)
+                vision_tags.add(t)
+    vision_only_tags = vision_tags - hashtag_counts.keys()
+    return dict(hashtag_counts), vision_only_tags, dict(tag_sources), has_vision_signal
+
+
 def build_counters(
     items: list[NormalizedContentItem],
     *,
@@ -118,7 +183,7 @@ def build_counters(
         vision raw garment/fabric/technique inject 용). category 가 source 분류
         (signal_type) 입력으로 sources tracking 됨. 이미 normalized lowercase 가정.
 
-    v2.3 변경:
+    v2.3 정책:
     - IG meta stoplist 태그는 hashtag list 자체에서 drop → buckets/co_occur 양쪽 미카운트
     - co_occur numerator: fashion_density(post) >= threshold 인 post 만 카운트.
       fashion_density = n_known_fashion / n_total_after_stoplist (post-level dedup).
@@ -131,19 +196,12 @@ def build_counters(
         는 post 당 +1 (extract_vision_raw_tags 가 이미 dedup).
     co_occur: 같은 post 안 모든 unique tag 별 +1 (post-level dedup).
     known/sources: 모든 unique tag 에 대해 갱신.
+
+    helper 분해 (P1-B): `_init_counters_state` (base copy) + `_collect_post_tag_signals`
+    (post 1건 tag 정규화). 본 함수는 orchestrator + bucket/density/co_occur 업데이트.
     """
     known_set = all_known_hashtags()
-    buckets: dict[str, dict[str, int]] = defaultdict(dict)
-    co_occur: dict[str, tuple[int, int]] = {}
-    known: dict[str, bool] = {}
-    sources: dict[str, set[str]] = defaultdict(set)
-    if base is not None:
-        for tag, b in base.buckets.items():
-            buckets[tag] = dict(b)
-        co_occur = dict(base.co_occur)
-        known = dict(base.known)
-        for tag, src_set in base.sources.items():
-            sources[tag] = set(src_set)
+    buckets, co_occur, known, sources = _init_counters_state(base)
 
     for item in items:
         pd = _post_date_ist(item)
@@ -153,50 +211,29 @@ def build_counters(
             continue
         if to_date is not None and pd > to_date:
             continue
-        pd_iso = pd.isoformat()
-        # hashtag normalize → meta stoplist drop. raw instance count 유지.
-        tag_source_in_post: dict[str, set[str]] = defaultdict(set)
-        hashtag_counts_in_post: dict[str, int] = defaultdict(int)
-        for raw in item.hashtags:
-            t = _normalize_tag(raw)
-            if not t or is_meta_hashtag(t):
-                continue
-            hashtag_counts_in_post[t] += 1
-            tag_source_in_post[t].add("hashtag")
-        # vision raw garment/fabric/technique inject. vision LLM 이 이미 ethnic 판정한
-        # post 이므로 fashion_density 통과 자동 보장 (Tier 4 / spec §4.2 v2.3).
-        has_vision_signal = False
-        vision_tags_in_post: set[str] = set()
-        if extra_tags_per_post is not None:
-            per_category = extra_tags_per_post.get(item.source_post_id, {})
-            for category, words in per_category.items():
-                if not words:
-                    continue
-                has_vision_signal = True
-                for raw in words:
-                    t = _normalize_tag(raw)
-                    if not t or is_meta_hashtag(t):
-                        continue
-                    tag_source_in_post[t].add(category)
-                    vision_tags_in_post.add(t)
-        if not tag_source_in_post:
+
+        hashtag_counts, vision_only_tags, tag_sources, has_vision_signal = (
+            _collect_post_tag_signals(item, extra_tags_per_post)
+        )
+        if not tag_sources:
             continue
+
+        unique_tags = set(tag_sources.keys())
         # fashion-context 평가 (post-level dedup 기준). vision 시그널 있으면 자동 통과.
-        unique_tags = set(tag_source_in_post.keys())
         n_known = sum(1 for t in unique_tags if t in known_set)
         density = n_known / len(unique_tags)
         is_fashion_post = has_vision_signal or density >= fashion_density_threshold
-        # buckets — hashtag raw instance count + vision-only tag 는 post 당 +1.
-        for t, cnt in hashtag_counts_in_post.items():
+
+        pd_iso = pd.isoformat()
+        # buckets — hashtag raw instance count + vision-only tag post 당 +1
+        for t, cnt in hashtag_counts.items():
             buckets[t][pd_iso] = buckets[t].get(pd_iso, 0) + cnt
-        for t in vision_tags_in_post - hashtag_counts_in_post.keys():
+        for t in vision_only_tags:
             buckets[t][pd_iso] = buckets[t].get(pd_iso, 0) + 1
-        # known + sources — 모든 unique tag
+        # known + sources + co_occur — 모든 unique tag
         for t in unique_tags:
             known[t] = t in known_set
-            sources[t].update(tag_source_in_post[t])
-        # co_occur — post-level dedup. numerator = fashion-context post.
-        for t in unique_tags:
+            sources[t].update(tag_sources[t])
             n_fc, n_tot = co_occur.get(t, (0, 0))
             co_occur[t] = (n_fc + (1 if is_fashion_post else 0), n_tot + 1)
     return EmergenceCounters(
