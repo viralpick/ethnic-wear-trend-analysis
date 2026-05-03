@@ -30,22 +30,15 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))  # for `from scripts._sql_utils import ...`
+from scripts._sql_utils import split_statements as _split_statements  # noqa: E402, F401
+
 
 def _connect(database: str) -> pymysql.connections.Connection:
     """DDL 용 — drift 방지 helper 위임 (database 명시 필수)."""
     from loaders.starrocks_connect import connect_ddl
     return connect_ddl(database=database)
-
-
-def _split_statements(sql_text: str) -> list[str]:
-    cleaned: list[str] = []
-    for line in sql_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        cleaned.append(line)
-    joined = "\n".join(cleaned)
-    return [s.strip() for s in joined.split(";") if s.strip()]
 
 
 def _desc_table(conn: pymysql.connections.Connection, table: str, label: str) -> None:

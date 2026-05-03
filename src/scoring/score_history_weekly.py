@@ -96,9 +96,15 @@ class WeeklyScoreHistory:
             "week_start_date": week_start_monday(target_date).isoformat(),
         }
 
-    def save(self) -> None:
+    def save(self, *, compact: bool = False) -> None:
+        """`compact=True` 면 indent 없이 한 줄 dump — production 16w 누적 cost 절감용.
+        default 는 indent=2 (audit / diff 친화).
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        indent = None if compact else 2
         self._path.write_text(
-            json.dumps(self._data, indent=2, ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                self._data, indent=indent, ensure_ascii=False, sort_keys=True,
+            ),
             encoding="utf-8",
         )
