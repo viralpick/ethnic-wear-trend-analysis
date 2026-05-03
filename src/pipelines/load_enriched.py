@@ -24,18 +24,40 @@ logger = get_logger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def load_enriched_files(glob_pattern: str) -> list[EnrichedContentItem]:
+def load_enriched_files(
+    glob_pattern: str,
+    *,
+    pre_filter_start: date | None = None,
+    pre_filter_end: date | None = None,
+) -> list[EnrichedContentItem]:
     """glob 패턴으로 enriched.json 파일들 로드 → flat list.
 
     같은 source_post_id 중복 시 마지막 파일 우선 (glob 정렬 순서). 단 같은
     url_short_tag 의 multi-snapshot 은 모두 유지 (Phase 3, 2026-04-30) — growth rate
     계산용 시계열.
+
+    Optional `pre_filter_start` / `pre_filter_end`: 16w 백필 시 anchor window 밖 post 의
+    Pydantic validate 비용 절감 — JSON dict 의 `normalized.post_date` 문자열 prefix
+    (`YYYY-MM-DD`) 만 보고 ±1 day 마진으로 pre-skip. None 이면 전체 validate (현행 동작).
+    Pydantic validate + downstream `filter_by_date_range` 가 정밀 IST 필터 — pre-filter 는
+    cheap dropout 만.
     """
     paths = sorted(glob.glob(glob_pattern))
     if not paths:
         logger.warning("load_enriched_files no_match pattern=%s", glob_pattern)
         return []
 
+    # ±1 day 마진은 IST/UTC 경계 + post_date 와 batch run 시점의 시차 흡수.
+    pre_start_str = (
+        (pre_filter_start - timedelta(days=1)).isoformat()
+        if pre_filter_start is not None else None
+    )
+    pre_end_str = (
+        (pre_filter_end + timedelta(days=1)).isoformat()
+        if pre_filter_end is not None else None
+    )
+
+    skipped_pre_filter = 0
     by_post_id: dict[str, EnrichedContentItem] = {}
     for path in paths:
         try:
@@ -45,6 +67,16 @@ def load_enriched_files(glob_pattern: str) -> list[EnrichedContentItem]:
             logger.warning("load_enriched_skip path=%s reason=%r", path, exc)
             continue
         for raw in data:
+            if pre_start_str is not None or pre_end_str is not None:
+                pd = (raw.get("normalized") or {}).get("post_date")
+                if isinstance(pd, str) and len(pd) >= 10:
+                    pd_prefix = pd[:10]
+                    if pre_start_str is not None and pd_prefix < pre_start_str:
+                        skipped_pre_filter += 1
+                        continue
+                    if pre_end_str is not None and pd_prefix > pre_end_str:
+                        skipped_pre_filter += 1
+                        continue
             try:
                 item = EnrichedContentItem.model_validate(raw)
             except Exception as exc:
@@ -55,8 +87,8 @@ def load_enriched_files(glob_pattern: str) -> list[EnrichedContentItem]:
             by_post_id[item.normalized.source_post_id] = item
 
     logger.info(
-        "load_enriched_files loaded=%d files=%d pattern=%s",
-        len(by_post_id), len(paths), glob_pattern,
+        "load_enriched_files loaded=%d files=%d pre_filter_skipped=%d pattern=%s",
+        len(by_post_id), len(paths), skipped_pre_filter, glob_pattern,
     )
     return list(by_post_id.values())
 

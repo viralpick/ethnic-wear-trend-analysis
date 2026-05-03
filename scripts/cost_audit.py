@@ -13,6 +13,9 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
 import pymysql
+
+# production 의 image/video URL 분류 정책과 byte-identical 정렬 (drift 방지)
+from loaders.url_parsing import split_image_video_urls  # noqa: E402
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -134,24 +137,22 @@ _RESULT_QUERIES = {
 }
 
 
-_VIDEO_EXT = (".mp4", ".mov", ".webm", ".m4v")
-_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".heic")
-
-
 def _classify_ig_urls(rows: list[dict]) -> dict[str, float]:
+    """raw row 의 download_urls 를 production policy 와 동일하게 image/video 분류.
+
+    `loaders.url_parsing.split_image_video_urls` single source 사용 — production daily run
+    의 통계와 byte-identical 정렬 보장 (`feedback_ig_carousel_video_share` 45.7% video share).
+    """
     total_image = 0
     total_video = 0
     posts_with_video = 0
     posts_image_only = 0
     video_post_video_count = 0
     for row in rows:
-        urls = (row.get("download_urls") or "").split(",")
-        urls = [u.strip().lower() for u in urls if u.strip()]
-        img = sum(1 for u in urls if any(u.endswith(ext) or ext + "?" in u for ext in _IMAGE_EXT))
-        vid = sum(1 for u in urls if any(u.endswith(ext) or ext + "?" in u for ext in _VIDEO_EXT))
-        # 확장자 매치 안 된 url 은 보수적으로 image (raw_loader 정책 동일)
-        unclassified = max(0, len(urls) - img - vid)
-        img += unclassified
+        urls = [u.strip() for u in (row.get("download_urls") or "").split(",") if u.strip()]
+        images, videos = split_image_video_urls(urls)
+        img = len(images)
+        vid = len(videos)
         total_image += img
         total_video += vid
         if vid > 0:

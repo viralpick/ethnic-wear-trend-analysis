@@ -402,7 +402,11 @@ def run_item_resync_phase(
     )
     from exporters.starrocks.sink_runner import emit_items_only
 
-    pool = load_enriched_files(enriched_glob)
+    pool = load_enriched_files(
+        enriched_glob,
+        pre_filter_start=start_date,
+        pre_filter_end=end_date,
+    )
     if start_date is not None and end_date is not None:
         enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
     else:
@@ -464,7 +468,11 @@ def run_representative_phase(
     )
     from exporters.starrocks.sink_runner import emit_representatives_only
 
-    pool = load_enriched_files(enriched_glob)
+    pool = load_enriched_files(
+        enriched_glob,
+        pre_filter_start=start_date,
+        pre_filter_end=end_date,
+    )
     enriched = filter_by_date_range(pool, start_date=start_date, end_date=end_date)
 
     # Phase 3 (2026-04-30): growth rate 계산 (dedup 전 시계열 사용)

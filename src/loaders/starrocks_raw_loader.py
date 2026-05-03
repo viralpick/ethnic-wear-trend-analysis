@@ -29,16 +29,12 @@ from dotenv import load_dotenv
 from contracts.common import InstagramSourceType
 from contracts.raw import RawInstagramPost, RawYouTubeVideo
 from loaders._datetime import parse_iso_z, parse_yyyymmdd
-from loaders.url_parsing import extract_yt_video_id
+from loaders.url_parsing import extract_yt_video_id, split_image_video_urls
 from loaders.raw_loader import RawDailyBatch
 
 logger = logging.getLogger(__name__)
 
 _HASHTAG_RE = re.compile(r"#\w+")
-
-# IG download_urls 가 image+video 혼입 (jpg/mp4 한 row 안에 섞임 — IG carousel 구조).
-# loader 에서 확장자 기반으로 split. 알려지지 않은 확장자는 image_urls 로 분류 (보수).
-_VIDEO_EXTENSIONS: tuple[str, ...] = (".mp4", ".mov", ".webm", ".m4v")
 
 # spec §3.1 C — Bollywood 디코딩 계정 5개 (소문자 handle, @ 제외)
 _BOLLYWOOD_HANDLES: frozenset[str] = frozenset({
@@ -58,20 +54,6 @@ def _split_pipe(cell: str) -> list[str]:
     return [x.strip() for x in (cell or "").split("|") if x.strip()]
 
 
-def _split_image_video(urls: list[str]) -> tuple[list[str], list[str]]:
-    """확장자 기반으로 (images, videos) 분리. unknown 확장자는 images 쪽 (보수)."""
-    images: list[str] = []
-    videos: list[str] = []
-    for url in urls:
-        # query string 제거 후 lowercase 비교 (Azure Blob SAS query 등 대응).
-        path = url.split("?", 1)[0].lower()
-        if path.endswith(_VIDEO_EXTENSIONS):
-            videos.append(url)
-        else:
-            images.append(url)
-    return images, videos
-
-
 def _source_type(entry: str, user: str) -> InstagramSourceType:
     if entry == "hashtag":
         return InstagramSourceType.HASHTAG_TRACKING
@@ -85,7 +67,7 @@ def _build_ig_post(row: dict[str, Any]) -> RawInstagramPost | None:
         created_at = row.get("created_at")
         if not created_at:
             raise ValueError("missing created_at")
-        images, videos = _split_image_video(_split_csv(row["download_urls"] or ""))
+        images, videos = split_image_video_urls(_split_csv(row["download_urls"] or ""))
         return RawInstagramPost(
             post_id=row["id"],
             source_type=_source_type(row["entry"] or "profile", row["user"] or ""),
@@ -122,7 +104,7 @@ def _build_yt_video(row: dict[str, Any]) -> RawYouTubeVideo | None:
             raise ValueError("missing created_at")
         # M3.H — YT 도 download_urls 가 mp4. IG 와 달리 video 만 (image 혼입 없음).
         # 확장자 검사로 video 만 필터 (보수: 알 수 없는 확장자는 drop).
-        _, videos = _split_image_video(_split_csv(row.get("download_urls") or ""))
+        _, videos = split_image_video_urls(_split_csv(row.get("download_urls") or ""))
         return RawYouTubeVideo(
             video_id=video_id,
             video_url=url,

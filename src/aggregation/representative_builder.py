@@ -270,15 +270,23 @@ def canonical_cluster_shares(canonicals: list, *, base_unit: float = 1.0) -> dic
 
     base_unit: growth_rate factor 등 caller 가중치 (default 1.0).
 
+    `build_cluster_summary._canonical_cluster_entries` 와 drop 정책 + 키 형식 +
+    contrib 공식 동일해야 함 (`feedback_score_contributor_path_symmetry`). 공용 helper
+    (`canonical_mean_area_ratio`, `group_to_item_contrib`, `build_exact_key_strs`) 사용 —
+    한쪽만 inline 으로 바꾸면 silent drift. mass 스케일링만 의도적으로 다름 (여기는
+    base_unit 정규화, summary path 는 G × base_unit 곱).
+
     Returns:
       cluster_key → share (per item, sum ≤ base_unit). multiplier 미적용 (caller 가
       `_item_contributions` 에서 cluster_key 의 unknown axis 갯수로 결정).
     """
-    from math import log2
     from contracts.vision import is_canonical_ethnic
+    from aggregation.distribution_builder import group_to_item_contrib
+    from aggregation.item_distribution_builder import canonical_mean_area_ratio
     from aggregation.vision_normalize import (
         normalize_garment_for_cluster, normalize_fabric,
     )
+    from clustering.assign_trend_cluster import build_exact_key_strs
 
     eth = [c for c in canonicals if is_canonical_ethnic(c)]
     if not eth:
@@ -289,13 +297,7 @@ def canonical_cluster_shares(canonicals: list, *, base_unit: float = 1.0) -> dic
         n = len(c.members) if c.members else 0
         if n <= 0:
             continue
-        # canonical_mean_area_ratio inline
-        total_area = 0.0
-        for m in c.members:
-            _, _, w, h = m.person_bbox
-            total_area += w * h
-        mean_area = total_area / n
-        contrib = log2(n + 1) * log2(mean_area * 100 + 1)
+        contrib = group_to_item_contrib(n, canonical_mean_area_ratio(c))
         if contrib <= 0:
             continue
         g_enum = normalize_garment_for_cluster(c.representative)
@@ -314,7 +316,7 @@ def canonical_cluster_shares(canonicals: list, *, base_unit: float = 1.0) -> dic
 
     out: dict[str, float] = {}
     for contrib, g, f in weighted:
-        ck = f"{g or _UNKNOWN_AXIS}__{f or _UNKNOWN_AXIS}"
+        ck = build_exact_key_strs(g or _UNKNOWN_AXIS, f or _UNKNOWN_AXIS)
         out[ck] = out.get(ck, 0.0) + (contrib / total_contrib) * base_unit
     return out
 
