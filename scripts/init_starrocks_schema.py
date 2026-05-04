@@ -26,7 +26,11 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-DDL_DIR = Path(__file__).resolve().parent.parent / "src" / "exporters" / "starrocks" / "ddl"
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))  # for `from scripts._sql_utils import ...`
+from scripts._sql_utils import split_statements as _split_statements  # noqa: E402
+
+DDL_DIR = _REPO / "src" / "exporters" / "starrocks" / "ddl"
 # write target — env STARROCKS_RESULT_DATABASE 로 명시. raw read DB 는 STARROCKS_RAW_DATABASE.
 _TARGET_DB_DEFAULT = "ethnic_result"
 
@@ -35,21 +39,6 @@ def _connect(database: str | None = None) -> pymysql.connections.Connection:
     """database=None 이면 system 접속 (CREATE DATABASE 용). drift 방지 helper 위임."""
     from loaders.starrocks_connect import connect_ddl
     return connect_ddl(database=database)
-
-
-def _split_statements(sql_text: str) -> list[str]:
-    """단순 ; split (StarRocks DDL 은 PROCEDURE/TRIGGER 없어 안전).
-
-    `--` line comment 와 빈 줄은 제거. 주석 안의 ; 는 안 쓰므로 OK.
-    """
-    cleaned: list[str] = []
-    for line in sql_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
-            continue
-        cleaned.append(line)
-    joined = "\n".join(cleaned)
-    return [s.strip() for s in joined.split(";") if s.strip()]
 
 
 def _list_ddl_files() -> list[Path]:
