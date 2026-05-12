@@ -62,6 +62,12 @@ CHROMA_VIVID: float = 15.0
 HUE_NEAR_DEG: float = 30.0
 R2_MERGE_DELTAE76: float = 40.0
 CHROMA_RATIO_MIN: float = 0.5
+# color.A (2026-05-12) — etc bucket fallback. R1/R2 모두 실패 시 KMeans cluster top-N
+# 을 is_anchor=False 로 보존해 cluster summary palette 누락 방지.
+ETC_FALLBACK_ENABLED: bool = True
+ETC_FALLBACK_MIN_SHARE: float = 0.05
+ETC_FALLBACK_MIN_CHROMA: float = 0.0
+ETC_FALLBACK_TOP_N: int = 3
 WEIGHT_SCALE: float = 10_000.0
 WEIGHT_EPS: float = 1e-6
 
@@ -405,6 +411,10 @@ def build_object_palette(
     hue_near_deg: float = HUE_NEAR_DEG,
     r2_merge_deltae76: float = R2_MERGE_DELTAE76,
     chroma_ratio_min: float = CHROMA_RATIO_MIN,
+    etc_fallback_enabled: bool = ETC_FALLBACK_ENABLED,
+    etc_fallback_min_share: float = ETC_FALLBACK_MIN_SHARE,
+    etc_fallback_min_chroma: float = ETC_FALLBACK_MIN_CHROMA,
+    etc_fallback_top_n: int = ETC_FALLBACK_TOP_N,
 ) -> tuple[list[WeightedCluster], float]:
     """object pool (RGB N,3) + Gemini picks + frame_area → (list[WeightedCluster], etc_weight).
 
@@ -521,6 +531,38 @@ def build_object_palette(
                 is_anchor=True,
             ),
         )
+
+    # color.A fallback (2026-05-12) — R1/R2 모두 실패 + KMeans cluster ≥1 + etc_weight>0
+    # 인 경우 pixel_clusters top-N 을 is_anchor=False 로 보존. cluster summary palette
+    # 누락 (palette=[], cut_off=1.0) 방지. 16w 백필 진단 4.4% 직접 타깃.
+    if (
+        etc_fallback_enabled
+        and not merged
+        and not r2_solos
+        and etc_weight > 0.0
+    ):
+        fallback: list[WeightedCluster] = []
+        fallback_weight_used: float = 0.0
+        for cluster in pixel_clusters[:etc_fallback_top_n]:
+            if cluster.share < etc_fallback_min_share:
+                continue
+            if _chroma(cluster.lab) < etc_fallback_min_chroma:
+                continue
+            cluster_weight = _share_to_weight(
+                cluster.share, obj_pixel_count, frame_area,
+            )
+            fallback.append(
+                WeightedCluster(
+                    hex=cluster.hex,
+                    rgb=cluster.rgb,
+                    lab=cluster.lab,
+                    weight=cluster_weight,
+                    is_anchor=False,
+                ),
+            )
+            fallback_weight_used += cluster_weight
+        if fallback:
+            return fallback, max(0.0, etc_weight - fallback_weight_used)
 
     return merged + r2_solos, etc_weight
 
