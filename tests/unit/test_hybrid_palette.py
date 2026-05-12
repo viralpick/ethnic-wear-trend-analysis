@@ -635,12 +635,14 @@ def test_build_object_palette_one_to_one_loser_falls_to_r2() -> None:
 def test_build_object_palette_lowchroma_nonanchor_goes_to_etc() -> None:
     """anchor 없고 low-chroma cluster 인 경우 R2 원색 게이트 fail → etc bucket.
 
-    저채도 cluster 단독 + anchor 없음 → 머지 후보 없음 → etc.
+    저채도 cluster 단독 + anchor 없음 → 머지 후보 없음 → etc. color.A fallback
+    default-on (2026-05-12) 이라 fallback 비활성으로 R2 → etc 경로만 검증.
     """
     # 약채도 회색-갈색 단색 (chroma 약 4)
     pixels = _fill((100, 96, 92), 1000)
     clusters, etc = build_object_palette(
         pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+        etc_fallback_enabled=False,
     )
     assert clusters == []
     # 원색 아닌 1 cluster 가 anchor 없음 → etc 로
@@ -814,3 +816,77 @@ def test_build_object_palette_small_obj_in_large_frame_has_lower_weight() -> Non
     quarter_clusters, _ = build_object_palette(pixels, [], cfg, [], frame_area=4000)
     assert len(full_clusters) == len(quarter_clusters) == 1
     assert abs(full_clusters[0].weight / quarter_clusters[0].weight - 4.0) < 1e-6
+
+
+# color.A — etc fallback (2026-05-12). R1 anchor 매칭 + R2 vivid/highlight solo 모두 실패
+# 시 KMeans cluster top-N 을 is_anchor=False 로 보존. 16w 백필 cliff (palette=[],
+# cut_off=1.0) 4.4% 직접 타깃.
+
+def test_build_object_palette_etc_fallback_low_chroma_recovers() -> None:
+    """R1 picks=[] + R2 low-chroma 단색 → 기존엔 etc 100%. fallback enabled (default)
+    로 cluster 1개 회복되어 is_anchor=False 로 emit."""
+    # 약채도 회색-갈색 단색 (chroma ≈ 4) — 사례 1 `01KQ416...` 의 #E2D6C5 베이지와 같은 패턴
+    pixels = _fill((100, 96, 92), 1000)
+    clusters, etc = build_object_palette(
+        pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+    )
+    # fallback 활성화로 cluster 회복
+    assert len(clusters) == 1
+    assert clusters[0].is_anchor is False
+    # etc 는 fallback 으로 살린 cluster 의 weight 만큼 차감됨
+    assert etc < 0.1 * WEIGHT_SCALE
+
+
+def test_build_object_palette_etc_fallback_disabled_preserves_legacy() -> None:
+    """fallback 비활성화 시 기존 cliff 동작 (etc bucket 100%, palette=[]) 보존."""
+    pixels = _fill((100, 96, 92), 1000)
+    clusters, etc = build_object_palette(
+        pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+        etc_fallback_enabled=False,
+    )
+    assert clusters == []
+    assert etc > 0.9 * WEIGHT_SCALE
+
+
+def test_build_object_palette_etc_fallback_chroma_guard() -> None:
+    """chroma 하한 가드 — 너무 무채색은 fallback 도 X. 명세서 청구 가드 일부."""
+    # 거의 순회색 (chroma ≈ 0)
+    pixels = _fill((128, 128, 128), 1000)
+    clusters, etc = build_object_palette(
+        pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+        etc_fallback_min_chroma=5.0,  # chroma 5 미만은 fallback drop
+    )
+    # 거의 무채 → chroma 가드 fail → 기존 etc cliff 동작
+    assert clusters == []
+    assert etc > 0.9 * WEIGHT_SCALE
+
+
+def test_build_object_palette_etc_fallback_share_guard() -> None:
+    """fallback share 하한 가드 — share 너무 작은 cluster (노이즈) 제외."""
+    # 1 cluster 가 share 거의 1.0 인 경우 (단일색) 인데 share 가드 0.5 면 살림
+    pixels = _fill((100, 96, 92), 1000)
+    clusters, _etc = build_object_palette(
+        pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+        etc_fallback_min_share=0.5,
+    )
+    # share=1.0 ≥ 0.5 → 살림
+    assert len(clusters) == 1
+    # 반대로 share 가드를 1.01 로 두면 가드 fail
+    clusters_blocked, etc_blocked = build_object_palette(
+        pixels, [], DynamicPaletteConfig(), [], frame_area=1000,
+        etc_fallback_min_share=1.01,
+    )
+    assert clusters_blocked == []
+    assert etc_blocked > 0.9 * WEIGHT_SCALE
+
+
+def test_build_object_palette_etc_fallback_not_triggered_when_anchor_present() -> None:
+    """anchor 가 1개라도 있으면 fallback path 미진입 — 기존 동작 보존 invariant."""
+    pixels = _fill((220, 20, 20), 1000)  # red — chroma 충분
+    entries = [MatcherEntry(name="red", lab=(54.0, 80.0, 70.0), family=ColorFamily.JEWEL)]
+    clusters, _etc = build_object_palette(
+        pixels, ["red"], DynamicPaletteConfig(), entries, frame_area=1000,
+    )
+    # anchor 매칭 성공 → fallback 진입 X. anchor cluster 1개만.
+    assert len(clusters) == 1
+    assert clusters[0].is_anchor is True

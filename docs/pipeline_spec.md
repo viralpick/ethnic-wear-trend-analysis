@@ -184,6 +184,7 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적 / 디버깅
 | `group_id` | `(item_source, item_source_post_id, canonical_index)` 합성 | vision pipeline |
 | `(item_source, item_source_post_id)` | 부모 item FK | — |
 | `url_short_tag` | **신 v2** — _latest view dedup 키 | row_builder |
+| `cluster_key` | **Phase 4 (2026-05-06)** `is_canonical_ethnic + normalize_garment_for_cluster + normalize_fabric` 결과 `f"{g.value}__{f.value}"`. `representative_weekly.representative_key` 와 직접 JOIN 가능 (raw garment_type/fabric vs normalize enum mismatch 자동 해소 — saree→casual_saree, kurti→straight_kurta 등) | `row_builder.build_group_rows` |
 | `garment_type` | 단일값 (다수결 + tie-break: 평균 면적 큰 group 우선) | §2.6 |
 | `fabric` | 동상 | §2.6 |
 | `technique` | 동상 | §2.6 |
@@ -203,6 +204,8 @@ CanonicalObject (group 의 1 멤버 = 1 BBOX)     ← 추적 / 디버깅
 | `group_id`, `(item_source, item_source_post_id)` | FK | — |
 | `url_short_tag` | **신 v2** — _latest view dedup 키 | row_builder |
 | `media_ref` | IG image: Azure Blob full path raw URL (예: `collectify/poc/.../...jpg`, SAS query 제외). IG video / YT: `video_id` (raw ULID) — frame 단위는 `OutfitMember.frame_index` sub-record. M3.G (IG VideoFrameSource) + M3.H (YT video_urls) e2e 검증 완료 | `row_builder._resolve_media_ref` + `vision/frame_source.py` |
+| `image_id` | **Phase 4 (2026-05-06)** OutfitMember.image_id raw — IG image: `{filename}.{ext}`, IG/YT video frame: `{video_stem}_f{global_idx}`. BE/FE 가 cluster 매칭 BBOX 의 정확한 image/frame 트랙킹용 | `row_builder.build_object_rows` |
+| `frame_index` | **Phase 4 (2026-05-06)** cv2 absolute frame index. IG/YT video frame 만 채움 (image 는 NULL). `image_id` 의 `_f(\d+)$` parse — `cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)` 로 정확 seek 가능 | `row_builder._parse_frame_index` |
 | `garment_type` | gemini 원시값 (free-form word) | vision |
 | `fabric`, `technique` | 동상 | vision |
 | `silhouette` | gemini 원시값 (Silhouette enum) | vision |

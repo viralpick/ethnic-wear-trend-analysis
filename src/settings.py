@@ -247,6 +247,14 @@ class HybridPaletteConfig(BaseModel):
     r2_merge_deltae76: float = 40.0
     chroma_ratio_min: float = 0.5
     top_n: int = 3
+    # color.A (2026-05-12) — R1 anchor 매칭 + R2 vivid/highlight solo 모두 실패해
+    # 모든 cluster 가 etc bucket 으로 흡수되는 cliff (palette=[], cut_off=1.0) 방지.
+    # 16w 백필 진단: 152 canonical (4.4%) 가 이 cliff 에 해당.
+    # 활성화 시 pixel_clusters 의 top-N (share desc) 을 is_anchor=False 로 보존.
+    # 가드: cluster.share ≥ etc_fallback_min_share AND chroma ≥ etc_fallback_min_chroma.
+    etc_fallback_enabled: bool = True
+    etc_fallback_min_share: float = 0.05
+    etc_fallback_min_chroma: float = 0.0
 
 
 class PostPaletteConfig(BaseModel):

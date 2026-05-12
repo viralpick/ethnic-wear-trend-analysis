@@ -152,17 +152,51 @@ def _summary_color_palette(
     return list(summary.drilldown.color_palette)
 
 
+# 데모 표시용 점수 부스트 (2026-05-06)
+# 4월 max ~51 → ×2 후 cap=100 으로 데모 화면에서 1위 가깝게. raw scoring 은 그대로,
+# emit 단계 (representative_weekly row) 에서만 변환. score_total / breakdown / trajectory
+# 일관성 (sum(components) == score_total) 유지 — proportional scaling. 데모 후 revert
+# 시 multiplier 1.0 / cap 무한대로 변경.
+_SCORE_DEMO_MULTIPLIER = 2.0
+_SCORE_DEMO_CAP = 100.0
+
+
+def _scale_score_for_demo(value: float | None) -> float | None:
+    """score_total / trajectory entry 부스트. None 보존."""
+    if value is None:
+        return None
+    return min(_SCORE_DEMO_CAP, value * _SCORE_DEMO_MULTIPLIER)
+
+
+def _scaled_total_and_ratio(raw_total: float | None) -> tuple[float | None, float]:
+    """raw_total 부스트 + breakdown 비례 scaling 위한 ratio 계산.
+
+    cap 적용 후 ratio = scaled / raw — breakdown component 에 곱하면 sum 유지.
+    raw 0 또는 None 일 때 ratio = multiplier (no-op safe).
+    """
+    if raw_total is None:
+        return None, _SCORE_DEMO_MULTIPLIER
+    scaled = min(_SCORE_DEMO_CAP, raw_total * _SCORE_DEMO_MULTIPLIER)
+    ratio = (scaled / raw_total) if raw_total > 0 else _SCORE_DEMO_MULTIPLIER
+    return scaled, ratio
+
+
 def _summary_score_breakdown(
     summary: TrendClusterSummary | None,
+    *,
+    scale_ratio: float = 1.0,
 ) -> dict[str, Any] | None:
+    """score_breakdown JSON. scale_ratio 적용 — sum(components) == scaled score_total
+    유지. momentum_components (nested sub-signal) 는 raw 보존 (cap 없는 진단용).
+    """
     if summary is None:
         return None
     bd = summary.score_breakdown
     return {
-        "social": bd.social,
-        "youtube": bd.youtube,
-        "cultural": bd.cultural,
-        "momentum": bd.momentum,
+        "social": bd.social * scale_ratio,
+        "youtube": bd.youtube * scale_ratio,
+        "cultural": bd.cultural * scale_ratio,
+        "momentum": bd.momentum * scale_ratio,
         "momentum_components": bd.momentum_components.model_dump(),
     }
 
@@ -189,16 +223,21 @@ def _build_representative_rows(
         ig_ids, yt_ids = _build_evidence(
             grouped[agg.representative_key], item_id_to_source_post_id
         )
-        trajectory = weekly_history.get_trajectory_12w(
+        raw_trajectory = weekly_history.get_trajectory_12w(
             agg.representative_key, target_date
         )
+        # 데모 부스트 (2026-05-06): score_total / breakdown components / trajectory
+        # 일관성 유지하며 ×2 cap=100. raw history 는 그대로.
+        raw_score = summary.score if summary is not None else None
+        scaled_score, scale_ratio = _scaled_total_and_ratio(raw_score)
+        trajectory = [_scale_score_for_demo(v) or 0.0 for v in raw_trajectory]
         rows.append(
             build_representative_row(
                 agg,
                 week_start_date=week_start_iso,
                 computed_at=computed_at,
-                score_total=summary.score if summary is not None else None,
-                score_breakdown=_summary_score_breakdown(summary),
+                score_total=scaled_score,
+                score_breakdown=_summary_score_breakdown(summary, scale_ratio=scale_ratio),
                 lifecycle_stage=(
                     summary.lifecycle_stage.value if summary is not None else None
                 ),

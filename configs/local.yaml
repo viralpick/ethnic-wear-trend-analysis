@@ -256,6 +256,11 @@ vision:
     r2_merge_deltae76: 40.0          # R2 non-anchor → anchor 머지 ΔE76 한계
     chroma_ratio_min: 0.5            # _is_bright_highlight chroma 비율 가드
     top_n: 3                         # canonical 통합 palette 최대 cluster 수
+    # color.A (2026-05-12) — R1/R2 모두 실패 시 KMeans cluster top-N fallback 보존.
+    # 16w 백필 4.4% 의 etc cliff 직접 타깃.
+    etc_fallback_enabled: true       # fallback path on/off
+    etc_fallback_min_share: 0.05     # fallback cluster 최소 share (R2 0.10 보다 관대)
+    etc_fallback_min_chroma: 0.0     # fallback cluster 최소 chroma (0 = 가드 없음, 누트럴 의류 보존)
   # post-level palette aggregation (canonical → post). default 는
   # vision/post_palette.py 모듈 상수와 일치 (drift 방지 pinning).
   post_palette:

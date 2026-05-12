@@ -37,6 +37,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from aggregation.distribution_builder import group_to_item_contrib
+from aggregation.vision_normalize import normalize_fabric, normalize_garment_for_cluster
 from aggregation.item_distribution_builder import (
     build_silhouette_distribution,
     build_styling_combo_distribution,
@@ -50,7 +51,7 @@ from aggregation.representative_builder import (
 from attributes.derive_styling_from_vision import derive_styling_from_outfit
 from contracts.common import PaletteCluster
 from contracts.enriched import BrandInfo, EnrichedContentItem
-from contracts.vision import CanonicalOutfit, OutfitMember
+from contracts.vision import CanonicalOutfit, OutfitMember, is_canonical_ethnic
 
 SCHEMA_VERSION = "pipeline_v1.0"
 GRANULARITY_WEEKLY = "weekly"
@@ -58,6 +59,17 @@ GRANULARITY_WEEKLY = "weekly"
 # `vision/frame_source.py::VideoFrameSource` 가 만든 Frame.id = "{video_stem}_f{global_idx}".
 # `OutfitMember.image_id` 가 이 패턴이면 image_urls 가 아니라 video_urls 의 stem 으로 매칭.
 _VIDEO_FRAME_ID_RE = re.compile(r"^(.+)_f\d+$")
+# Phase 4 (2026-05-06): YT image_id 의 absolute frame index parse — canonical_object
+# 의 frame_index 컬럼 채움 위함.
+_VIDEO_FRAME_INDEX_RE = re.compile(r"_f(\d+)$")
+
+
+def _parse_frame_index(image_id: str) -> int | None:
+    """OutfitMember.image_id 에서 cv2 absolute frame index 추출 (YT 만, IG → None)."""
+    if not image_id:
+        return None
+    match = _VIDEO_FRAME_INDEX_RE.search(image_id)
+    return int(match.group(1)) if match else None
 
 
 def representative_id(representative_key: str) -> int:
@@ -174,6 +186,16 @@ def build_group_rows(
         rep = c.representative
         n = len(c.members)
         mean_area = canonical_mean_area_ratio(c)
+        # Phase 4 (2026-05-06): cluster_key — normalize 후 enum 매칭 결과. ethnic
+        # canonical 만 채움 (비-ethnic 은 representative_weekly 미contribute 라 NULL).
+        # BE/FE 가 representative_weekly.representative_key 와 직접 JOIN 가능
+        # (saree→casual_saree, kurti→straight_kurta 등 normalize 매핑 자동 반영).
+        cluster_key: str | None = None
+        if is_canonical_ethnic(c):
+            g = normalize_garment_for_cluster(rep)
+            f = normalize_fabric(rep)
+            if g is not None and f is not None:
+                cluster_key = f"{g.value}__{f.value}"
         rows.append({
             "item_source": src,
             "item_source_post_id": pid,
@@ -181,6 +203,7 @@ def build_group_rows(
             "canonical_index": c.canonical_index,
             "computed_at": computed_at,
             "group_id": _group_id(src, pid, c.canonical_index),
+            "cluster_key": cluster_key,
             "garment_type": rep.upper_garment_type,
             "fabric": rep.fabric,
             "technique": rep.technique,
@@ -275,6 +298,13 @@ def build_object_rows(
                 "object_id": _object_id(gid, m.outfit_index),
                 "group_id": gid,
                 "media_ref": _resolve_media_ref(m.image_id, image_urls, video_urls),
+                # Phase 4: BE/FE 가 cluster 매칭 BBOX 의 정확한 image/frame 트랙킹용.
+                # IG: image_id=filename / YT: image_id=`{video_stem}_f{N}`, frame_index=N.
+                "image_id": m.image_id,
+                # Phase 4 (2026-05-06 fix): IG carousel video / Reel 도 같은
+                # `{video_stem}_f{N}` 패턴이라 source 무관 image_id 에 frame index 있으면 채움.
+                # image (jpg/heic/png) 는 _parse_frame_index 가 None 반환.
+                "frame_index": _parse_frame_index(m.image_id),
                 "garment_type": m.garment_type,
                 "fabric": m.fabric,
                 "technique": m.technique,

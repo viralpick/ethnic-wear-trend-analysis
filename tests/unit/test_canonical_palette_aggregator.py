@@ -70,8 +70,9 @@ def test_hybrid_config_default_matches_module_const() -> None:
     """settings 격리 규칙으로 settings.py 가 vision 을 import 못 함 → hardcode.
     drift 가 일어나면 pinning 으로 즉시 발견."""
     from vision.hybrid_palette import (
-        CHROMA_RATIO_MIN, CHROMA_VIVID, HUE_NEAR_DEG,
-        R2_MERGE_DELTAE76, R3_DROP_DELTAE76, R2_MIN_SHARE,
+        CHROMA_RATIO_MIN, CHROMA_VIVID, ETC_FALLBACK_ENABLED,
+        ETC_FALLBACK_MIN_CHROMA, ETC_FALLBACK_MIN_SHARE,
+        HUE_NEAR_DEG, R2_MERGE_DELTAE76, R3_DROP_DELTAE76, R2_MIN_SHARE,
     )
     cfg = HybridPaletteConfig()
     assert cfg.pick_match_deltae76 == R3_DROP_DELTAE76 == 28.0
@@ -81,6 +82,9 @@ def test_hybrid_config_default_matches_module_const() -> None:
     assert cfg.r2_merge_deltae76 == R2_MERGE_DELTAE76 == 40.0
     assert cfg.chroma_ratio_min == CHROMA_RATIO_MIN == 0.5
     assert cfg.top_n == 3
+    assert cfg.etc_fallback_enabled == ETC_FALLBACK_ENABLED is True
+    assert cfg.etc_fallback_min_share == ETC_FALLBACK_MIN_SHARE == 0.05
+    assert cfg.etc_fallback_min_chroma == ETC_FALLBACK_MIN_CHROMA == 0.0
 
 
 def test_post_palette_config_default_matches_module_const() -> None:
