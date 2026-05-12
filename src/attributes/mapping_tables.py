@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from contracts.common import Fabric, GarmentType, Occasion, StylingCombo, Technique
+from contracts.common import Fabric, GarmentType, Occasion, Silhouette, StylingCombo, Technique
 
 
 @dataclass(frozen=True)
@@ -310,12 +310,39 @@ STYLING_KEYWORD_INDEX: dict[str, StylingCombo] = _build_keyword_index(STYLING_CO
 
 # 5 dict union — module load 시 1회 build 후 frozen 재사용. unknown_signal_tracker 가
 # `build_counters` 마다 호출 → 16w replay 32+ 호출. 매번 재빌드 회피 (P1-B 효율).
+#
+# Phase 4 (2026-05-06): vision LLM Tier 4 raw inject 가 자주 출력하지만 enum value
+# 에 없는 generic ethnic 단어들. mapping_tables 의 IG hashtag 사전 (concatenated
+# form, e.g. "kurtaonline") 과 enum value (e.g. "kurta_set") 양쪽에 모두 없어서
+# emergence 후보로 surface 되는데, 이미 너무 흔한 분류라 신규 시그널로 부적절.
+_GENERIC_KNOWN_TAGS: frozenset[str] = frozenset({
+    # generic garment (enum 단위 외 흔한 인도 의류 단어)
+    "kurta", "lehenga", "choli", "salwar", "dhoti", "saree",
+    # generic technique 변형
+    "ethnic_motif",
+    # 일반 ethnic 키워드 (uncategorized 로 LLM 분류 → drop_non_ethnic 통과 → surface)
+    "ethnicwear", "indianwear", "indianfashion", "indianoutfits", "traditionallook",
+})
+
 _ALL_KNOWN_HASHTAGS: frozenset[str] = frozenset(
     GARMENT_TAG_INDEX.keys()
     | TECHNIQUE_TAG_INDEX.keys()
     | FABRIC_TAG_INDEX.keys()
     | OCCASION_TAG_INDEX.keys()
     | STYLING_TAG_INDEX.keys()
+    # Phase 4 (2026-05-06): vision LLM raw inject (Tier 4) 의 enum value form
+    # (e.g. "kurta", "block_print", "thread_embroidery") 도 known 처리. mapping_tables
+    # IG hashtag 사전은 concatenated form ("blockprint") 만 다루므로, Gemini enum
+    # value (underscore form) 가 emergence candidate 로 surface 되는 leak 차단.
+    | {e.value for e in GarmentType}
+    | {e.value for e in Fabric}
+    | {e.value for e in Technique}
+    | {e.value for e in Occasion}
+    | {e.value for e in StylingCombo}
+    | {e.value for e in Silhouette}
+    # Phase 4 추가 (2026-05-06): vision LLM raw inject 가 자주 출력하지만 enum 에
+    # 없는 generic ethnic 단어들 — 이미 너무 흔한 분류라 emerging 후보 부적절.
+    | _GENERIC_KNOWN_TAGS
 )
 
 
