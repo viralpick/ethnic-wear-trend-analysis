@@ -316,6 +316,123 @@ def _color_bar(palette: list[dict[str, Any]]) -> str:
     return f'<div class="palette-bar">{"".join(segs)}</div>'
 
 
+# 데모 표시용 점수 부스트 (2026-05-06) — sink_runner._SCORE_DEMO_MULTIPLIER 와 동일.
+# review HTML 도 disk summaries.json 의 raw score 를 같은 transform 으로 표시 → DB 와 일관.
+# 데모 후 multiplier=1.0 으로 변경 (cap 무한 또는 큰 값).
+_SCORE_DEMO_MULTIPLIER = 2.0
+_SCORE_DEMO_CAP = 100.0
+
+
+def _scale_score_display(value: float | None) -> float:
+    """raw score → min(cap, value * multiplier). None → 0."""
+    if value is None:
+        return 0.0
+    return min(_SCORE_DEMO_CAP, value * _SCORE_DEMO_MULTIPLIER)
+
+
+def _scaled_score_ratio(raw_total: float | None) -> float:
+    """breakdown component 비례 scaling 용 ratio. sum(components)==scaled_total 보존."""
+    if raw_total is None or raw_total <= 0:
+        return _SCORE_DEMO_MULTIPLIER
+    scaled = min(_SCORE_DEMO_CAP, raw_total * _SCORE_DEMO_MULTIPLIER)
+    return scaled / raw_total
+
+
+@functools.lru_cache(maxsize=1)
+def _load_preset_hex_lookup() -> dict[str, str]:
+    """preset name → hex lookup. Gemini color_preset_picks_top3 시각화용.
+
+    config 의 `preset_path` (`outputs/color_preset/color_preset.json`) 50-color
+    preset. file 부재/parse 실패 시 빈 dict — 카드는 muted chip 으로 fallback.
+    """
+    path = Path("outputs/color_preset/color_preset.json")
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return {item["name"]: item["hex"] for item in data if "name" in item and "hex" in item}
+
+
+def _aggregate_cluster_gemini_picks(
+    contributors: list[tuple[dict[str, Any], float]] | None,
+    top_n: int = 8,
+) -> list[tuple[str, int]]:
+    """cluster 단위 Gemini preset picks 집계 — 모든 contributor 의 모든 canonical 의
+    `color_preset_picks_top3` frequency 빈도 순 top N. PM 이 cluster level 의 final
+    palette (KMeans 픽셀 evidence) 와 Gemini 의 의류 색 인식 (semantic) 의 일치도/차이
+    를 비교할 수 있도록.
+    """
+    if not contributors:
+        return []
+    from collections import Counter
+    counter: Counter = Counter()
+    for item, _share in contributors:
+        for c in (item.get("canonicals") or []):
+            rep = c.get("representative") or {}
+            for name in (rep.get("color_preset_picks_top3") or []):
+                if name:
+                    counter[name] += 1
+    return counter.most_common(top_n)
+
+
+def _aggregated_picks_chip_bar(picks_with_freq: list[tuple[str, int]]) -> str:
+    """frequency-annotated preset chip bar — cluster 단위 aggregate."""
+    if not picks_with_freq:
+        return '<span class="muted">no picks</span>'
+    lookup = _load_preset_hex_lookup()
+    chips: list[str] = []
+    for name, freq in picks_with_freq:
+        hex_v = lookup.get(name)
+        if hex_v:
+            text_color = _hex_text_color(hex_v)
+            chips.append(
+                f'<span class="chip" style="background:{_esc(hex_v)};color:{text_color}" '
+                f'title="{_esc(name)} {_esc(hex_v)} ×{freq}">'
+                f'<span class="chip-label">{_esc(name)} <small>×{freq}</small></span>'
+                f'</span>'
+            )
+        else:
+            chips.append(
+                f'<span class="chip" style="background:#ddd;color:#666" '
+                f'title="preset 미매핑: {_esc(name)} ×{freq}">'
+                f'<span class="chip-label">{_esc(name)} <small>×{freq}</small></span>'
+                f'</span>'
+            )
+    return '<div class="chips">' + "".join(chips) + "</div>"
+
+
+def _preset_picks_chip_bar(picks: list[str]) -> str:
+    """Gemini `color_preset_picks_top3` (preset name list) → hex chip bar.
+
+    PM 검수용 — KMeans palette (픽셀 evidence) 와 Gemini picks (semantic) 의
+    시각적 비교. preset 매핑 안 되면 muted chip.
+    """
+    if not picks:
+        return '<span class="muted">no picks</span>'
+    lookup = _load_preset_hex_lookup()
+    chips: list[str] = []
+    for name in picks:
+        hex_v = lookup.get(name)
+        if hex_v:
+            text_color = _hex_text_color(hex_v)
+            chips.append(
+                f'<span class="chip" style="background:{_esc(hex_v)};color:{text_color}" '
+                f'title="{_esc(name)} {_esc(hex_v)}">'
+                f'<span class="chip-label">{_esc(name)} <small>{_esc(hex_v)}</small></span>'
+                f'</span>'
+            )
+        else:
+            chips.append(
+                f'<span class="chip" style="background:#ddd;color:#666" '
+                f'title="preset 미매핑: {_esc(name)}">'
+                f'<span class="chip-label">{_esc(name)} <small>?</small></span>'
+                f'</span>'
+            )
+    return '<div class="chips">' + "".join(chips) + "</div>"
+
+
 def _color_chips(palette: list[dict[str, Any]]) -> str:
     """legacy chip 표시 — canonical detail 등 좁은 영역용. 메인 palette 는 _color_bar 사용."""
     if not palette:
@@ -393,6 +510,11 @@ def _render_canonical(canonical: dict[str, Any]) -> str:
         f'</div>'
     )
     rows.append(f'<div class="canon-row">palette: {_color_bar(palette)}</div>')
+    # Gemini preset picks chip bar — KMeans palette (픽셀 evidence) 와 시각 비교용
+    # (semantic vs pixel). PM 검수 (2026-05-06): canonical 카드 안에서 두 결과의 일치도/차이 즉시 확인.
+    rows.append(
+        f'<div class="canon-row">gemini picks: {_preset_picks_chip_bar(picks)}</div>'
+    )
     return f'<div class="canonical"><div class="canon-head">canonical[{canonical.get("canonical_index", 0)}]</div>{"".join(rows)}</div>'
 
 
@@ -645,16 +767,21 @@ def _cluster_summary_body(
     extra_html: color_palette 직후 삽입. extra_html_bottom: 가장 마지막 (distributions 후)."""
     drill = s.get("drilldown") or {}
     breakdown = s.get("score_breakdown") or {}
+    # 데모 부스트 — breakdown component 비례 scaling. sum(components) == scaled total.
+    # momentum_components nested 는 raw 보존 (sub-signal 진단용).
+    _ratio = _scaled_score_ratio(s.get("score"))
 
     def _fmt_breakdown_row(key: str, value: Any) -> str:
         if isinstance(value, dict):
+            # nested (momentum_components) — raw 그대로
             sub = ", ".join(
                 f"{_esc(str(sk))}={sv:.2f}" if isinstance(sv, (int, float)) else f"{_esc(str(sk))}={_esc(str(sv))}"
                 for sk, sv in value.items()
             )
             return f'<tr><td>{_esc(key)}</td><td class="num">{sub}</td></tr>'
         if isinstance(value, (int, float)):
-            return f'<tr><td>{_esc(key)}</td><td class="num">{value:.2f}</td></tr>'
+            scaled = value * _ratio
+            return f'<tr><td>{_esc(key)}</td><td class="num">{scaled:.2f}</td></tr>'
         return f'<tr><td>{_esc(key)}</td><td class="num">{_esc(str(value))}</td></tr>'
 
     breakdown_html = "".join(_fmt_breakdown_row(k, v) for k, v in breakdown.items())
@@ -693,6 +820,7 @@ def _cluster_summary_body(
         <div><b>silhouette</b>{_dist_table(drill.get("silhouette_distribution") or {})}</div>
         <div><b>occasion</b>{_dist_table(drill.get("occasion_distribution") or {})}</div>
         <div><b>styling</b>{_dist_table(drill.get("styling_distribution") or {})}</div>
+        <div><b>technique</b>{_dist_table(drill.get("technique_distribution") or {})}</div>
         <div><b>brand</b>{_dist_table(drill.get("brand_distribution") or {})}</div>
       </div>
     </section>
@@ -757,6 +885,16 @@ def _render_cluster_card(
         f'</section>'
     )
 
+    # cluster level Gemini preset picks aggregate — 모든 contributor canonical 의
+    # color_preset_picks_top3 빈도 top 8. final palette (픽셀 KMeans) 옆 비교용.
+    cluster_picks = _aggregate_cluster_gemini_picks(contributors)
+    cluster_picks_html = (
+        f'<section class="full-row">'
+        f'<h4>gemini preset picks (cluster aggregate, 빈도 top {len(cluster_picks)})</h4>'
+        f'{_aggregated_picks_chip_bar(cluster_picks)}'
+        f'</section>'
+    )
+
     spark_html = _render_cluster_spark(score_history or [], history_idx)
     return f'''
 <article class="cluster cluster-summary" data-cluster-key="{_esc(cluster_key)}"
@@ -767,13 +905,13 @@ def _render_cluster_card(
       <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
     </div>
     <div class="cluster-meta-row">
-      <span class="score">{s.get("score", 0):.1f}</span>
+      <span class="score">{_scale_score_display(s.get("score", 0)):.1f}</span>
       {spark_html}
       <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
     </div>
   </header>
-  {_cluster_summary_body(s, extra_html=contrib_strip_html)}
+  {_cluster_summary_body(s, extra_html=cluster_picks_html + contrib_strip_html)}
 </article>'''
 
 
@@ -800,9 +938,11 @@ def _render_compact_contributor(
     brands = item.get("brands") or []
 
     # cluster_key 매칭되는 canonical 의 members image_id 집합 — 매칭 frame/image 만
-    # thumbnail 표시 (다른 pose / 사람 없는 image 제외). cluster_key=None 또는 매칭
-    # canonical 없으면 전체 fallback (옛 동작).
+    # thumbnail 표시. + matching canonical 의 palette 도 추출 (post_palette 대신
+    # canonical 단위 palette 로 표시 — cluster card 의 contributor 기준 정합).
+    # cluster_key=None 또는 매칭 canonical 없으면 전체 fallback (옛 동작).
     match_image_ids: set[str] | None = None
+    matching_canonical_palette: list[dict[str, Any]] | None = None
     if cluster_key is not None and canonicals:
         from aggregation.vision_normalize import (
             normalize_garment_for_cluster, normalize_fabric,
@@ -826,8 +966,13 @@ def _render_compact_contributor(
                     iid = m.get("image_id")
                     if iid:
                         ids.add(iid)
+                # matching canonical 의 palette — 첫 매칭 사용 (다중 매칭 드뭄)
+                if matching_canonical_palette is None:
+                    matching_canonical_palette = c.get("palette") or []
         if ids:
             match_image_ids = ids
+    # contributor card 표시용 palette — matching canonical 우선, 없으면 post_palette fallback
+    display_palette = matching_canonical_palette if matching_canonical_palette is not None else palette
 
     # thumbnail grid (최대 5장 — IG image / YT frame 균등 분포)
     media = _item_media_srcs(item, html_dir, max_n=5, match_image_ids=match_image_ids)
@@ -899,6 +1044,38 @@ def _render_compact_contributor(
         f'</div>' if canonicals else ''
     )
 
+    # contributor card 의 Gemini preset picks — palette 와 동일하게 cluster_key 매칭
+    # canonical 의 picks 만 사용 (post 의 다른 canonical 색은 표시 X). cluster_key=None
+    # 이거나 매칭 없으면 전체 canonical fallback (옛 동작).
+    from collections import Counter as _Counter
+    _picks_counter: _Counter = _Counter()
+    if cluster_key is not None and canonicals:
+        from aggregation.vision_normalize import (
+            normalize_garment_for_cluster as _ng, normalize_fabric as _nf,
+        )
+        from contracts.vision import EthnicOutfit as _EO
+        for c in canonicals:
+            rep_dict = c.get("representative") or {}
+            try:
+                rep_model = _EO.model_validate(rep_dict)
+                _g = _ng(rep_model); _f = _nf(rep_model)
+                _ck = f"{_g.value if _g else 'unknown'}__{_f.value if _f else 'unknown'}"
+            except ValidationError:
+                _ck = None
+            if _ck != cluster_key:
+                continue
+            for name in (rep_dict.get("color_preset_picks_top3") or []):
+                if name:
+                    _picks_counter[name] += 1
+    if not _picks_counter:
+        # 매칭 canonical 없거나 cluster_key=None — 전체 canonical fallback
+        for c in canonicals:
+            rep = c.get("representative") or {}
+            for name in (rep.get("color_preset_picks_top3") or []):
+                if name:
+                    _picks_counter[name] += 1
+    contrib_picks_html = _aggregated_picks_chip_bar(_picks_counter.most_common(6))
+
     # Item full detail expand (post 전체 사진 + 모든 outfit + post-level 속성).
     # 기본 hidden, contributor 카드 click 시 toggle.
     item_detail_html = _render_item_full_detail(item, html_dir, cluster_key=cluster_key)
@@ -920,7 +1097,8 @@ def _render_compact_contributor(
       </div>
       {item_summary}
       {f'<div class="contrib-attrs">{canon_html}</div>' if canon_html else ''}
-      <div class="contrib-card-palette">{_color_bar(palette)}</div>
+      <div class="contrib-card-palette">{_color_bar(display_palette)}</div>
+      <div class="contrib-card-picks"><span class="muted small" style="margin-right:6px;">gemini picks:</span>{contrib_picks_html}</div>
     </div>
   </div>
   <div class="item-detail" id="{_esc(detail_id)}" style="display:none">{item_detail_html}</div>
@@ -1056,14 +1234,19 @@ def _render_cluster_detail(
       <span class="cluster-key"><code>{_esc(cluster_key)}</code></span>
     </div>
     <div class="cluster-meta-row">
-      <span class="score">{s.get("score", 0):.1f}</span>
+      <span class="score">{_scale_score_display(s.get("score", 0)):.1f}</span>
       {spark_html}
       <span class="meta-pill direction">{_esc(s.get("weekly_direction"))}</span>
       <span class="meta-pill lifecycle">{_esc(s.get("lifecycle_stage"))}</span>
       <span class="muted">{n_contrib} contributors</span>
     </div>
   </header>
-  {_cluster_summary_body(s)}
+  {_cluster_summary_body(s, extra_html=(
+      f'<section class="full-row">'
+      f'<h4>gemini preset picks (cluster aggregate, 빈도 top {len(_aggregate_cluster_gemini_picks(contributors))})</h4>'
+      f'{_aggregated_picks_chip_bar(_aggregate_cluster_gemini_picks(contributors))}'
+      f'</section>'
+  ))}
   <h3 class="contrib-section-title">Contributors ({n_contrib}, share desc)</h3>
   <div class="contrib-cards-list">{contrib_html}</div>
 </article>'''
@@ -1475,7 +1658,8 @@ def _build_score_history_map(
             if not ck:
                 continue
             history = out.setdefault(ck, [0.0] * n)
-            history[time_idx] = float(s.get("score") or 0.0)
+            # 데모 부스트 — sparkline 표시도 scaled (DB 와 시각적 일관)
+            history[time_idx] = _scale_score_display(s.get("score") or 0.0)
     return out
 
 
