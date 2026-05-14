@@ -237,3 +237,59 @@ def build_user_payload(preset: list[dict[str, str]]) -> str:
         "color_preset (choose names from here only):\n"
         + _json.dumps(preset, ensure_ascii=False)
     )
+
+
+COLOR_PICK_V010_PROMPT_VERSION = "v0.10"
+
+COLOR_PICK_V010_SYSTEM_PROMPT = (
+    "You are a color picker for Indian ethnic wear garments. Given a single image, "
+    "the garment classification (Pass 1 result), and the KMeans cluster palette "
+    "extracted from the segmented garment region, return STRICT JSON.\n\n"
+    "Goal — pick the cluster index(es) inside the provided KMeans cluster list "
+    "that best represent the DOMINANT colors of the garment. Do NOT introduce any "
+    "color outside the provided clusters. closed-set anchoring.\n\n"
+    "Rules:\n"
+    "- pick 1 to 3 entries. Use 1 if the garment is genuinely single-tone, 2 for "
+    "two-tone, 3 for multi-tone. DO NOT pad.\n"
+    "- cluster_index MUST be an integer that exists in the input cluster list "
+    "(0-based, within the provided top-N). If you would pick a color outside this "
+    "range, instead pick the closest cluster in the list.\n"
+    "- preset_label is the 50-color preset name (e.g. \"saffron\", \"bottle_green\", "
+    "\"pool_07\") closest to that cluster's hex. Used for dedup / family resolve "
+    "only — the cluster_index is the authoritative anchor.\n"
+    "- Pick by GARMENT EVIDENCE. The input clusters were already segmented to the "
+    "garment region, but re-verify against the image — if a cluster looks like "
+    "background / skin / mannequin leakage, skip it.\n"
+    "- For multi-color patterns: pick the dominant individual cluster colors "
+    "present (background + 1–2 most prominent motif clusters). DO NOT pick a "
+    "cluster that represents the visual MIX / AVERAGE of motif colors.\n"
+    "- No prose, no code fences. JSON only.\n\n"
+    "Output schema:\n"
+    "{\n"
+    "  \"picks\": [\n"
+    "    { \"cluster_index\": int, \"preset_label\": string }\n"
+    "    // 1 to 3 entries, do not pad\n"
+    "  ]\n"
+    "}"
+)
+
+
+def build_color_pick_v010_user_payload(
+    *,
+    garment_classification: dict[str, object],
+    kmeans_clusters: list[dict[str, object]],
+) -> str:
+    """color.B v0.10 Pass 2 user message — 분류 + cluster top-N 직렬화.
+
+    LLM 은 cluster_index 를 입력 cluster 범위 안에서만 pick. Pass 1 분류는
+    EthnicOutfit 의 의류 분류 필드 (upper/lower garment_type, ethnic flag,
+    dress_as_single 등) 일부를 caller 가 dict 로 선택해 전달.
+    """
+    import json as _json  # lazy — vision extras 격리, top-level import 금지
+
+    return (
+        "garment_classification:\n"
+        + _json.dumps(garment_classification, ensure_ascii=False)
+        + "\n\nkmeans_clusters (closed-set, pick cluster_index from here only):\n"
+        + _json.dumps(kmeans_clusters, ensure_ascii=False)
+    )

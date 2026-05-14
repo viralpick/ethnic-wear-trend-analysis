@@ -19,6 +19,7 @@ from contracts.common import ColorFamily
 from settings import DynamicPaletteConfig
 from vision.color_family_preset import MatcherEntry
 from vision.dynamic_palette import PaletteCluster as PixelCluster
+from contracts.vision import KMeansAnchoredPick, KMeansAnchoredPickResponse
 from vision.hybrid_palette import (
     CHROMA_RATIO_MIN,
     CHROMA_VIVID,
@@ -38,6 +39,7 @@ from vision.hybrid_palette import (
     _resolve_merge_target,
     _share_to_weight,
     build_object_palette,
+    build_object_palette_v010,
     filter_picks_by_pixel_evidence,
 )
 
@@ -890,3 +892,170 @@ def test_build_object_palette_etc_fallback_not_triggered_when_anchor_present() -
     # anchor 매칭 성공 → fallback 진입 X. anchor cluster 1개만.
     assert len(clusters) == 1
     assert clusters[0].is_anchor is True
+
+
+
+# ---- color.B v0.10 — build_object_palette_v010 (KMeans-anchored VLM pick) ----
+
+
+def _v010_response(*picks: tuple[int, str]) -> KMeansAnchoredPickResponse:
+    return KMeansAnchoredPickResponse(
+        picks=[
+            KMeansAnchoredPick(cluster_index=idx, preset_label=label)
+            for idx, label in picks
+        ]
+    )
+
+
+def _v010_cluster(
+    *,
+    hex: str,
+    rgb: tuple[int, int, int],
+    lab: tuple[float, float, float],
+    share: float,
+) -> PixelCluster:
+    return PixelCluster(hex=hex, rgb=rgb, lab=lab, share=share)
+
+
+def test_build_object_palette_v010_empty_clusters_returns_empty() -> None:
+    result, etc = build_object_palette_v010(
+        [], _v010_response((0, "x")),
+        obj_pixel_count=100, frame_area=1000, kmeans_top_n=5,
+    )
+    assert result == []
+    assert etc == 0.0
+
+
+def test_build_object_palette_v010_basic_anchor_marks_picked_clusters() -> None:
+    clusters = [
+        _v010_cluster(
+            hex="#aa0000", rgb=(170, 0, 0), lab=(36.0, 60.0, 50.0), share=0.5,
+        ),
+        _v010_cluster(
+            hex="#00aa00", rgb=(0, 170, 0), lab=(60.0, -60.0, 50.0), share=0.3,
+        ),
+        _v010_cluster(
+            hex="#0000aa", rgb=(0, 0, 170), lab=(20.0, 30.0, -60.0), share=0.2,
+        ),
+    ]
+    response = _v010_response((0, "rani_red"), (2, "navy_blue"))
+    result, etc = build_object_palette_v010(
+        clusters, response,
+        obj_pixel_count=10_000, frame_area=100_000, kmeans_top_n=5,
+    )
+    assert [w.hex for w in result] == ["#aa0000", "#0000aa"]
+    assert all(w.is_anchor for w in result)
+    # cluster 1 (green) 는 anchor 안 됐으니 etc_weight 에 합산
+    assert etc > 0.0
+
+
+def test_build_object_palette_v010_cluster_index_out_of_range_raises() -> None:
+    clusters = [
+        _v010_cluster(
+            hex="#aa0000", rgb=(170, 0, 0), lab=(36.0, 60.0, 50.0), share=0.9,
+        ),
+    ]
+    response = _v010_response((5, "x"))
+    with pytest.raises(ValueError, match="out of range"):
+        build_object_palette_v010(
+            clusters, response,
+            obj_pixel_count=100, frame_area=1000, kmeans_top_n=5,
+        )
+
+
+def test_build_object_palette_v010_duplicate_cluster_index_raises() -> None:
+    clusters = [
+        _v010_cluster(
+            hex="#aa0000", rgb=(170, 0, 0), lab=(36.0, 60.0, 50.0), share=0.9,
+        ),
+        _v010_cluster(
+            hex="#00aa00", rgb=(0, 170, 0), lab=(60.0, -60.0, 50.0), share=0.1,
+        ),
+    ]
+    response = _v010_response((0, "a"), (0, "b"))
+    with pytest.raises(ValueError, match="duplicate"):
+        build_object_palette_v010(
+            clusters, response,
+            obj_pixel_count=100, frame_area=1000, kmeans_top_n=5,
+        )
+
+
+def test_build_object_palette_v010_top_n_limits_range_validation() -> None:
+    # cluster top_n=3 인데 cluster_index=4 면 OOR (전체 cluster list 길이와 무관)
+    clusters = [
+        _v010_cluster(
+            hex=f"#{0xa0+i:02x}0000",
+            rgb=(0xa0 + i, 0, 0),
+            lab=(40.0 + i, 30.0, 20.0),
+            share=0.2,
+        )
+        for i in range(5)
+    ]
+    response = _v010_response((4, "x"))
+    with pytest.raises(ValueError, match="out of range"):
+        build_object_palette_v010(
+            clusters, response,
+            obj_pixel_count=100, frame_area=1000, kmeans_top_n=3,
+        )
+
+
+def test_build_object_palette_v010_etc_weight_zero_when_all_top_n_picked() -> None:
+    clusters = [
+        _v010_cluster(
+            hex="#aa0000", rgb=(170, 0, 0), lab=(36.0, 60.0, 50.0), share=0.6,
+        ),
+        _v010_cluster(
+            hex="#00aa00", rgb=(0, 170, 0), lab=(60.0, -60.0, 50.0), share=0.4,
+        ),
+    ]
+    response = _v010_response((0, "a"), (1, "b"))
+    result, etc = build_object_palette_v010(
+        clusters, response,
+        obj_pixel_count=10_000, frame_area=10_000, kmeans_top_n=5,
+    )
+    assert len(result) == 2
+    # 모든 cluster anchor — etc_weight 0
+    assert etc == 0.0
+
+
+def test_build_object_palette_v010_anchor_preserves_cluster_coords() -> None:
+    # cluster_index 기반 anchor — 좌표는 그 cluster 의 hex/rgb/lab 그대로 (ΔE76=0)
+    clusters = [
+        _v010_cluster(
+            hex="#c11a4a", rgb=(193, 26, 74), lab=(40.0, 60.0, 20.0), share=0.7,
+        ),
+        _v010_cluster(
+            hex="#f5e7c4", rgb=(245, 231, 196), lab=(90.0, 0.0, 20.0), share=0.3,
+        ),
+    ]
+    response = _v010_response((0, "rani_pink"))
+    result, _ = build_object_palette_v010(
+        clusters, response,
+        obj_pixel_count=10_000, frame_area=100_000, kmeans_top_n=5,
+    )
+    assert len(result) == 1
+    assert result[0].hex == "#c11a4a"
+    assert result[0].rgb == (193, 26, 74)
+    assert result[0].lab == (40.0, 60.0, 20.0)
+    assert result[0].is_anchor is True
+
+
+def test_build_object_palette_v010_clusters_beyond_top_n_count_to_etc() -> None:
+    # top_n=2 면 cluster[2..] 도 etc 에 합산
+    clusters = [
+        _v010_cluster(
+            hex=f"#0000{0x10+i*0x10:02x}",
+            rgb=(0, 0, 0x10 + i * 0x10),
+            lab=(20.0, 0.0, -30.0),
+            share=0.25,
+        )
+        for i in range(4)
+    ]
+    response = _v010_response((0, "x"))
+    result, etc = build_object_palette_v010(
+        clusters, response,
+        obj_pixel_count=10_000, frame_area=10_000, kmeans_top_n=2,
+    )
+    assert len(result) == 1
+    # cluster 1 (top_n 안 미픽) + cluster 2, 3 (top_n 밖) 모두 etc 에 합산
+    assert etc > 0.0

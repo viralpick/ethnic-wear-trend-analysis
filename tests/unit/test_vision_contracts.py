@@ -8,7 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.common import Silhouette
-from contracts.vision import EthnicOutfit, GarmentAnalysis
+from contracts.vision import (
+    EthnicOutfit,
+    GarmentAnalysis,
+    KMeansAnchoredPick,
+    KMeansAnchoredPickResponse,
+)
 
 
 def _valid_outfit(**overrides) -> dict:
@@ -136,3 +141,91 @@ def test_garment_analysis_json_roundtrip() -> None:
     serialized = a.model_dump(mode="json")
     restored = GarmentAnalysis.model_validate(serialized)
     assert restored == a
+
+
+
+# ---- color.B v0.10 — KMeansAnchoredPick / KMeansAnchoredPickResponse ----
+
+
+def test_kmeans_anchored_pick_valid() -> None:
+    pick = KMeansAnchoredPick(cluster_index=0, preset_label="bottle_green")
+    assert pick.cluster_index == 0
+    assert pick.preset_label == "bottle_green"
+
+
+def test_kmeans_anchored_pick_negative_index_rejected() -> None:
+    with pytest.raises(ValidationError):
+        KMeansAnchoredPick(cluster_index=-1, preset_label="saffron")
+
+
+def test_kmeans_anchored_pick_extra_field_rejected() -> None:
+    with pytest.raises(ValidationError):
+        KMeansAnchoredPick(
+            cluster_index=0,
+            preset_label="saffron",
+            hex="#ff8800",  # extra="forbid"
+        )
+
+
+def test_kmeans_anchored_pick_response_one_pick_allowed() -> None:
+    resp = KMeansAnchoredPickResponse(
+        picks=[KMeansAnchoredPick(cluster_index=2, preset_label="rani_pink")]
+    )
+    assert len(resp.picks) == 1
+
+
+def test_kmeans_anchored_pick_response_three_picks_allowed() -> None:
+    resp = KMeansAnchoredPickResponse(
+        picks=[
+            KMeansAnchoredPick(cluster_index=0, preset_label="cream_ivory"),
+            KMeansAnchoredPick(cluster_index=1, preset_label="rani_pink"),
+            KMeansAnchoredPick(cluster_index=2, preset_label="bottle_green"),
+        ]
+    )
+    assert len(resp.picks) == 3
+
+
+def test_kmeans_anchored_pick_response_empty_rejected() -> None:
+    with pytest.raises(ValidationError):
+        KMeansAnchoredPickResponse(picks=[])
+
+
+def test_kmeans_anchored_pick_response_over_three_rejected() -> None:
+    with pytest.raises(ValidationError):
+        KMeansAnchoredPickResponse(
+            picks=[
+                KMeansAnchoredPick(cluster_index=i, preset_label=f"p{i}")
+                for i in range(4)
+            ]
+        )
+
+
+def test_ethnic_outfit_color_picks_v010_default_none() -> None:
+    outfit = EthnicOutfit(**_valid_outfit())
+    assert outfit.color_picks_v010 is None
+
+
+def test_ethnic_outfit_color_picks_v010_accepts_pass2_picks() -> None:
+    outfit = EthnicOutfit(
+        **_valid_outfit(
+            color_picks_v010=[
+                KMeansAnchoredPick(cluster_index=0, preset_label="saffron"),
+                KMeansAnchoredPick(cluster_index=2, preset_label="bottle_green"),
+            ]
+        )
+    )
+    assert outfit.color_picks_v010 is not None
+    assert [p.cluster_index for p in outfit.color_picks_v010] == [0, 2]
+    assert [p.preset_label for p in outfit.color_picks_v010] == [
+        "saffron",
+        "bottle_green",
+    ]
+
+
+def test_ethnic_outfit_color_picks_v010_negative_index_rejected() -> None:
+    with pytest.raises(ValidationError):
+        EthnicOutfit(
+            **_valid_outfit(
+                color_picks_v010=[{"cluster_index": -1, "preset_label": "x"}]
+            )
+        )

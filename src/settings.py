@@ -255,6 +255,12 @@ class HybridPaletteConfig(BaseModel):
     etc_fallback_enabled: bool = True
     etc_fallback_min_share: float = 0.05
     etc_fallback_min_chroma: float = 0.0
+    # color.B v0.10 (2026-05-14) — KMeans-anchored VLM color pick (2-pass Gemini).
+    # default off — canary 측정 후 enable 결정. enabled=True 면 _attach_palette 가
+    # Pass 2 Gemini 호출로 cluster_index 를 직접 anchor 마킹 (ΔE76=0, R3/R1 매칭 우회).
+    # kmeans_top_n 은 Pass 2 에 노출할 cluster 수 (share desc top-N).
+    color_pick_v010_enabled: bool = False
+    color_pick_v010_kmeans_top_n: int = 5
 
 
 class PostPaletteConfig(BaseModel):

@@ -25,6 +25,38 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from contracts.common import PaletteCluster, Silhouette
 
 
+class KMeansAnchoredPick(BaseModel):
+    """color.B v0.10 — KMeans cluster index 기반 anchored color pick.
+
+    Pass 2 Gemini 가 KMeans cluster top-N 안에서 dominant 색을 closed-set 으로
+    pick. `cluster_index` 가 입력 cluster 범위 안에 있어야 하며, 위반 시 invalid
+    로 간주되어 adapter 가 Pass 1 picks 로 fallback (spec v0.10 결정 1-a).
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    cluster_index: int = Field(
+        ge=0,
+        description="0-based, Pass 2 입력 KMeans cluster top-N 안의 index. "
+        "closed-set anchoring — 범위 밖이면 invalid (caller range validation).",
+    )
+    preset_label: str = Field(
+        min_length=1,
+        description="cluster hex 에 가장 가까운 50색 preset 이름. "
+        "dedup / family resolve 용 (feedback_gemini_color_dedup_only 정책 유지). "
+        "빈 문자열 금지 — Pass 2 LLM 이 fallback 후보로 빈 라벨 보내는 환각 차단.",
+    )
+
+
+class KMeansAnchoredPickResponse(BaseModel):
+    """color.B v0.10 — Pass 2 LLM JSON 응답 전체 schema."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    picks: list[KMeansAnchoredPick] = Field(
+        min_length=1, max_length=3,
+        description="cluster_index 기반 1~3 pick. 진짜 단색이면 1.",
+    )
+
+
 class EthnicOutfit(BaseModel):
     """단일 person BBOX 에 대한 outfit 분석 결과.
 
@@ -96,6 +128,15 @@ class EthnicOutfit(BaseModel):
         description="upper 와 lower 가 같은 fabric/print/색조로 의도적으로 매칭된 'coord set' "
         "여부. dress_as_single=True 면 null. M3.I P1 styling_combo 파생용 — CO_ORD_SET 분기. "
         "v0.8+.",
+    )
+
+    color_picks_v010: list[KMeansAnchoredPick] | None = Field(
+        default=None,
+        description="color.B v0.10 Pass 2 결과 — cluster_index 기반 anchored pick. "
+        "color_pick_v010_enabled=False 또는 Pass 2 미수행 시 None. v0.10+. "
+        "현재 adapter 가 set 하지 않음 (cluster 만 흡수, raw response 미보존). canary "
+        "단계 4 의 debug 자료가 필요해지면 그때 _build_object_palette_v010_one 에서 "
+        "set 해 forward-compat 유지.",
     )
 
     @field_validator("person_bbox")

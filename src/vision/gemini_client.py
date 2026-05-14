@@ -34,10 +34,16 @@ from google import genai
 from google.genai import types
 from pydantic import ValidationError
 
-from contracts.vision import GarmentAnalysis
+from contracts.vision import GarmentAnalysis, KMeansAnchoredPickResponse
 from vision.json_repair_util import parse_json_with_repair
 from vision.llm_cache import VisionLLMCacheBackend, compute_cache_key
-from vision.prompts import PROMPT_VERSION, SYSTEM_PROMPT, build_user_payload
+from vision.prompts import (
+    COLOR_PICK_V010_SYSTEM_PROMPT,
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    build_color_pick_v010_user_payload,
+    build_user_payload,
+)
 from vision.traditional_filter import apply_to_analysis
 
 logger = logging.getLogger(__name__)
@@ -171,3 +177,64 @@ class GeminiVisionLLMClient:
             )
             raise
         return apply_to_analysis(analysis)
+
+    def pick_colors_from_kmeans(
+        self,
+        image_bytes: bytes,
+        *,
+        garment_classification: dict[str, object],
+        kmeans_clusters: list[dict[str, object]],
+    ) -> KMeansAnchoredPickResponse:
+        """color.B v0.10 Pass 2 — Gemini 가 KMeans cluster top-N 안에서 색 pick.
+
+        cache 미통합 (단계 5 canary 측정 후 비용 분석 시 검토). 실패 시 raise —
+        adapter 가 catch 해 Pass 1 picks 로 fallback (spec v0.10 결정 1-a).
+        """
+        if not kmeans_clusters:
+            raise ValueError("kmeans_clusters must not be empty for v0.10 pick")
+        contents = [
+            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            COLOR_PICK_V010_SYSTEM_PROMPT
+            + "\n\n"
+            + build_color_pick_v010_user_payload(
+                garment_classification=garment_classification,
+                kmeans_clusters=kmeans_clusters,
+            ),
+        ]
+        resp = self._client.models.generate_content(
+            model=self._model_id,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+                seed=_GEMINI_SEED,
+            ),
+        )
+        usage = getattr(resp, "usage_metadata", None)
+        if usage is not None:
+            logger.info(
+                "gemini_v010_usage model=%s image_bytes=%d prompt_tokens=%s output_tokens=%s",
+                self._model_id,
+                len(image_bytes),
+                getattr(usage, "prompt_token_count", None),
+                getattr(usage, "candidates_token_count", None),
+            )
+        raw = resp.text or ""
+        if not raw.strip():
+            raise ValueError("gemini v0.10 returned empty text")
+        payload = parse_json_with_repair(raw)
+        try:
+            response = KMeansAnchoredPickResponse.model_validate(payload)
+        except ValidationError:
+            logger.warning(
+                "gemini_v010_schema_violation payload_head=%r",
+                json.dumps(payload)[:200]
+                if isinstance(payload, dict)
+                else str(payload)[:200],
+            )
+            raise
+        # cluster_index 범위 검증은 hybrid_palette.build_object_palette_v010 가 단일
+        # source of truth — 그쪽에서 cluster_top_n 기준 raise (caller fallback).
+        # 여기서 중복 검증 시 기준 (input kmeans_clusters vs adapter 슬라이스 cluster_top_n)
+        # 차이로 silent drift 위험. Pydantic ValidationError + adapter 호출이 invariant.
+        return response

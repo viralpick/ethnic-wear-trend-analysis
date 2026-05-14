@@ -47,6 +47,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from contracts.vision import KMeansAnchoredPickResponse
 from settings import DynamicPaletteConfig
 from vision.color_family_preset import MatcherEntry
 from vision.color_space import delta_e76_tuple
@@ -567,6 +568,85 @@ def build_object_palette(
     return merged + r2_solos, etc_weight
 
 
+
+def build_object_palette_v010(
+    pixel_clusters: list[PixelCluster],
+    pick_response: KMeansAnchoredPickResponse,
+    *,
+    obj_pixel_count: int,
+    frame_area: int,
+    kmeans_top_n: int,
+) -> tuple[list[WeightedCluster], float]:
+    """color.B v0.10 — Pass 2 결과 기반 cluster_index 직접 anchor.
+
+    R3 / R1 / R2 매칭 path 우회. cluster_index 가 KMeans cluster top-N 안의 직접
+    index 라 ΔE76=0 anchor — VLM-KMeans 매칭 실패 자체 차단.
+
+    caller 는 미리 `extract_dynamic_palette` 로 cluster 추출해 top-N 을 Pass 2 에
+    노출한 뒤, Pass 2 응답을 함께 넘긴다 (KMeans 중복 호출 회피).
+
+    pipeline:
+      1. cluster top-N 슬라이스 (kmeans_top_n).
+      2. picks[i].cluster_index 가 top-N 범위 안인지 / 중복 아닌지 검증.
+         - 범위 초과 / 중복 → ValueError (caller 가 catch 해 Pass 1 fallback — spec
+           v0.10 결정 1-a).
+      3. pick 된 cluster 는 is_anchor=True WeightedCluster 로 보존. 좌표 = 자기 좌표.
+      4. anchor 안 된 cluster (top-N 안 미픽 + top-N 밖) 의 weight 는 etc_weight 합산.
+         R2 vivid solo / merge 흐름은 v0.10 에서는 적용 X — Pass 2 가 dominant 색만
+         지정한 결과를 그대로 신뢰 (single LLM source of truth).
+
+    Args:
+      pixel_clusters: caller 가 추출해 둔 KMeans cluster (share desc 정렬).
+      pick_response: Pass 2 LLM 응답. picks[i].cluster_index 는 0..kmeans_top_n-1.
+      obj_pixel_count: pool 의 garment pixel 수 (weight 정규화에 사용).
+      frame_area: frame 의 H × W (build_object_palette 동일 의미).
+      kmeans_top_n: Pass 2 에 노출한 cluster 수 (HybridPaletteConfig.color_pick_v010_kmeans_top_n).
+
+    Returns:
+      (clusters, etc_weight). 빈 cluster list 면 ([], 0.0).
+    """
+    if not pixel_clusters:
+        return [], 0.0
+    cluster_top_n = pixel_clusters[:kmeans_top_n]
+    if not cluster_top_n:
+        return [], 0.0
+
+    merged: list[WeightedCluster] = []
+    used_top_n_indices: set[int] = set()
+    for pick in pick_response.picks:
+        if pick.cluster_index >= len(cluster_top_n):
+            raise ValueError(
+                "v0.10 cluster_index out of range: "
+                f"{pick.cluster_index} >= {len(cluster_top_n)}"
+            )
+        if pick.cluster_index in used_top_n_indices:
+            raise ValueError(
+                f"v0.10 duplicate cluster_index: {pick.cluster_index}"
+            )
+        cluster = cluster_top_n[pick.cluster_index]
+        merged.append(
+            WeightedCluster(
+                hex=cluster.hex,
+                rgb=cluster.rgb,
+                lab=cluster.lab,
+                weight=_share_to_weight(
+                    cluster.share, obj_pixel_count, frame_area,
+                ),
+                is_anchor=True,
+            ),
+        )
+        used_top_n_indices.add(pick.cluster_index)
+
+    etc_weight: float = 0.0
+    for i, cluster in enumerate(pixel_clusters):
+        if i < len(cluster_top_n) and i in used_top_n_indices:
+            continue
+        etc_weight += _share_to_weight(
+            cluster.share, obj_pixel_count, frame_area,
+        )
+    return merged, etc_weight
+
+
 __all__ = [
     "CHROMA_RATIO_MIN",
     "CHROMA_VIVID",
@@ -578,5 +658,6 @@ __all__ = [
     "WEIGHT_SCALE",
     "WeightedCluster",
     "build_object_palette",
+    "build_object_palette_v010",
     "filter_picks_by_pixel_evidence",
 ]
