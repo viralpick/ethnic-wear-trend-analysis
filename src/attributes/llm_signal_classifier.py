@@ -278,6 +278,44 @@ class AzureOpenAILLMSignalClassifier:
 
 
 # --------------------------------------------------------------------------- #
+# OpenAI 직호출 backup (Azure deployment 막힘 기간용)
+# --------------------------------------------------------------------------- #
+class OpenAILLMSignalClassifier(AzureOpenAILLMSignalClassifier):
+    """OpenAI 직호출 변형. parent 의 classify / _classify_batch 재사용, SDK init 만
+    override. parent 가 사용하는 self._deployment 는 OpenAI model id 로 alias.
+
+    환경변수 (.env):
+      OPENAI_API_KEY (필수)
+      OPENAI_MODEL_MINI 또는 OPENAI_MODEL (선택, default: gpt-5-mini)
+    """
+
+    def __init__(
+        self,
+        *,
+        batch_size: int = 25,
+        max_words_per_run: int = 100,
+        cache: LocalSignalCache | None = None,
+        seed: int = 42,
+    ) -> None:
+        # parent __init__ 우회 — Azure SDK init 막기 위해 super() 호출 안 함.
+        import openai  # noqa: F401  pylint: disable=import-outside-toplevel
+        from dotenv import load_dotenv  # noqa: I001  pylint: disable=import-outside-toplevel
+
+        load_dotenv()
+        self._batch_size = max(1, batch_size)
+        self._max_words = max(1, max_words_per_run)
+        self._cache = cache
+        self._seed = seed
+        # parent `_classify_batch` 가 self._deployment 사용 — OpenAI model id 로 alias.
+        self._deployment = (
+            os.environ.get("OPENAI_MODEL_MINI")
+            or os.environ.get("OPENAI_MODEL")
+            or self.MODEL_ID
+        )
+        self._client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+
+# --------------------------------------------------------------------------- #
 # 결정론 fake (테스트 / DI 용) — 단어 패턴으로 분류
 # --------------------------------------------------------------------------- #
 class FakeLLMSignalClassifier:

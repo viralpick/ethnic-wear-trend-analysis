@@ -266,13 +266,14 @@ def _build_writer(sink: str):
 
 
 
-def _build_signal_classifier(settings: Settings):
+def _build_signal_classifier(settings: Settings, provider: str = "azure-openai"):
     """Tier 3 LLM signal classifier (gpt-5-mini) — surface unknown_signal 의
     likely_category 보강용. spec §4.2 v2.3.
 
     enable rules:
     - env UNKNOWN_SIGNAL_LLM_CLASSIFY=0 → disable (graceful skip, return None)
-    - 그 외 (default) → AzureOpenAILLMSignalClassifier 생성 시도
+    - provider="openai" → OpenAILLMSignalClassifier (OpenAI 직호출 backup)
+    - 그 외 (default "azure-openai") → AzureOpenAILLMSignalClassifier
     - extras/creds 미설치 (ImportError, KeyError) → warning + None (graceful skip)
     - 그 외 예외 → warning + None (안전한 fallback)
 
@@ -285,17 +286,22 @@ def _build_signal_classifier(settings: Settings):
         from attributes.llm_signal_classifier import (  # noqa: I001
             AzureOpenAILLMSignalClassifier,
             LocalSignalCache,
+            OpenAILLMSignalClassifier,
+        )
+        cls = (
+            OpenAILLMSignalClassifier if provider == "openai"
+            else AzureOpenAILLMSignalClassifier
         )
         cache_dir = settings.paths.outputs / "llm_signal_cache"
         cache = LocalSignalCache(
             cache_dir,
-            model_id=AzureOpenAILLMSignalClassifier.MODEL_ID,
-            prompt_version=AzureOpenAILLMSignalClassifier.PROMPT_VERSION,
+            model_id=cls.MODEL_ID,
+            prompt_version=cls.PROMPT_VERSION,
         )
-        return AzureOpenAILLMSignalClassifier(cache=cache)
+        return cls(cache=cache)
     except (ImportError, KeyError) as exc:
-        # extras 미설치 (`[llm]`) 또는 AZURE_OPENAI_* 환경변수 누락 — Tier 3 비활성.
-        # Azure auth/network 실패는 raise (silent skip 시 운영 환경에서 진단 어려움).
+        # extras 미설치 (`[llm]`) 또는 *_API_KEY 환경변수 누락 — Tier 3 비활성.
+        # auth/network 실패는 raise (silent skip 시 운영 환경에서 진단 어려움).
         logger.warning("llm_signal_classifier_disabled reason=%r", exc)
         return None
 
@@ -445,6 +451,7 @@ def run_representative_phase(
     sink: str,
     dedup_by_url: bool = False,
     emergence_params=None,  # EmergenceParams | None — None 이면 default
+    signal_provider: str = "azure-openai",
 ) -> None:
     """phase=representative — enriched JSON 글롭 로드 → 날짜 필터 → growth rate 계산
     → url_short_tag dedup → growth-weighted score → representative 적재.
@@ -547,7 +554,7 @@ def run_representative_phase(
     # env UNKNOWN_SIGNAL_LLM_CLASSIFY=0 으로 disable, extras/creds 미설치 시 graceful skip.
     n_classified = 0
     n_dropped = 0
-    classifier = _build_signal_classifier(settings)
+    classifier = _build_signal_classifier(settings, provider=signal_provider)
     if classifier is not None and signals:
         from attributes.llm_signal_classifier import annotate_signals  # noqa: I001
         signals, dropped = annotate_signals(signals, classifier, drop_non_ethnic=True)
@@ -628,8 +635,9 @@ def _parse_args() -> argparse.Namespace:
              "(기본: settings.pipeline.window_days).",
     )
     parser.add_argument(
-        "--llm", choices=["fake", "azure-openai"], default="fake",
-        help="LLM 클라이언트 선택. azure-openai 는 AZURE_OPENAI_* 환경변수 필요.",
+        "--llm", choices=["fake", "azure-openai", "openai"], default="fake",
+        help="LLM 클라이언트 선택. azure-openai 는 AZURE_OPENAI_* 환경변수 필요, "
+             "openai 는 OPENAI_API_KEY 필요 (Azure deployment 막힘 기간 backup).",
     )
     parser.add_argument(
         "--vision-llm", choices=["fake", "gemini"], default="fake",
@@ -789,10 +797,13 @@ def _select_color_extractor(
 def _select_llm_client(
     choice: str, settings: Settings, max_workers: int = 1,
 ) -> LLMClient:
-    """CLI flag 기반 LLMClient DI. azure-openai 는 lazy import (openai 패키지 필요)."""
+    """CLI flag 기반 LLMClient DI. azure-openai / openai 는 lazy import (openai 패키지 필요)."""
     if choice == "azure-openai":
         from attributes.azure_openai_llm_client import AzureOpenAILLMClient  # noqa: I001
         return AzureOpenAILLMClient(seed=DEFAULT_LLM_SEED, max_workers=max_workers)
+    if choice == "openai":
+        from attributes.openai_llm_client import OpenAILLMClient  # noqa: I001
+        return OpenAILLMClient(seed=DEFAULT_LLM_SEED, max_workers=max_workers)
     return FakeLLMClient(seed=DEFAULT_LLM_SEED)
 
 
@@ -894,6 +905,7 @@ def main() -> None:
             sink=args.sink,
             dedup_by_url=args.dedup_by_url,
             emergence_params=_build_emergence_params(args),
+            signal_provider="openai" if args.llm == "openai" else "azure-openai",
         )
         return
 

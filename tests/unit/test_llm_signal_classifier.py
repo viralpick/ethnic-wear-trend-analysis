@@ -157,3 +157,30 @@ def test_build_signal_classifier_init_failure_graceful(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="should propagate"):
         _build_signal_classifier(s)
+
+
+def test_build_signal_classifier_provider_dispatch(monkeypatch) -> None:
+    """provider="openai" 면 OpenAILLMSignalClassifier, default 면 Azure 변형 instantiate."""
+    from pipelines.run_daily_pipeline import _build_signal_classifier
+    from settings import load_settings
+    monkeypatch.delenv("UNKNOWN_SIGNAL_LLM_CLASSIFY", raising=False)
+    s = load_settings()
+    import attributes.llm_signal_classifier as mod
+
+    instantiated: list[str] = []
+
+    def _make_recorder(label: str):
+        class _Mock:
+            MODEL_ID = "test-model"
+            PROMPT_VERSION = "v0"
+            def __init__(self, *a, **kw):
+                instantiated.append(label)
+        return _Mock
+
+    monkeypatch.setattr(mod, "AzureOpenAILLMSignalClassifier", _make_recorder("azure"))
+    monkeypatch.setattr(mod, "OpenAILLMSignalClassifier", _make_recorder("openai"))
+
+    _build_signal_classifier(s)  # default azure
+    _build_signal_classifier(s, provider="azure-openai")
+    _build_signal_classifier(s, provider="openai")
+    assert instantiated == ["azure", "azure", "openai"]
