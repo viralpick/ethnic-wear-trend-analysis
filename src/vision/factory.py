@@ -19,7 +19,8 @@ from pathlib import Path
 
 from settings import VisionLLMConfig
 from vision.gemini_client import GeminiVisionLLMClient
-from vision.llm_cache import LocalJSONCache, VisionLLMCacheBackend
+from vision.llm_cache import LocalJSONCache, LocalJSONCacheV010, VisionLLMCacheBackend
+from vision.prompts import COLOR_PICK_V010_PROMPT_VERSION
 from vision.prompts import PROMPT_VERSION as CODE_PROMPT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -55,9 +56,16 @@ def build_vision_llm_client(
             model_id=cfg.model_id,
             prompt_version=cfg.prompt_version,
         )
+    # color.B v0.10 Pass 2 cache — Pass 1 과 같은 base_dir 의 v010/ subdir.
+    v010_cache = LocalJSONCacheV010(
+        base_dir=Path(cfg.cache_dir),
+        model_id=cfg.model_id,
+        prompt_version=COLOR_PICK_V010_PROMPT_VERSION,
+    )
 
     return GeminiVisionLLMClient(
         model_id=cfg.model_id,
         prompt_version=cfg.prompt_version,
         cache=cache,
+        v010_cache=v010_cache,
     )

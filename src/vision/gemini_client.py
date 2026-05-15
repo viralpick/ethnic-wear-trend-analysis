@@ -36,8 +36,14 @@ from pydantic import ValidationError
 
 from contracts.vision import GarmentAnalysis, KMeansAnchoredPickResponse
 from vision.json_repair_util import parse_json_with_repair
-from vision.llm_cache import VisionLLMCacheBackend, compute_cache_key
+from vision.llm_cache import (
+    KMeansAnchoredPickCacheBackend,
+    VisionLLMCacheBackend,
+    compute_cache_key,
+    compute_v010_cache_key,
+)
 from vision.prompts import (
+    COLOR_PICK_V010_PROMPT_VERSION,
     COLOR_PICK_V010_SYSTEM_PROMPT,
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -67,6 +73,7 @@ class GeminiVisionLLMClient:
         model_id: str = DEFAULT_MODEL_ID,
         prompt_version: str = PROMPT_VERSION,
         cache: VisionLLMCacheBackend | None = None,
+        v010_cache: KMeansAnchoredPickCacheBackend | None = None,
         api_key: str | None = None,
     ) -> None:
         if api_key is None:
@@ -84,6 +91,8 @@ class GeminiVisionLLMClient:
         self._model_id = model_id
         self._prompt_version = prompt_version
         self._cache = cache
+        # color.B v0.10 — Pass 2 cache (cluster_top_n_hex 포함 key). 미주입 시 매 호출.
+        self._v010_cache = v010_cache
 
     @property
     def model_id(self) -> str:
@@ -187,11 +196,29 @@ class GeminiVisionLLMClient:
     ) -> KMeansAnchoredPickResponse:
         """color.B v0.10 Pass 2 — Gemini 가 KMeans cluster top-N 안에서 색 pick.
 
-        cache 미통합 (단계 5 canary 측정 후 비용 분석 시 검토). 실패 시 raise —
-        adapter 가 catch 해 Pass 1 picks 로 fallback (spec v0.10 결정 1-a).
+        실패 시 raise — adapter 가 catch 해 Pass 1 picks 로 fallback (spec v0.10 결정 1-a).
+        v010_cache 가 주입돼 있으면 cache hit/miss 분기 (cache key 는 image + Pass 2
+        prompt_version + model_id + cluster_top_n hex 시퀀스).
         """
         if not kmeans_clusters:
             raise ValueError("kmeans_clusters must not be empty for v0.10 pick")
+        # cache lookup — v0.10 prompt_version 은 caller 의 self._prompt_version 와 별개
+        # (그건 Pass 1 v0.9). Pass 2 prompt 는 COLOR_PICK_V010_PROMPT_VERSION 상수.
+        cache_key: str | None = None
+        if self._v010_cache is not None:
+            cluster_hexes = tuple(
+                str(c.get("hex", "")) for c in kmeans_clusters
+            )
+            cache_key = compute_v010_cache_key(
+                image_bytes,
+                prompt_version=COLOR_PICK_V010_PROMPT_VERSION,
+                model_id=self._model_id,
+                cluster_hexes=cluster_hexes,
+            )
+            cached = self._v010_cache.get(cache_key)
+            if cached is not None:
+                logger.debug("gemini_v010_cache_hit cache_key=%s", cache_key[:12])
+                return cached
         contents = [
             types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
             COLOR_PICK_V010_SYSTEM_PROMPT
@@ -233,8 +260,6 @@ class GeminiVisionLLMClient:
                 else str(payload)[:200],
             )
             raise
-        # cluster_index 범위 검증은 hybrid_palette.build_object_palette_v010 가 단일
-        # source of truth — 그쪽에서 cluster_top_n 기준 raise (caller fallback).
-        # 여기서 중복 검증 시 기준 (input kmeans_clusters vs adapter 슬라이스 cluster_top_n)
-        # 차이로 silent drift 위험. Pydantic ValidationError + adapter 호출이 invariant.
+        if self._v010_cache is not None and cache_key is not None:
+            self._v010_cache.put(cache_key, response)
         return response
