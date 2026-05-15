@@ -741,17 +741,25 @@ def _build_vision_llm(choice: str, settings: Settings):
     from vision.llm_client import FakeVisionLLMClient  # noqa: I001
     if choice == "gemini":
         from vision.gemini_client import GeminiVisionLLMClient  # noqa: I001
-        from vision.llm_cache import LocalJSONCache
+        from vision.llm_cache import LocalJSONCache, LocalJSONCacheV010
+        from vision.prompts import COLOR_PICK_V010_PROMPT_VERSION
         cfg = settings.vision_llm
         cache = LocalJSONCache(
             cfg.cache_dir,
             model_id=cfg.model_id,
             prompt_version=cfg.prompt_version,
         )
+        # color.B v0.10 Pass 2 cache — 같은 base_dir 의 v010/ subdir.
+        v010_cache = LocalJSONCacheV010(
+            cfg.cache_dir,
+            model_id=cfg.model_id,
+            prompt_version=COLOR_PICK_V010_PROMPT_VERSION,
+        )
         return GeminiVisionLLMClient(
             model_id=cfg.model_id,
             prompt_version=cfg.prompt_version,
             cache=cache,
+            v010_cache=v010_cache,
         )
     return FakeVisionLLMClient()
 

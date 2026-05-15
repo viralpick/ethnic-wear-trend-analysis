@@ -6,8 +6,18 @@ import json
 import pytest
 
 from contracts.common import Silhouette
-from contracts.vision import EthnicOutfit, GarmentAnalysis
-from vision.llm_cache import LocalJSONCache, compute_cache_key
+from contracts.vision import (
+    EthnicOutfit,
+    GarmentAnalysis,
+    KMeansAnchoredPick,
+    KMeansAnchoredPickResponse,
+)
+from vision.llm_cache import (
+    LocalJSONCache,
+    LocalJSONCacheV010,
+    compute_cache_key,
+    compute_v010_cache_key,
+)
 
 
 def _analysis() -> GarmentAnalysis:
@@ -122,3 +132,128 @@ def test_local_cache_corrupt_json_raises(tmp_path) -> None:
     # 파싱 실패는 raise — silent 로 숨기지 않음 (실패 숨김 금지)
     with pytest.raises(json.JSONDecodeError):
         cache.get("badjson")
+
+
+
+# ---- color.B v0.10 — compute_v010_cache_key + LocalJSONCacheV010 ----
+
+
+def _v010_response() -> KMeansAnchoredPickResponse:
+    return KMeansAnchoredPickResponse(
+        picks=[
+            KMeansAnchoredPick(cluster_index=0, preset_label="cream_ivory"),
+            KMeansAnchoredPick(cluster_index=2, preset_label="bottle_green"),
+        ]
+    )
+
+
+def test_v010_cache_key_deterministic_same_inputs() -> None:
+    a = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000", "#00aa00", "#0000aa"),
+    )
+    b = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000", "#00aa00", "#0000aa"),
+    )
+    assert a == b
+
+
+def test_v010_cache_key_image_change_bumps_key() -> None:
+    a = compute_v010_cache_key(
+        b"img-A", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000",),
+    )
+    b = compute_v010_cache_key(
+        b"img-B", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000",),
+    )
+    assert a != b
+
+
+def test_v010_cache_key_cluster_hexes_change_bumps_key() -> None:
+    a = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000", "#00aa00"),
+    )
+    b = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000", "#0000aa"),
+    )
+    assert a != b
+
+
+def test_v010_cache_key_cluster_order_matters() -> None:
+    # share desc 정렬 가정 — 순서 다르면 별 cache. KMeans 결과 변동을 자동 무효화.
+    a = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000", "#00aa00"),
+    )
+    b = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#00aa00", "#aa0000"),
+    )
+    assert a != b
+
+
+def test_v010_cache_key_prompt_version_bumps_key() -> None:
+    a = compute_v010_cache_key(
+        b"img", prompt_version="v0.10", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000",),
+    )
+    b = compute_v010_cache_key(
+        b"img", prompt_version="v0.11", model_id="gemini-2.5-flash",
+        cluster_hexes=("#aa0000",),
+    )
+    assert a != b
+
+
+def test_local_cache_v010_miss_returns_none(tmp_path) -> None:
+    cache = LocalJSONCacheV010(
+        tmp_path, model_id="gemini-2.5-flash", prompt_version="v0.10",
+    )
+    assert cache.get("missing-key") is None
+
+
+def test_local_cache_v010_put_then_get_roundtrip(tmp_path) -> None:
+    cache = LocalJSONCacheV010(
+        tmp_path, model_id="gemini-2.5-flash", prompt_version="v0.10",
+    )
+    resp = _v010_response()
+    cache.put("k1", resp)
+    got = cache.get("k1")
+    assert got is not None
+    assert got.model_dump() == resp.model_dump()
+
+
+def test_local_cache_v010_isolated_from_v09(tmp_path) -> None:
+    # 같은 base_dir + 같은 model_id 라도 LocalJSONCache (v0.9) 와 LocalJSONCacheV010 가
+    # 같은 cache_key 를 다른 파일에 저장 (v010/ subdir 분리). 충돌 없음.
+    v09 = LocalJSONCache(
+        tmp_path, model_id="gemini-2.5-flash", prompt_version="v0.9",
+    )
+    v010 = LocalJSONCacheV010(
+        tmp_path, model_id="gemini-2.5-flash", prompt_version="v0.10",
+    )
+    v09.put("shared-key", _analysis())
+    v010.put("shared-key", _v010_response())
+    # 각자 자기 envelope 만 보임
+    assert v09.get("shared-key") is not None
+    assert v010.get("shared-key") is not None
+    # cross-read miss
+    assert v010.get("non-existing-key") is None
+
+
+def test_local_cache_v010_writes_envelope_metadata(tmp_path) -> None:
+    cache = LocalJSONCacheV010(
+        tmp_path, model_id="gemini-2.5-flash", prompt_version="v0.10",
+    )
+    cache.put("k1", _v010_response())
+    file_path = tmp_path / "gemini-2.5-flash" / "v010" / "k1.json"
+    assert file_path.exists()
+    envelope = json.loads(file_path.read_text(encoding="utf-8"))
+    assert envelope["model_id"] == "gemini-2.5-flash"
+    assert envelope["prompt_version"] == "v0.10"
+    assert envelope["cache_key"] == "k1"
+    assert "stored_at" in envelope
+    assert envelope["pick_response"]["picks"][0]["cluster_index"] == 0

@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from contracts.vision import GarmentAnalysis
+from contracts.vision import GarmentAnalysis, KMeansAnchoredPickResponse
 
 
 def compute_cache_key(
@@ -43,6 +43,31 @@ def compute_cache_key(
     h.update(prompt_version.encode("utf-8"))
     h.update(b"\x1f")
     h.update(model_id.encode("utf-8"))
+    return h.hexdigest()
+
+
+
+def compute_v010_cache_key(
+    image_bytes: bytes,
+    *,
+    prompt_version: str,
+    model_id: str,
+    cluster_hexes: tuple[str, ...],
+) -> str:
+    """color.B v0.10 — Pass 2 cache key.
+
+    Pass 1 cache key + cluster_top_n hex 시퀀스 (share desc 정렬 후 top-N) 까지 포함.
+    같은 image 라도 cluster top-N 이 다르면 (KMeans 결과 변동, e.g. dyn_cfg 변경) 별
+    cache.
+    """
+    h = hashlib.sha256()
+    h.update(image_bytes)
+    h.update(b"\x1f")
+    h.update(prompt_version.encode("utf-8"))
+    h.update(b"\x1f")
+    h.update(model_id.encode("utf-8"))
+    h.update(b"\x1f")
+    h.update("|".join(cluster_hexes).encode("utf-8"))
     return h.hexdigest()
 
 
@@ -92,6 +117,62 @@ class LocalJSONCache:
             json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         tmp.replace(path)  # atomic — 반쯤 쓰인 파일 남기지 않음
+
+    def _path(self, cache_key: str) -> Path:
+        return self._model_dir / f"{cache_key}.json"
+
+
+
+@runtime_checkable
+class KMeansAnchoredPickCacheBackend(Protocol):
+    """color.B v0.10 — Pass 2 결과용 KV cache Protocol.
+
+    `VisionLLMCacheBackend` 와 동형이나 value 가 `KMeansAnchoredPickResponse`. Pass 1
+    cache 와 직교 (cache_key 가 cluster_hexes 포함이라 자연 분리).
+    """
+
+    def get(self, cache_key: str) -> KMeansAnchoredPickResponse | None: ...
+    def put(self, cache_key: str, response: KMeansAnchoredPickResponse) -> None: ...
+
+
+class LocalJSONCacheV010:
+    """color.B v0.10 — `outputs/llm_cache/{model_id}/v010/{cache_key}.json` 저장.
+
+    Pass 1 (`LocalJSONCache`) 와 동일한 base_dir 를 공유하되 v010 subdir 에 분리. envelope
+    key 가 `pick_response` 라 Pass 1 의 `garment_analysis` 와 자연 분리.
+    """
+
+    def __init__(self, base_dir: Path, *, model_id: str, prompt_version: str) -> None:
+        self._model_dir = base_dir / model_id / "v010"
+        self._model_dir.mkdir(parents=True, exist_ok=True)
+        self._model_id = model_id
+        self._prompt_version = prompt_version
+
+    def get(self, cache_key: str) -> KMeansAnchoredPickResponse | None:
+        path = self._path(cache_key)
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        payload = data.get("pick_response")
+        if payload is None:
+            return None
+        return KMeansAnchoredPickResponse.model_validate(payload)
+
+    def put(self, cache_key: str, response: KMeansAnchoredPickResponse) -> None:
+        path = self._path(cache_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        envelope = {
+            "cache_key": cache_key,
+            "model_id": self._model_id,
+            "prompt_version": self._prompt_version,
+            "stored_at": datetime.now(timezone.utc).isoformat(),
+            "pick_response": response.model_dump(mode="json"),
+        }
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        tmp.replace(path)
 
     def _path(self, cache_key: str) -> Path:
         return self._model_dir / f"{cache_key}.json"
