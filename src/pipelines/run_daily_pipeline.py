@@ -630,6 +630,13 @@ def _parse_args() -> argparse.Namespace:
              "미지정 시 (target_date - collection_start).days.",
     )
     parser.add_argument(
+        "--source-post-ids", type=str, default=None,
+        help="color.B canary mode: 한 줄당 1 source_post_id 인 텍스트 파일 path "
+             "또는 콤마 분리 id list. 지정 시 page_size/page_index/window_days "
+             "무시 + IN 필터 모드. IG ULID + YT video id 둘 다 같은 list 에 "
+             "넣어도 SQL 분리.",
+    )
+    parser.add_argument(
         "--window-days", type=int, default=None,
         help="date 모드: target_date 기준 N일 이내 포스트 로드 "
              "(기본: settings.pipeline.window_days).",
@@ -816,6 +823,7 @@ def _select_raw_loader(
     page_index: int | None = None,
     window_days: int | None = None,
     target_date: date | None = None,
+    post_ids: list[str] | None = None,
 ) -> RawLoader:
     """CLI flag 기반 RawLoader DI."""
     if choice == "starrocks":
@@ -834,6 +842,7 @@ def _select_raw_loader(
             page_size=p_size,
             window_days=w_days,
             collection_start=collection_start,
+            post_ids=post_ids,
         )
     if choice == "tsv":
         return TsvRawLoader(tsv_dir or settings.paths.sample_data)
@@ -931,6 +940,18 @@ def main() -> None:
         blob_cache=args.blob_cache,
         max_workers=args.vision_workers,
     )
+    # color.B canary — file path 또는 콤마 분리 list parse
+    post_ids: list[str] | None = None
+    if args.source_post_ids:
+        p_input = Path(args.source_post_ids)
+        if p_input.is_file():
+            post_ids = [
+                line.strip()
+                for line in p_input.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        else:
+            post_ids = [s.strip() for s in args.source_post_ids.split(",") if s.strip()]
     raw_loader = _select_raw_loader(
         args.source, settings, args.tsv_dir,
         window_mode=args.window_mode,
@@ -938,6 +959,7 @@ def main() -> None:
         page_index=args.page_index,
         window_days=args.window_days,
         target_date=target,
+        post_ids=post_ids,
     )
     run_pipeline(
         settings, target, llm_client, color_extractor,

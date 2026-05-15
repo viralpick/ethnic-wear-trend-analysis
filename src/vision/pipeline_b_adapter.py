@@ -59,8 +59,13 @@ from vision.canonical_palette_aggregator import (
 )
 from vision.color_extractor import ColorExtractionResult
 from vision.color_family_preset import MatcherEntry
+from vision.dynamic_palette import extract_dynamic_palette
 from vision.frame_source import VideoFrameSource
-from vision.hybrid_palette import build_object_palette
+from vision.hybrid_palette import (
+    WeightedCluster,
+    build_object_palette,
+    build_object_palette_v010,
+)
 from vision.llm_client import VisionLLMClient
 from vision.pipeline_b_extractor import SegBundle, detect_people
 from vision.post_palette import build_post_palette
@@ -340,6 +345,11 @@ class PipelineBColorExtractor:
         # extract_instances 경로에서만 사용. 디폴트 NoopSceneFilter 면 v2 게이트 우회.
         self._scene_filter: SceneFilter = scene_filter or NoopSceneFilter()
         self._max_workers = max(1, max_workers)
+        # color.B v0.10 (2026-05-14) — KMeans-anchored VLM color pick.
+        self._color_pick_v010_enabled: bool = self._hybrid_cfg.color_pick_v010_enabled
+        self._color_pick_v010_kmeans_top_n: int = (
+            self._hybrid_cfg.color_pick_v010_kmeans_top_n
+        )
 
     def extract_visual(
         self, items: list[NormalizedContentItem]
@@ -383,8 +393,14 @@ class PipelineBColorExtractor:
             post_items, self._bundle, self._cfg,
             self._dedup_cfg, self._family_map,
         )
+        # color.B v0.10 통합 — image_id → bytes 맵 (Pass 2 lookup 용).
+        # v0.10 disabled 면 _attach_palette 가 무시.
+        image_bytes_map: dict[str, bytes] = {
+            image_id: data for image_id, data, _rgb in all_frames
+        }
         canonicals = [
-            self._attach_palette(canonical, pools) for canonical, pools in pairs
+            self._attach_palette(canonical, pools, image_bytes_map)
+            for canonical, pools in pairs
         ]
         return ColorExtractionResult(
             source_post_id=item.source_post_id,
@@ -398,7 +414,10 @@ class PipelineBColorExtractor:
         )
 
     def _attach_palette(
-        self, canonical: CanonicalOutfit, pools: list[ObjectPool],
+        self,
+        canonical: CanonicalOutfit,
+        pools: list[ObjectPool],
+        image_bytes_map: dict[str, bytes] | None = None,
     ) -> CanonicalOutfit:
         """per-object β-hybrid → canonical 통합 palette + 멤버별 palette 부착.
 
@@ -410,20 +429,18 @@ class PipelineBColorExtractor:
 
         pools 가 비면 (non-ethnic / 전 멤버 background-only) 라벨만 보존 (B3a invariant).
         pool 이 없는 멤버는 default 빈 palette 유지 (canonical_extractor 의 skip 정책 따름).
+
+        color.B v0.10 (2026-05-14): `self._color_pick_v010_enabled=True` 면 pool 별로
+        Pass 2 Gemini 호출 → cluster_index 직접 anchor (`build_object_palette_v010`).
+        실패 시 Pass 1 `build_object_palette` fallback (spec v0.10 결정 1-a).
+        `image_bytes_map` 은 v0.10 path 의 image lookup (image_id → bytes). disabled
+        일 때는 사용 X (None 허용).
         """
         if not pools:
             return canonical
+        bytes_map: dict[str, bytes] = image_bytes_map or {}
         per_object_results = [
-            build_object_palette(
-                pool.rgb_pixels, pool.picks, self._dyn_cfg,
-                self._matcher_entries, frame_area=pool.frame_area,
-                drop_threshold=self._hybrid_cfg.pick_match_deltae76,
-                r2_min_share=self._hybrid_cfg.r2_min_share,
-                chroma_vivid=self._hybrid_cfg.chroma_vivid,
-                hue_near_deg=self._hybrid_cfg.hue_near_deg,
-                r2_merge_deltae76=self._hybrid_cfg.r2_merge_deltae76,
-                chroma_ratio_min=self._hybrid_cfg.chroma_ratio_min,
-            )
+            self._build_object_palette_one(pool, canonical, bytes_map)
             for pool in pools
         ]
         member_palette_map: dict[
@@ -449,6 +466,98 @@ class PipelineBColorExtractor:
                 "cut_off_share": cut_off,
                 "members": new_members,
             },
+        )
+
+    def _build_object_palette_one(
+        self,
+        pool: ObjectPool,
+        canonical: CanonicalOutfit,
+        image_bytes_map: dict[str, bytes],
+    ) -> tuple[list[WeightedCluster], float]:
+        """v0.10 enabled 면 Pass 2 path, 실패 / disabled 면 v0.9 build_object_palette.
+
+        spec v0.10 결정 1-a — Pass 2 invalid cluster_index / image_bytes 누락 / LLM
+        예외 등 모든 실패는 catch 해서 Pass 1 picks 로 fallback.
+        """
+        if self._color_pick_v010_enabled:
+            try:
+                return self._build_object_palette_v010_one(
+                    pool, canonical, image_bytes_map,
+                )
+            except ValueError as exc:
+                # 의도된 실패만 catch (Pydantic ValidationError 도 ValueError subclass):
+                # - cluster_index 범위 초과 / 중복
+                # - image_bytes 누락
+                # - Pass 2 LLM schema violation
+                # AttributeError / KeyError 등 코딩 버그는 propagate — 글로벌 룰 "실패
+                # 숨김 금지". Gemini SDK transient (TimeoutError / network) 도 일단
+                # propagate 해서 canary 단계에서 빈도 측정 후 catch 결정.
+                logger.warning(
+                    "color_pick_v010_fallback canonical_index=%s image=%s outfit=%s "
+                    "reason=%r",
+                    canonical.canonical_index,
+                    pool.member.image_id,
+                    pool.member.outfit_index,
+                    exc,
+                )
+        return build_object_palette(
+            pool.rgb_pixels, pool.picks, self._dyn_cfg,
+            self._matcher_entries, frame_area=pool.frame_area,
+            drop_threshold=self._hybrid_cfg.pick_match_deltae76,
+            r2_min_share=self._hybrid_cfg.r2_min_share,
+            chroma_vivid=self._hybrid_cfg.chroma_vivid,
+            hue_near_deg=self._hybrid_cfg.hue_near_deg,
+            r2_merge_deltae76=self._hybrid_cfg.r2_merge_deltae76,
+            chroma_ratio_min=self._hybrid_cfg.chroma_ratio_min,
+        )
+
+    def _build_object_palette_v010_one(
+        self,
+        pool: ObjectPool,
+        canonical: CanonicalOutfit,
+        image_bytes_map: dict[str, bytes],
+    ) -> tuple[list[WeightedCluster], float]:
+        """color.B v0.10 Pass 2 통합 — cluster top-N 추출 → Gemini → cluster_index anchor.
+
+        실패 분기:
+        - image_bytes missing → ValueError (caller fallback)
+        - extract_dynamic_palette 빈 cluster → ([], 0.0) 정상 반환 (member skip)
+        - LLM 예외 / cluster_index 범위 초과 / 중복 → propagate (caller fallback)
+        """
+        image_bytes = image_bytes_map.get(pool.member.image_id)
+        if image_bytes is None:
+            raise ValueError(
+                f"image_bytes missing for image_id={pool.member.image_id}"
+            )
+        pixel_clusters = extract_dynamic_palette(pool.rgb_pixels, self._dyn_cfg)
+        if not pixel_clusters:
+            return [], 0.0
+        cluster_top_n = pixel_clusters[: self._color_pick_v010_kmeans_top_n]
+        if not cluster_top_n:
+            return [], 0.0
+        cluster_payload: list[dict[str, object]] = [
+            {"index": i, "hex": c.hex, "share": float(c.share)}
+            for i, c in enumerate(cluster_top_n)
+        ]
+        rep = canonical.representative
+        classification: dict[str, object] = {
+            "upper_garment_type": rep.upper_garment_type,
+            "lower_garment_type": rep.lower_garment_type,
+            "upper_is_ethnic": rep.upper_is_ethnic,
+            "lower_is_ethnic": rep.lower_is_ethnic,
+            "dress_as_single": rep.dress_as_single,
+        }
+        response = self._vision_llm.pick_colors_from_kmeans(
+            image_bytes,
+            garment_classification=classification,
+            kmeans_clusters=cluster_payload,
+        )
+        return build_object_palette_v010(
+            pixel_clusters,
+            response,
+            obj_pixel_count=int(pool.rgb_pixels.shape[0]),
+            frame_area=pool.frame_area,
+            kmeans_top_n=self._color_pick_v010_kmeans_top_n,
         )
 
     @staticmethod

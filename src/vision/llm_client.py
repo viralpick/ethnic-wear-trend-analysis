@@ -20,7 +20,12 @@ import random
 from typing import Protocol, runtime_checkable
 
 from contracts.common import Silhouette
-from contracts.vision import EthnicOutfit, GarmentAnalysis
+from contracts.vision import (
+    EthnicOutfit,
+    GarmentAnalysis,
+    KMeansAnchoredPick,
+    KMeansAnchoredPickResponse,
+)
 
 
 @runtime_checkable
@@ -38,6 +43,21 @@ class VisionLLMClient(Protocol):
         *,
         preset: list[dict[str, str]],
     ) -> GarmentAnalysis: ...
+
+    def pick_colors_from_kmeans(
+        self,
+        image_bytes: bytes,
+        *,
+        garment_classification: dict[str, object],
+        kmeans_clusters: list[dict[str, object]],
+    ) -> KMeansAnchoredPickResponse:
+        """color.B v0.10 Pass 2 — KMeans cluster top-N 안에서 dominant 색 pick.
+
+        cluster_index 는 closed-set anchoring — 입력 cluster 범위 안에서만. 구현체는
+        Pass 1 (`extract_garment`) 과 별도 LLM 호출 (~ +1 call/image, 비용 2배). 실패
+        시 raise — adapter 가 catch 해 Pass 1 picks 로 fallback (spec v0.10 결정 1-a).
+        """
+        ...
 
 
 _ETHNIC_WORDS_UPPER = ["kurta", "anarkali", "saree", "ethnic_shirt", "tunic"]
@@ -108,3 +128,51 @@ class FakeVisionLLMClient:
             technique=technique,
             color_preset_picks_top3=picks,
         )
+
+    def pick_colors_from_kmeans(
+        self,
+        image_bytes: bytes,
+        *,
+        garment_classification: dict[str, object],
+        kmeans_clusters: list[dict[str, object]],
+    ) -> KMeansAnchoredPickResponse:
+        """color.B v0.10 Pass 2 결정론 stub.
+
+        image + cluster top-N hex + prompt_version 해시로 seed 유도. 1~3 pick,
+        cluster_index 는 입력 cluster 의 0-based position. preset_label 은 cluster
+        hex 기반 stub (실 LLM 의 50색 preset 매칭은 아님 — adapter / aggregator 가
+        dedup 시 사용하는 형태 호환 확인용).
+        """
+        if not kmeans_clusters:
+            raise ValueError("kmeans_clusters must not be empty for v0.10 pick")
+        seed = self._color_pick_seed(image_bytes, kmeans_clusters)
+        rng = random.Random(seed)
+        n_picks = rng.choices([1, 2, 3], weights=[0.3, 0.5, 0.2], k=1)[0]
+        n_picks = min(n_picks, len(kmeans_clusters))
+        positions = rng.sample(range(len(kmeans_clusters)), k=n_picks)
+        picks = []
+        for pos in positions:
+            cluster = kmeans_clusters[pos]
+            hex_part = str(cluster.get("hex", "#000000")).lstrip("#")[:6]
+            picks.append(
+                KMeansAnchoredPick(
+                    cluster_index=pos,
+                    preset_label=f"fake_{hex_part}",
+                )
+            )
+        return KMeansAnchoredPickResponse(picks=picks)
+
+    def _color_pick_seed(
+        self, image_bytes: bytes, kmeans_clusters: list[dict[str, object]]
+    ) -> int:
+        cluster_repr = "|".join(
+            f"{c.get('index', '?')}:{c.get('hex', '#000000')}"
+            for c in kmeans_clusters
+        ).encode("utf-8")
+        digest = hashlib.sha256(
+            image_bytes
+            + b"|v0.10|"
+            + cluster_repr
+            + self._prompt_version.encode("utf-8")
+        ).digest()
+        return int.from_bytes(digest[:8], "big", signed=False)

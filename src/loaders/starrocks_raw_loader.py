@@ -146,6 +146,7 @@ class StarRocksRawLoader:
         page_size: int = 200,
         window_days: int = 30,
         collection_start: date | None = None,
+        post_ids: list[str] | None = None,
     ) -> None:
         self._conn_kwargs = {
             "host": host, "port": port, "user": user,
@@ -159,6 +160,9 @@ class StarRocksRawLoader:
         self._page_size = page_size
         self._window_days = window_days
         self._collection_start = collection_start or date.today()
+        # color.B canary (2026-05-14) — 명시 post id list 만 로드. window_mode 무시.
+        # 같은 list 를 IG / YT 양쪽 SQL 의 IN 필터에 넣음 (id 형식 다르므로 자연 분리).
+        self._post_ids: list[str] | None = post_ids
 
     @classmethod
     def from_env(
@@ -167,6 +171,7 @@ class StarRocksRawLoader:
         page_size: int = 200,
         window_days: int = 30,
         collection_start: date | None = None,
+        post_ids: list[str] | None = None,
     ) -> "StarRocksRawLoader":
         """환경 변수 / .env 에서 크리덴셜 읽기."""
         load_dotenv()
@@ -180,13 +185,19 @@ class StarRocksRawLoader:
             page_size=page_size,
             window_days=window_days,
             collection_start=collection_start,
+            post_ids=post_ids,
         )
 
     def _connect(self) -> pymysql.Connection:
         return pymysql.connect(**self._conn_kwargs)
 
     def load_batch(self, target_date: date) -> RawDailyBatch:
-        if self._window_mode == "count":
+        if self._post_ids:
+            # canary mode (post_ids 우선) — window_mode 무시. 같은 id list 를 IG / YT
+            # 양쪽 SQL 에 넣어 자연 분리 (ULID vs video id).
+            ig = self._load_instagram_by_ids(self._post_ids)
+            yt = self._load_youtube_by_ids(self._post_ids)
+        elif self._window_mode == "count":
             batch_index = (target_date - self._collection_start).days
             ig = self._load_instagram_count(batch_index, self._page_size)
             yt = self._load_youtube_count(batch_index, self._page_size)
@@ -195,8 +206,10 @@ class StarRocksRawLoader:
             ig = self._load_instagram_date(window_start, target_date)
             yt = self._load_youtube_date(window_start, target_date)
         logger.info(
-            "starrocks_loaded mode=%s ig=%d yt=%d date=%s",
-            self._window_mode, len(ig), len(yt), target_date,
+            "starrocks_loaded mode=%s ig=%d yt=%d date=%s post_ids=%s",
+            "post_ids" if self._post_ids else self._window_mode,
+            len(ig), len(yt), target_date,
+            f"n={len(self._post_ids)}" if self._post_ids else "-",
         )
         return RawDailyBatch(instagram=ig, youtube=yt)
 
@@ -243,6 +256,51 @@ class StarRocksRawLoader:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (page_size, offset))
+                rows = cur.fetchall()
+        return [v for v in (_build_yt_video(r) for r in rows) if v is not None]
+
+    def _load_instagram_by_ids(self, post_ids: list[str]) -> list[RawInstagramPost]:
+        """color.B canary — 명시 post id IN 필터 (window_mode 무시)."""
+        if not post_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(post_ids))
+        sql = f"""
+            SELECT
+                p.id, p.user, p.url, p.posting_at, p.content,
+                p.like_count, p.comment_count, p.download_urls,
+                p.created_at, p.entry,
+                COALESCE(pr.follower_count, 0) AS follower_count
+            FROM india_ai_fashion_inatagram_posting p
+            LEFT JOIN (
+                SELECT user, MAX(follower_count) AS follower_count
+                FROM india_ai_fashion_inatagram_profile
+                GROUP BY user
+            ) pr ON p.user = pr.user
+            WHERE p.posting_at IS NOT NULL AND p.posting_at != ''
+              AND p.id IN ({placeholders})
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(post_ids))
+                rows = cur.fetchall()
+        return [p for p in (_build_ig_post(r) for r in rows) if p is not None]
+
+    def _load_youtube_by_ids(self, post_ids: list[str]) -> list[RawYouTubeVideo]:
+        """color.B canary — 명시 post id IN 필터 (window_mode 무시)."""
+        if not post_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(post_ids))
+        sql = f"""
+            SELECT id, url, channel, channel_follower_count, title, description, tags,
+                   thumbnail_url, upload_date, view_count, like_count,
+                   comment_count, comments, download_urls
+            FROM india_ai_fashion_youtube_posting
+            WHERE upload_date IS NOT NULL AND upload_date != ''
+              AND id IN ({placeholders})
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(post_ids))
                 rows = cur.fetchall()
         return [v for v in (_build_yt_video(r) for r in rows) if v is not None]
 
