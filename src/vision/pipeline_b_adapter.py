@@ -44,6 +44,7 @@ from contracts.normalized import NormalizedContentItem
 from contracts.vision import CanonicalOutfit, GarmentAnalysis, OutfitMember
 from settings import (
     HybridPaletteConfig,
+    IlluminationCorrectionConfig,
     OutfitDedupConfig,
     VideoFrameConfig,
     VisionConfig,
@@ -66,6 +67,7 @@ from vision.hybrid_palette import (
     build_object_palette,
     build_object_palette_v010,
 )
+from vision.illumination_correction import apply_correction
 from vision.llm_client import VisionLLMClient
 from vision.pipeline_b_extractor import SegBundle, detect_people
 from vision.post_palette import build_post_palette
@@ -252,6 +254,7 @@ def _analyze_images(
     llm_preset: list[dict[str, str]],
     scene_filter: SceneFilter,
     yolo,
+    illumination_cfg: IlluminationCorrectionConfig | None = None,
 ) -> list[tuple[str, np.ndarray, GarmentAnalysis]]:
     """이미지 N 개에 대해 SceneFilter gate → LLM 호출 → post_items.
 
@@ -266,6 +269,10 @@ def _analyze_images(
     - stage1_pass / disabled: 풀 이미지 그대로 Gemini.
 
     per-image LLM 실패는 log-and-skip — 한 이미지의 LLM 예외로 post 전체를 버리지 않음.
+
+    color.C (2026-05-17): `illumination_cfg.enabled=True` 면 LLM 호출 후 segformer
+    입력용 RGB 만 보정. SceneFilter / Gemini 는 원본 RGB / bytes 로 안전성 유지 —
+    SceneFilter 분류 / LLM cache key 영향 0. cfg None / disabled 시 원본 그대로.
     """
     post_items: list[tuple[str, np.ndarray, GarmentAnalysis]] = []
     for image_id, data, rgb in images:
@@ -299,7 +306,21 @@ def _analyze_images(
                 source_post_id, image_id, exc,
             )
             continue
-        post_items.append((image_id, rgb, analysis))
+        # color.C — segformer 입력용 RGB 만 보정 (LLM 안전성 유지).
+        if illumination_cfg is not None and illumination_cfg.enabled:
+            corrected_rgb, info = apply_correction(rgb, illumination_cfg)
+            if info.get("triggered"):
+                logger.info(
+                    "illumination_correction post_id=%s image=%s L=%.1f a=%.1f b=%.1f verify_accept=%s",
+                    source_post_id, image_id,
+                    info.get("L_mean", 0.0),
+                    info.get("a_mean", 0.0),
+                    info.get("b_mean", 0.0),
+                    info.get("verify_accept", True),
+                )
+        else:
+            corrected_rgb = rgb
+        post_items.append((image_id, corrected_rgb, analysis))
     return post_items
 
 
@@ -385,6 +406,7 @@ class PipelineBColorExtractor:
         post_items = _analyze_images(
             item.source_post_id, all_frames, self._vision_llm, self._llm_preset,
             self._scene_filter, self._bundle.yolo,
+            illumination_cfg=self._cfg.illumination_correction,
         )
         if not post_items:
             return ColorExtractionResult(source_post_id=item.source_post_id)

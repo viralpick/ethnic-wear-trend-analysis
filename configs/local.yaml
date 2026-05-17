@@ -266,6 +266,21 @@ vision:
     # 마킹 (ΔE76=0, R3/R1 매칭 우회). canary 측정 후 enable 결정.
     color_pick_v010_enabled: false
     color_pick_v010_kmeans_top_n: 5  # Pass 2 에 노출할 cluster 수 (share desc top-N)
+  # color.C (2026-05-17) — frame illumination correction (석양 / 실내 조명 보정).
+  # spec: docs/color_c_illumination_spec.md. default off — canary 후 enable 결정.
+  # detection trigger (LAB a/b skew OR L extreme) 시 shades-of-gray (p=6) 적용.
+  # verify 가드 (Phase 2 구현) 보정 후 garment ΔE76 > 30 시 원본 회수.
+  illumination_correction:
+    enabled: false                    # default off (color.B 와 동일 패턴)
+    minkowski_p: 6                    # Finlayson 권장 절충 (1=gray-world, ∞=white-patch)
+    detection:
+      a_skew_threshold: 8.0           # |LAB a_mean| > 8 → red/green shift
+      b_skew_threshold: 8.0           # |LAB b_mean| > 8 → yellow/blue shift (석양/텅스텐)
+      l_low_threshold: 30.0           # L_mean < 30 → 어두운 (실내 / 석양)
+      l_high_threshold: 80.0          # L_mean > 80 → overexposed (자연광 strong / flash)
+    verify:
+      enabled: true                   # Phase 2 에서 구현 (segformer DI). Phase 1 v1 미동작
+      deltae76_threshold: 30.0        # 보정 후 garment LAB median ΔE76 > 30 시 원본 회수
   # post-level palette aggregation (canonical → post). default 는
   # vision/post_palette.py 모듈 상수와 일치 (drift 방지 pinning).
   post_palette:
