@@ -263,6 +263,51 @@ class HybridPaletteConfig(BaseModel):
     color_pick_v010_kmeans_top_n: int = 5
 
 
+class IlluminationCorrectionDetectionConfig(BaseModel):
+    """color.C — lighting bias detection trigger (a/b skew + L extreme).
+
+    Phase 1: garment mask 내 channel imbalance 는 제외 (segformer 순환 의존 회피).
+    threshold 는 추정값 — Phase 1 첫 작업으로 16w 백필 실측 baseline 후 재조정.
+    """
+    # |LAB a_mean| > 8 → red/green shift trigger. LAB JND≈1 의 8배 (perceptually visible).
+    a_skew_threshold: float = 8.0
+    # |LAB b_mean| > 8 → yellow/blue shift trigger (석양/텅스텐 = +b, 그늘 = -b).
+    b_skew_threshold: float = 8.0
+    # L_mean < 30 → 어두운 frame (실내 / 석양 / 야간). 정상 [40, 70].
+    l_low_threshold: float = 30.0
+    # L_mean > 80 → overexposed (자연광 strong / flash). 채도 손실 risk.
+    l_high_threshold: float = 80.0
+
+
+class IlluminationCorrectionVerifyConfig(BaseModel):
+    """color.C — 보정 후 의류 색 왜곡 verify guard.
+
+    Phase 1 v1 미구현 (segformer DI 부담). Phase 2 에서 segment_fn 콜백 + ΔE76 측정.
+    config 는 미리 정의 — implementation 단계 분리만.
+    """
+    enabled: bool = True
+    # 보정 후 garment LAB median 과 원본 ΔE76 > threshold 면 원본 회수.
+    # 30 = "lighting shift 제거" vs "색 본질 왜곡" 경계 (perceptual category 변경 지점).
+    deltae76_threshold: float = 30.0
+
+
+class IlluminationCorrectionConfig(BaseModel):
+    """color.C — frame illumination correction (shades-of-gray + detection + verify).
+
+    spec: `docs/color_c_illumination_spec.md` (5/17). frame 단계 보정 (segformer 입력 전).
+    default off — canary (Phase 3) 결과 후 enable 결정. color.B 와 동일 패턴.
+    """
+    enabled: bool = False
+    # Minkowski p — 1=gray-world, ∞=white-patch, 6=Finlayson 권장 (perceptual 최고).
+    minkowski_p: int = 6
+    detection: IlluminationCorrectionDetectionConfig = Field(
+        default_factory=IlluminationCorrectionDetectionConfig,
+    )
+    verify: IlluminationCorrectionVerifyConfig = Field(
+        default_factory=IlluminationCorrectionVerifyConfig,
+    )
+
+
 class PostPaletteConfig(BaseModel):
     """post-level palette aggregation 임계 (vision/post_palette.py).
 
@@ -373,6 +418,9 @@ class VisionConfig(BaseModel):
     extract_colors: ExtractColorsConfig = ExtractColorsConfig()
     dynamic_palette: DynamicPaletteConfig = DynamicPaletteConfig()
     hybrid_palette: HybridPaletteConfig = HybridPaletteConfig()
+    illumination_correction: IlluminationCorrectionConfig = Field(
+        default_factory=IlluminationCorrectionConfig,
+    )
     post_palette: PostPaletteConfig = PostPaletteConfig()
     instance: InstanceConfig = InstanceConfig()
     scene_filter: SceneFilterConfig = SceneFilterConfig()
