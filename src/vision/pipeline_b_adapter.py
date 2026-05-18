@@ -69,7 +69,12 @@ from vision.hybrid_palette import (
 )
 from vision.illumination_correction import apply_correction
 from vision.llm_client import VisionLLMClient
-from vision.pipeline_b_extractor import SegBundle, detect_people
+from vision.pipeline_b_extractor import SegBundle, detect_people, run_segformer
+from vision.segformer_constants import (
+    DRESS_CLASS_IDS,
+    LOWER_CLASS_IDS,
+    UPPER_CLASS_IDS,
+)
 from vision.post_palette import build_post_palette
 from vision.scene_filter import NoopSceneFilter, SceneFilter
 from vision.video_frame_selector import VideoFrameSelectorConfig
@@ -247,6 +252,19 @@ def _load_images(paths: list[Path]) -> list[tuple[str, bytes, np.ndarray]]:
     return out
 
 
+def _compute_wear_mask(rgb_uint8: np.ndarray, bundle: SegBundle) -> np.ndarray | None:
+    """color.C verify guard — segformer wear class (UPPER + LOWER + DRESS) union mask.
+
+    None 반환 시 apply_correction 의 verify 는 안전 accept (보정 채택). wear 픽셀 0 인
+    frame (의류 없음 / mask 실패) 은 어차피 다운스트림 canonical 추출에서 drop 되므로
+    verify 결과 영향 없음.
+    """
+    labels = run_segformer(bundle, rgb_uint8)
+    wear_ids = UPPER_CLASS_IDS | LOWER_CLASS_IDS | DRESS_CLASS_IDS
+    mask = np.isin(labels, list(wear_ids))
+    return mask if mask.any() else None
+
+
 def _analyze_images(
     source_post_id: str,
     images: list[tuple[str, bytes, np.ndarray]],
@@ -255,24 +273,21 @@ def _analyze_images(
     scene_filter: SceneFilter,
     yolo,
     illumination_cfg: IlluminationCorrectionConfig | None = None,
+    bundle: SegBundle | None = None,
 ) -> list[tuple[str, np.ndarray, GarmentAnalysis]]:
     """이미지 N 개에 대해 SceneFilter gate → LLM 호출 → post_items.
 
     Phase 2 (2026-04-25): SceneFilter v2 (adult-woman-only) 통합.
-    - stage1_reject: scene off-fashion / 여성 또는 성인 signal 부재 → image skip
-      (Gemini 호출 0). reason 은 stage1_female_low / stage1_adult_low / scene_reject
-      중 하나.
-    - stage1_mix_needs_stage2: 4-way mix (adult 여성 + 성인 남성 + 아동 모두 켜짐)
-      → YOLO person bbox → classify_persons → female+adult bbox 한 개라도 살면 통과,
-      0개면 frame drop. crop 은 안 보냄 — 풀 이미지를 Gemini v0.6 으로 그대로 보냄
-      (v0.6 prompt 가 비-adult-female 제외 강제).
-    - stage1_pass / disabled: 풀 이미지 그대로 Gemini.
+    - stage1_reject / stage1_mix_needs_stage2 / stage1_pass 처리. per-image LLM 실패는
+      log-and-skip — 한 이미지의 LLM 예외로 post 전체를 버리지 않음.
 
-    per-image LLM 실패는 log-and-skip — 한 이미지의 LLM 예외로 post 전체를 버리지 않음.
+    color.C Phase 1 v1 (2026-05-17): `illumination_cfg.enabled=True` 면 LLM 호출 후
+    segformer 입력용 RGB 만 보정. SceneFilter / Gemini 는 원본 RGB / bytes 로 안전성
+    유지 — SceneFilter 분류 / LLM cache key 영향 0.
 
-    color.C (2026-05-17): `illumination_cfg.enabled=True` 면 LLM 호출 후 segformer
-    입력용 RGB 만 보정. SceneFilter / Gemini 는 원본 RGB / bytes 로 안전성 유지 —
-    SceneFilter 분류 / LLM cache key 영향 0. cfg None / disabled 시 원본 그대로.
+    color.C Phase 1 v2 (2026-05-17): `bundle` 주입 + `illumination_cfg.verify.enabled=True`
+    면 verify guard 실 동작 — `_compute_wear_mask` (segformer wear class union) callback
+    으로 보정 전후 garment LAB median ΔE76 측정 후 threshold 초과 시 원본 회수.
     """
     post_items: list[tuple[str, np.ndarray, GarmentAnalysis]] = []
     for image_id, data, rgb in images:
@@ -306,9 +321,16 @@ def _analyze_images(
                 source_post_id, image_id, exc,
             )
             continue
-        # color.C — segformer 입력용 RGB 만 보정 (LLM 안전성 유지).
+        # color.C — segformer 입력용 RGB 만 보정.
         if illumination_cfg is not None and illumination_cfg.enabled:
-            corrected_rgb, info = apply_correction(rgb, illumination_cfg)
+            segment_fn = None
+            if bundle is not None and illumination_cfg.verify.enabled:
+                # Phase 1 v2 — verify guard. trigger 안 된 frame 은 segment_fn 호출 0
+                # (apply_correction 이 detection 후만 verify), 호출은 추가 segformer 1회.
+                segment_fn = lambda rgb_uint8: _compute_wear_mask(rgb_uint8, bundle)
+            corrected_rgb, info = apply_correction(
+                rgb, illumination_cfg, segment_fn=segment_fn,
+            )
             if info.get("triggered"):
                 logger.info(
                     "illumination_correction post_id=%s image=%s L=%.1f a=%.1f b=%.1f verify_accept=%s",
@@ -407,6 +429,7 @@ class PipelineBColorExtractor:
             item.source_post_id, all_frames, self._vision_llm, self._llm_preset,
             self._scene_filter, self._bundle.yolo,
             illumination_cfg=self._cfg.illumination_correction,
+            bundle=self._bundle,
         )
         if not post_items:
             return ColorExtractionResult(source_post_id=item.source_post_id)
